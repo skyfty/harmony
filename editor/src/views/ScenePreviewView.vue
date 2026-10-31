@@ -17070,7 +17070,8 @@ function refreshAnimations() {
 		}
 		const sourceNodeId = nodeId
 		const runtimeObject = nodeObjectMap.get(sourceNodeId) ?? null
-		const externalAssetIds = clampAnimationComponentProps(component.props).animationAssetIds
+		const animationProps = clampAnimationComponentProps(component.props)
+		const externalAssetIds = animationProps.animationAssetIds
 		const externalClips: THREE.AnimationClip[] = []
 		externalAssetIds.forEach((assetId) => {
 			collectCachedExternalAnimationClips(assetId).forEach((clip) => externalClips.push(clip))
@@ -17083,10 +17084,10 @@ function refreshAnimations() {
 			sourceNodeId,
 			runtimeObject,
 			externalClips,
-			defaultClipName: component.props.defaultClipName,
-			autoplay: component.props.autoplay,
-			loop: component.props.loop,
-			timeScale: component.props.timeScale,
+			defaultClipName: animationProps.defaultClipName,
+			autoplay: animationProps.autoplay,
+			loop: animationProps.loop,
+			timeScale: animationProps.timeScale,
 		})
 	})
 	if (missingExternalAssetIds.size && editorResourceCache) {

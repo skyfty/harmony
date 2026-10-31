@@ -98,7 +98,7 @@ describe('character locomotion runtime', () => {
     expect(resolveCharacterControlLocomotionSlot(1)).toBe('run')
   })
 
-  it('migrates only the exact legacy default speed tuple', () => {
+  it('migrates legacy sprint presets and preserves explicit custom speeds', () => {
     const legacy = clampCharacterControllerComponentProps({
       walkSpeed: 2.4,
       runSpeed: 4.8,
@@ -123,6 +123,13 @@ describe('character locomotion runtime', () => {
     } as LegacyCharacterControllerProps)
     expect(custom.walkSpeed).toBe(2.4)
     expect(custom.runSpeed).toBe(4.9)
+
+    const explicitNonDefault = clampCharacterControllerComponentProps({
+      walkSpeed: 3.1,
+      runSpeed: 6.3,
+    })
+    expect(explicitNonDefault.walkSpeed).toBe(3.1)
+    expect(explicitNonDefault.runSpeed).toBe(6.3)
 
     const node: SceneNode = {
       id: 'character',

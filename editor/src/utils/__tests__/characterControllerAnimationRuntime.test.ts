@@ -5,6 +5,7 @@ import type { SceneNode } from '@schema/core'
 import {
   ANIMATION_COMPONENT_TYPE,
   clampAnimationComponentProps,
+  DEFAULT_ANIMATION_PLAYBACK_SPEED,
 } from '@schema/components/definitions/animationComponent'
 import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
@@ -59,7 +60,7 @@ function createAnimationRuntime(): SceneAnimationRuntimeManager {
     defaultClipName: 'Idol',
     autoplay: true,
     loop: true,
-    timeScale: 1,
+    timeScale: DEFAULT_ANIMATION_PLAYBACK_SPEED,
   })
   return runtime
 }
@@ -73,6 +74,12 @@ function createCharacterMotorState(grounded: boolean): CharacterControllerMotorG
 }
 
 describe('CharacterControllerAnimationRuntimeManager', () => {
+  it('uses the calibrated playback speed when animation props are missing or invalid', () => {
+    expect(clampAnimationComponentProps(null).timeScale).toBe(2)
+    expect(clampAnimationComponentProps({ timeScale: Number.NaN }).timeScale).toBe(2)
+    expect(clampAnimationComponentProps({ timeScale: 1.25 }).timeScale).toBe(1.25)
+  })
+
   it('plays locomotion when the physics motor is grounded by probe without contacts', () => {
     const nodeAnimationRuntime = createAnimationRuntime()
     const controllerNode = createNode('controller', {
@@ -233,20 +240,27 @@ describe('CharacterControllerAnimationRuntimeManager', () => {
     runtime.refresh(host)
     runtime.update(host, 1000)
     nodeAnimationRuntime.update(0.3)
-    expect(nodeAnimationRuntime.get('animation')?.activeClipName).toBe('Walk')
+    const walking = nodeAnimationRuntime.get('animation')
+    expect(walking?.activeClipName).toBe('Walk')
+    expect(walking?.activeAction?.timeScale).toBeCloseTo(2, 2)
 
     input = { ...input, gait: 'run' }
     motorState.linearVelocity = [0, 0, 5.2]
     runtime.update(host, 1100)
     const running = nodeAnimationRuntime.get('animation')
     expect(running?.activeClipName).toBe('Run')
-    expect(running?.activeAction?.time).toBeCloseTo(0.6, 2)
-    expect(running?.activeAction?.timeScale).toBeCloseTo(1, 2)
+    expect(running?.activeAction?.time).toBeCloseTo(1.2, 2)
+    expect(running?.activeAction?.timeScale).toBeCloseTo(2, 2)
 
-    motorState.linearVelocity = [0, 0, 2.6]
+    motorState.linearVelocity = [0, 0, 3.9]
     runtime.update(host, 1200)
     const slowRunning = nodeAnimationRuntime.get('animation')
     expect(slowRunning?.activeClipName).toBe('Run')
-    expect(slowRunning?.activeAction?.timeScale).toBeCloseTo(0.65, 2)
+    expect(slowRunning?.activeAction?.timeScale).toBeCloseTo(1.5, 2)
+
+    motorState.linearVelocity = [0, 0, 0.3]
+    runtime.update(host, 1300)
+    const minimumWarpedRun = nodeAnimationRuntime.get('animation')
+    expect(minimumWarpedRun?.activeAction?.timeScale).toBeCloseTo(1.3, 2)
   })
 })

@@ -5,6 +5,7 @@ import { componentManager, type ComponentDefinition } from '../componentManager'
 import { sanitizeAnimationClipName } from '../../runtimeAnimationCatalog'
 
 export const ANIMATION_COMPONENT_TYPE = 'animationComponent'
+export const DEFAULT_ANIMATION_PLAYBACK_SPEED = 2
 
 export interface AnimationComponentProps {
   defaultClipName: string | null
@@ -67,7 +68,7 @@ export function clampAnimationComponentProps(
     animationAssetIds: sanitizeAssetIds(props?.animationAssetIds),
     autoplay: clampBoolean(props?.autoplay, true),
     loop: clampBoolean(props?.loop, true),
-    timeScale: clampFiniteNumber(props?.timeScale, 1),
+    timeScale: clampFiniteNumber(props?.timeScale, DEFAULT_ANIMATION_PLAYBACK_SPEED),
   }
 }
 

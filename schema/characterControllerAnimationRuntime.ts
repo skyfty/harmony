@@ -4,6 +4,7 @@ import { SceneAnimationRuntimeManager } from './sceneAnimationRuntime'
 import { sanitizeAnimationClipName } from './runtimeAnimationCatalog'
 import {
 	ANIMATION_COMPONENT_TYPE,
+	DEFAULT_ANIMATION_PLAYBACK_SPEED,
 	type AnimationComponentProps,
 } from './components/definitions/animationComponent'
 import {
@@ -558,7 +559,7 @@ function resolveCharacterAnimationTimeScale(
 	props: CharacterControllerComponentProps,
 	clipSlot: CharacterLocomotionSlot | null,
 ): number {
-	const normalizedBase = Number.isFinite(baseTimeScale) ? baseTimeScale : 1
+	const normalizedBase = Number.isFinite(baseTimeScale) ? baseTimeScale : DEFAULT_ANIMATION_PLAYBACK_SPEED
 	if (!clipSlot || !(motionSpeed > 0.01)) {
 		return normalizedBase
 	}
