@@ -1022,6 +1022,7 @@ import {
   wallComponentDefinition,
   WALL_COMPONENT_TYPE,
 } from '@harmony/schema/components/definitions/wallComponent';
+import { shouldPreserveTextureWallNodeMaterials } from '@harmony/schema/wallRenderMode';
 import {
   boundaryWallComponentDefinition,
   BOUNDARY_WALL_COMPONENT_TYPE,
@@ -14438,6 +14439,11 @@ function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolea
 }
 
 function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+  if (shouldPreserveTextureWallNodeMaterials(node)) {
+    // Texture walls own alpha-tested image materials. Generic node materials
+    // must not replace them after the wall graph has been built.
+    return;
+  }
   if (isLightweightImportNode(node)) {
     // Lightweight import nodes already render with their own override or the
     // one inherited from the imported model root when the graph was built.

@@ -172,6 +172,8 @@ export function normalizeNodeComponents(
         repeatInstanceStep: (existingProps as { repeatInstanceStep?: number }).repeatInstanceStep ?? (baseProps as any).repeatInstanceStep,
         bodyAssetId: (existingProps as { bodyAssetId?: string | null }).bodyAssetId ?? baseProps.bodyAssetId,
         bodyTextureAssetId: (existingProps as { bodyTextureAssetId?: string | null }).bodyTextureAssetId ?? baseProps.bodyTextureAssetId,
+        postTextureAssetId: (existingProps as { postTextureAssetId?: string | null }).postTextureAssetId ?? baseProps.postTextureAssetId,
+        postSpacingMeters: (existingProps as { postSpacingMeters?: number }).postSpacingMeters ?? baseProps.postSpacingMeters,
         headAssetId: (existingProps as { headAssetId?: string | null }).headAssetId ?? baseProps.headAssetId,
         headTextureAssetId: (existingProps as { headTextureAssetId?: string | null }).headTextureAssetId ?? baseProps.headTextureAssetId,
         headAssetHeight: (existingProps as { headAssetHeight?: number }).headAssetHeight ?? baseProps.headAssetHeight,

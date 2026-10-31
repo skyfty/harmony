@@ -142,6 +142,7 @@ import { attachRoadCollisionCompiledExportToDocument } from '@/utils/roadCollisi
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { useSceneStore } from '@/stores/sceneStore'
+import { shouldPreserveTextureWallNodeMaterials } from '@schema/wallRenderMode'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import {
@@ -16660,6 +16661,11 @@ function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolea
 }
 
 function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+	if (shouldPreserveTextureWallNodeMaterials(node)) {
+		// Texture walls own alpha-tested image materials. Generic node materials
+		// must not replace them after the wall graph has been built.
+		return
+	}
 	if (isLightweightImportNode(node)) {
 		// Lightweight import nodes already render with their own override or the
 		// one inherited from the imported model root when the graph was built.

@@ -20548,6 +20548,8 @@ export const useSceneStore = defineStore('scene', {
         const hasBodyMaterialConfigId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyMaterialConfigId')
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
         const hasBodyTextureAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyTextureAssetId')
+        const hasPostTextureAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'postTextureAssetId')
+        const hasPostSpacingMeters = Object.prototype.hasOwnProperty.call(typedPatch, 'postSpacingMeters')
         const hasHeadAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetId')
         const hasHeadTextureAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headTextureAssetId')
         const hasHeadAssetHeight = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetHeight')
@@ -20758,6 +20760,12 @@ export const useSceneStore = defineStore('scene', {
           bodyTextureAssetId: hasBodyTextureAssetId
             ? (typedPatch.bodyTextureAssetId as string | null | undefined)
             : currentProps.bodyTextureAssetId,
+          postTextureAssetId: hasPostTextureAssetId
+            ? (typedPatch.postTextureAssetId as string | null | undefined)
+            : currentProps.postTextureAssetId,
+          postSpacingMeters: hasPostSpacingMeters
+            ? (typedPatch.postSpacingMeters as number | undefined)
+            : currentProps.postSpacingMeters,
           headAssetId: hasHeadAssetId
             ? (typedPatch.headAssetId as string | null | undefined)
             : currentProps.headAssetId,
@@ -20838,6 +20846,8 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.repeatInstanceStep - merged.repeatInstanceStep) <= 1e-6 &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
           (currentProps.bodyTextureAssetId ?? null) === (merged.bodyTextureAssetId ?? null) &&
+          (currentProps.postTextureAssetId ?? null) === (merged.postTextureAssetId ?? null) &&
+          Math.abs(currentProps.postSpacingMeters - merged.postSpacingMeters) <= 1e-6 &&
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
           (currentProps.headTextureAssetId ?? null) === (merged.headTextureAssetId ?? null) &&
           Math.abs(currentProps.headAssetHeight - merged.headAssetHeight) <= 1e-6 &&

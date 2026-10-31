@@ -73,6 +73,7 @@ function collectWallTextureAssetIds(node: SceneNode): string[] {
   const wallProps = clampWallProps((wallState?.props ?? null) as Record<string, unknown> | null | undefined)
   return Array.from(new Set([
     wallProps.bodyTextureAssetId,
+    wallProps.postTextureAssetId,
     wallProps.headTextureAssetId,
     wallProps.footTextureAssetId,
     ...wallProps.cornerModels.flatMap((entry) => [
@@ -173,6 +174,8 @@ function buildWallRenderOptionsFromNode(node: SceneNode, definition: WallDynamic
     wallRenderMode: wallProps.wallRenderMode,
     repeatInstanceStep: wallProps.repeatInstanceStep,
     bodyTextureAssetId: wallProps.bodyTextureAssetId,
+    postTextureAssetId: wallProps.postTextureAssetId,
+    postSpacingMeters: wallProps.postSpacingMeters,
     headTextureAssetId: wallProps.headTextureAssetId,
     footTextureAssetId: wallProps.footTextureAssetId,
     headAssetHeight: Number.isFinite(wallProps.headAssetHeight) ? Number(wallProps.headAssetHeight) : undefined,

@@ -92,7 +92,7 @@ function safeParseSnapshot(payload: string): ScenePreviewSnapshot | null {
   }
 }
 
-async function persistSnapshot(snapshot: ScenePreviewSnapshot) {
+async function persistSnapshot(snapshot: ScenePreviewSnapshot, options: { force?: boolean } = {}) {
   if (typeof window === 'undefined' || storageDisabled) {
     return
   }
@@ -101,7 +101,7 @@ async function persistSnapshot(snapshot: ScenePreviewSnapshot) {
     return
   }
   const now = Date.now()
-  if (now - lastPersistTimestamp < MIN_PERSIST_INTERVAL_MS) {
+  if (!options.force && now - lastPersistTimestamp < MIN_PERSIST_INTERVAL_MS) {
     return
   }
   lastPersistTimestamp = now
@@ -132,12 +132,15 @@ async function persistSnapshot(snapshot: ScenePreviewSnapshot) {
   }
 }
 
-export function broadcastScenePreviewUpdate(snapshot: ScenePreviewSnapshot): void {
+export async function broadcastScenePreviewUpdate(
+  snapshot: ScenePreviewSnapshot,
+  options: { forcePersist?: boolean } = {},
+): Promise<void> {
   if (typeof window === 'undefined') {
     return
   }
   const transportSnapshot = cloneSnapshotForTransport(snapshot) ?? snapshot
-  void persistSnapshot(transportSnapshot)
+  await persistSnapshot(transportSnapshot, { force: options.forcePersist })
   const channelInstance = ensureChannel()
   if (channelInstance) {
     try {

@@ -102,6 +102,7 @@ export async function buildWallMesh(
   const buildTextureWallGroup = async (): Promise<THREE.Group> => {
     const textureAssetIds = Array.from(new Set([
       wallProps.bodyTextureAssetId,
+      wallProps.postTextureAssetId,
       wallProps.headTextureAssetId,
       wallProps.footTextureAssetId,
       ...(Array.isArray(wallProps.cornerModels)
@@ -130,6 +131,8 @@ export async function buildWallMesh(
       headAssetHeight: wallProps.headAssetHeight,
       footAssetHeight: wallProps.footAssetHeight,
       bodyTextureAssetId: wallProps.bodyTextureAssetId,
+      postTextureAssetId: wallProps.postTextureAssetId,
+      postSpacingMeters: wallProps.postSpacingMeters,
       headTextureAssetId: wallProps.headTextureAssetId,
       footTextureAssetId: wallProps.footTextureAssetId,
     });

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { MathUtils, Vector3 } from 'three'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { SceneNodeComponentState } from '@schema/core'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
@@ -14,11 +15,13 @@ import { computeBoxExtentsAlongBasis } from '@schema/instancedMeshTiling'
 import {
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
+  WALL_DEFAULT_POST_SPACING,
   WALL_DEFAULT_REPEAT_INSTANCE_STEP,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
   WALL_MIN_REPEAT_INSTANCE_STEP,
   WALL_MIN_HEIGHT,
+  WALL_MIN_POST_SPACING,
   WALL_MIN_THICKNESS,
   WALL_MIN_WIDTH,
   type WallForwardAxis,
@@ -31,11 +34,13 @@ import { getCachedModelObject } from '@schema/modelObjectCache'
 import { normalizeWallRenderMode } from '@schema/wallRenderMode'
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
 
 const localHeight = ref<string>(String(WALL_DEFAULT_HEIGHT))
 const localWidth = ref<string>(String(WALL_DEFAULT_WIDTH))
 const localRepeatInstanceStep = ref<string>(String(WALL_DEFAULT_REPEAT_INSTANCE_STEP))
+const localPostSpacing = ref<string>(String(WALL_DEFAULT_POST_SPACING))
 
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
@@ -49,12 +54,14 @@ const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 type WallAssetDialogTarget = 'body' | 'head' | 'foot' | 'bodyCap' | 'headCap' | 'footCap' | 'cornerBody' | 'cornerHead' | 'cornerFoot'
 const assetDialogTarget = ref<WallAssetDialogTarget | null>(null)
 const assetDialogCornerIndex = ref<number | null>(null)
-type WallTexturePart = 'body' | 'head' | 'foot'
+type WallTexturePart = 'post' | 'body' | 'head' | 'foot'
 const textureAssetDialogVisible = ref(false)
 const textureAssetDialogSelectedId = ref('')
 const textureAssetDialogPart = ref<WallTexturePart>('body')
 const textureAssetDialogCornerIndex = ref<number | null>(null)
 const textureAssetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const wallTexturePreviewUrls = ref<Record<string, string>>({})
+const pendingWallTexturePreviewIds = new Set<string>()
 const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'body') return 'Select Wall Body Asset'
   if (assetDialogTarget.value === 'head') return 'Select Wall Head Asset'
@@ -70,6 +77,8 @@ const assetDialogTitle = computed(() => {
 const textureAssetDialogTitle = computed(() => {
   const part = textureAssetDialogPart.value === 'body'
     ? 'Body'
+    : textureAssetDialogPart.value === 'post'
+      ? 'Post'
     : textureAssetDialogPart.value === 'head'
       ? 'Head'
       : 'Foot'
@@ -148,6 +157,11 @@ const footAsset = computed(() => {
 
 const bodyTextureAsset = computed(() => {
   const assetId = wallComponent.value?.props?.bodyTextureAssetId
+  return assetId ? sceneStore.getAsset(assetId) ?? null : null
+})
+
+const postTextureAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.postTextureAssetId
   return assetId ? sceneStore.getAsset(assetId) ?? null : null
 })
 
@@ -483,6 +497,11 @@ watch(
       Number.isFinite((props as any).repeatInstanceStep)
         ? Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, Number((props as any).repeatInstanceStep))
         : WALL_DEFAULT_REPEAT_INSTANCE_STEP,
+    )
+    localPostSpacing.value = String(
+      Number.isFinite((props as any).postSpacingMeters)
+        ? Math.max(WALL_MIN_POST_SPACING, Number((props as any).postSpacingMeters))
+        : WALL_DEFAULT_POST_SPACING,
     )
     nextTick(() => {
       isSyncingFromScene.value = false
@@ -972,7 +991,9 @@ function resolveWallTexturePreviewStyle(asset: ProjectAsset | null): Record<stri
   if (!asset) {
     return undefined
   }
-  const imageUrl = asset.thumbnail?.trim() || asset.downloadUrl?.trim()
+  const imageUrl = wallTexturePreviewUrls.value[asset.id]
+    || asset.thumbnail?.trim()
+    || asset.downloadUrl?.trim()
   if (imageUrl) {
     return {
       backgroundImage: `url(${imageUrl})`,
@@ -983,6 +1004,54 @@ function resolveWallTexturePreviewStyle(asset: ProjectAsset | null): Record<stri
   }
   return asset.previewColor ? { backgroundColor: asset.previewColor } : undefined
 }
+
+async function ensureWallTexturePreview(asset: ProjectAsset | null): Promise<void> {
+  if (
+    !asset
+    || wallTexturePreviewUrls.value[asset.id]
+    || pendingWallTexturePreviewIds.has(asset.id)
+    || typeof URL === 'undefined'
+    || typeof URL.createObjectURL !== 'function'
+  ) {
+    return
+  }
+  pendingWallTexturePreviewIds.add(asset.id)
+  try {
+    const registeredAsset = ensureWallAssetRegistered(asset)
+    const file = await assetCacheStore.ensureAssetFile(registeredAsset.id, { asset: registeredAsset })
+    if (!file) {
+      return
+    }
+    wallTexturePreviewUrls.value = {
+      ...wallTexturePreviewUrls.value,
+      [asset.id]: URL.createObjectURL(file),
+    }
+  } catch (error) {
+    console.warn('[WallPanel] Failed to load wall texture preview', asset.id, error)
+  } finally {
+    pendingWallTexturePreviewIds.delete(asset.id)
+  }
+}
+
+watch(
+  [
+    () => bodyTextureAsset.value,
+    () => postTextureAsset.value,
+    () => headTextureAsset.value,
+    () => footTextureAsset.value,
+  ],
+  (assets) => {
+    assets.forEach((asset) => {
+      void ensureWallTexturePreview(asset)
+    })
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  Object.values(wallTexturePreviewUrls.value).forEach((url) => URL.revokeObjectURL(url))
+  wallTexturePreviewUrls.value = {}
+})
 
 function openWallTextureDialog(
   part: WallTexturePart,
@@ -1001,6 +1070,8 @@ function openWallTextureDialog(
         : corner.footTextureAssetId
     : part === 'body'
       ? props?.bodyTextureAssetId
+      : part === 'post'
+        ? props?.postTextureAssetId
       : part === 'head'
         ? props?.headTextureAssetId
         : props?.footTextureAssetId
@@ -1021,17 +1092,20 @@ function handleWallTextureDialogUpdate(asset: ProjectAsset | null): void {
     return
   }
 
+  const registeredAsset = asset ? ensureWallAssetRegistered(asset) : null
   const part = textureAssetDialogPart.value
   const key = part === 'body'
     ? 'bodyTextureAssetId'
+    : part === 'post'
+      ? 'postTextureAssetId'
     : part === 'head'
       ? 'headTextureAssetId'
       : 'footTextureAssetId'
   const cornerIndex = textureAssetDialogCornerIndex.value
   if (cornerIndex === null) {
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: asset?.id ?? null } as any)
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: registeredAsset?.id ?? null } as any)
   } else if (cornerModels.value[cornerIndex]) {
-    updateCornerModel(cornerIndex, { [key]: asset?.id ?? null } as any)
+    updateCornerModel(cornerIndex, { [key]: registeredAsset?.id ?? null } as any)
   }
   textureAssetDialogVisible.value = false
 }
@@ -1401,6 +1475,32 @@ function applyRepeatInstanceStepUpdate(rawValue: unknown) {
   sceneStore.updateNodeComponentProps(nodeId, component.id, { repeatInstanceStep: nextValue } as any)
 }
 
+function normalizePostSpacing(value: unknown): number {
+  const raw = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return WALL_DEFAULT_POST_SPACING
+  }
+  return Math.max(WALL_MIN_POST_SPACING, raw)
+}
+
+function applyPostSpacingUpdate(rawValue: unknown) {
+  if (isSyncingFromScene.value) {
+    return
+  }
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    return
+  }
+  const nextValue = normalizePostSpacing(rawValue)
+  const currentValue = normalizePostSpacing((component.props as any)?.postSpacingMeters)
+  localPostSpacing.value = String(nextValue)
+  if (Math.abs(currentValue - nextValue) <= 1e-6) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { postSpacingMeters: nextValue } as any)
+}
+
 async function resolveBodyAssetAutoFitRepeatInstanceStep(
   assetId: string,
   orientation: WallModelOrientation,
@@ -1616,6 +1716,38 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
             <div class="asset-pair-panel">
               <div class="asset-pair-grid asset-pair-grid--stacked">
                 <div class="asset-pair-item">
+                  <div
+                    class="asset-pair-label wall-texture-picker-label"
+                    title="Select Post image"
+                    @click.stop="(e) => openWallTextureDialog('post', e)"
+                  >
+                    Post
+                  </div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !postTextureAsset }"
+                        :style="resolveWallTexturePreviewStyle(postTextureAsset)"
+                        @click.stop="(e) => openWallTextureDialog('post', e)"
+                      />
+                    </div>
+                    <v-text-field
+                      density="compact"
+                      variant="underlined"
+                      type="text"
+                      label="Max Post Spacing (m)"
+                      hide-details
+                      :min="WALL_MIN_POST_SPACING"
+                      v-model="localPostSpacing"
+                      inputmode="decimal"
+                      @blur="applyPostSpacingUpdate(localPostSpacing)"
+                      @keydown.enter.prevent="applyPostSpacingUpdate(localPostSpacing)"
+                    />
+                  </div>
+                </div>
+
+                <div class="asset-pair-item">
                   <div class="asset-pair-label">Body</div>
                   <div class="wall-asset-model-row">
                     <div class="wall-asset-model-picker">
@@ -1626,7 +1758,9 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                         @click.stop="(e) => openWallTextureDialog('body', e)"
                       />
                     </div>
-                    <p class="hint-text">Body fills the height remaining after Head and Foot.</p>
+                    <p class="hint-text">
+                      Body fills the height remaining after Head and Foot. With Post enabled, one Body image is fitted per bay.
+                    </p>
                   </div>
                 </div>
 
@@ -2902,6 +3036,10 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
 .wall-corner-model-picker {
   display: flex;
   align-items: center;
+  cursor: pointer;
+}
+
+.wall-texture-picker-label {
   cursor: pointer;
 }
 

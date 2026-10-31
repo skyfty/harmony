@@ -358,6 +358,10 @@ function collectWallReferences(
     ...record,
     path: `${record.path}.bodyTextureAssetId`,
   })
+  addReference(bucket, normalizeAssetIdCandidate(props?.postTextureAssetId), {
+    ...record,
+    path: `${record.path}.postTextureAssetId`,
+  })
   addReference(bucket, normalizeAssetIdCandidate(props?.headAssetId), {
     ...record,
     path: `${record.path}.headAssetId`,

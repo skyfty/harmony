@@ -64,6 +64,7 @@ function collectWallPresetAssetIds(preset: WallPresetData): string[] {
 function collectWallPresetTextureAssetIds(preset: WallPresetData): string[] {
   return Array.from(new Set([
     preset.wallProps.bodyTextureAssetId,
+    preset.wallProps.postTextureAssetId,
     preset.wallProps.headTextureAssetId,
     preset.wallProps.footTextureAssetId,
     ...preset.wallProps.cornerModels.flatMap((entry) => [
@@ -155,6 +156,8 @@ function buildWallRenderOptionsFromPreset(preset: WallPresetData, definition: Wa
     wallRenderMode: preset.wallProps.wallRenderMode,
     repeatInstanceStep: preset.wallProps.repeatInstanceStep,
     bodyTextureAssetId: preset.wallProps.bodyTextureAssetId,
+    postTextureAssetId: preset.wallProps.postTextureAssetId,
+    postSpacingMeters: preset.wallProps.postSpacingMeters,
     headTextureAssetId: preset.wallProps.headTextureAssetId,
     footTextureAssetId: preset.wallProps.footTextureAssetId,
     headAssetHeight: Number.isFinite(preset.wallProps.headAssetHeight) ? Number(preset.wallProps.headAssetHeight) : undefined,

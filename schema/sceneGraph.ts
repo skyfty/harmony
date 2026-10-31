@@ -923,6 +923,7 @@ class SceneGraphBuilder {
           }
         }
         addWallTextureRef(wallProps.bodyTextureAssetId)
+        addWallTextureRef(wallProps.postTextureAssetId)
         addWallTextureRef(wallProps.headTextureAssetId)
         addWallTextureRef(wallProps.footTextureAssetId)
         const corners = Array.isArray(wallProps.cornerModels) ? wallProps.cornerModels : []

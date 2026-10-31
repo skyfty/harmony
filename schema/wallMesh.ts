@@ -110,6 +110,8 @@ export type WallRenderOptions = {
   bodyTextureAssetId?: string | null
   headTextureAssetId?: string | null
   footTextureAssetId?: string | null
+  postTextureAssetId?: string | null
+  postSpacingMeters?: number
   /** Editor/runtime load state used only to invalidate rebuilt texture geometry. */
   textureState?: string | null
 
@@ -153,6 +155,9 @@ const WALL_EPSILON = 1e-6
 
 const WALL_INSTANCING_MIN_TILE_LENGTH = 1e-4
 const WALL_REPEAT_INSTANCE_STEP_M_DEFAULT = 0.5
+const WALL_POST_SPACING_M_DEFAULT = 4
+const WALL_POST_SPACING_M_MIN = 0.1
+const WALL_POST_PANEL_GAP_M = 0.05
 const WALL_INSTANCING_DIR_EPSILON = 1e-6
 const WALL_INSTANCING_JOINT_ANGLE_EPSILON = 1e-3
 const WALL_SKIP_GEOMETRY_DISPOSE_USERDATA_KEY = '__harmonySkipGeometryDispose'
@@ -1891,7 +1896,7 @@ function resolveWallUvAxisForTemplate(
   return resolveAutoWallUvAxis(template, orientation.forwardAxis)
 }
 
-type WallTexturePart = 'body' | 'head' | 'foot'
+type WallTexturePart = 'body' | 'head' | 'foot' | 'post'
 
 type WallTextureBand = {
   baseY: number
@@ -1922,12 +1927,28 @@ type WallTextureCornerCollection = {
   gaps: WallArcInterval[]
 }
 
+type WallTexturePostPiece = {
+  assetId: string
+  startArc: number
+  endArc: number
+  uStart: number
+  uEnd: number
+}
+
+type WallTexturePostLayout = {
+  active: boolean
+  gaps: WallArcInterval[]
+  pieces: WallTexturePostPiece[]
+}
+
 function resolveWallTextureAssetId(options: WallRenderOptions, part: WallTexturePart): string | null {
   const raw = part === 'body'
     ? options.bodyTextureAssetId
     : part === 'head'
       ? options.headTextureAssetId
-      : options.footTextureAssetId
+      : part === 'foot'
+        ? options.footTextureAssetId
+        : options.postTextureAssetId
   const normalized = typeof raw === 'string' ? raw.trim() : ''
   return normalized.length ? normalized : null
 }
@@ -2027,14 +2048,13 @@ function pushWallTextureQuad(
   )
 }
 
-function appendWallTextureSegment(
+function appendWallTextureSegmentWithBand(
   bucket: WallTextureBucket,
   segment: WallRenderSeg,
-  part: WallTexturePart,
-  options: WallRenderOptions,
-  tileWidth: number,
+  band: WallTextureBand,
+  u0: number,
+  u1: number,
 ): void {
-  const band = resolveWallTextureBand(segment, part, options)
   if (band.height <= WALL_EPSILON) {
     return
   }
@@ -2055,15 +2075,60 @@ function appendWallTextureSegment(
   topA.y += band.height
   topB.y += band.height
 
+  pushWallTextureQuad(bucket, bottomA, bottomB, topA, topB, u0, u1)
+}
+
+function appendWallTextureSegment(
+  bucket: WallTextureBucket,
+  segment: WallRenderSeg,
+  part: Exclude<WallTexturePart, 'post'>,
+  options: WallRenderOptions,
+  tileWidth: number,
+): void {
+  const band = resolveWallTextureBand(segment, part, options)
   const arcStart = Number(segment.chainArcStart ?? 0)
   const u0 = arcStart / tileWidth
-  const u1 = (arcStart + length) / tileWidth
-  pushWallTextureQuad(bucket, bottomA, bottomB, topA, topB, u0, u1)
+  const u1 = (arcStart + wallSegmentLengthXZ(segment)) / tileWidth
+  appendWallTextureSegmentWithBand(bucket, segment, band, u0, u1)
+}
+
+function appendWallTextureArcRange(
+  bucket: WallTextureBucket,
+  segs: WallRenderSeg[],
+  startArc: number,
+  endArc: number,
+  resolveBand: (segment: WallRenderSeg) => WallTextureBand,
+  uStart: number,
+  uEnd: number,
+): void {
+  const rangeLength = endArc - startArc
+  if (rangeLength <= WALL_EPSILON) {
+    return
+  }
+
+  segs.forEach((segment) => {
+    const segStart = Number(segment.chainArcStart ?? 0)
+    const segEnd = segStart + wallSegmentLengthXZ(segment)
+    const clippedStart = Math.max(startArc, segStart)
+    const clippedEnd = Math.min(endArc, segEnd)
+    if (clippedEnd - clippedStart <= WALL_EPSILON) {
+      return
+    }
+    const clipped = clipWallSegmentToArcInterval(segment, clippedStart, clippedEnd)
+    if (!clipped) {
+      return
+    }
+    const localStart = (clippedStart - startArc) / rangeLength
+    const localEnd = (clippedEnd - startArc) / rangeLength
+    const u0 = uStart + (uEnd - uStart) * localStart
+    const u1 = uStart + (uEnd - uStart) * localEnd
+    appendWallTextureSegmentWithBand(bucket, clipped, resolveBand(clipped), u0, u1)
+  })
 }
 
 function collectWallTextureCornerPatches(
   chain: WallVisualChain,
-  part: WallTexturePart,
+  part: Exclude<WallTexturePart, 'post'>,
   rules: WallCornerModelRule[],
   assets: WallRenderAssetObjects,
   options: WallRenderOptions,
@@ -2196,10 +2261,209 @@ function collectWallTextureCornerPatches(
   return result
 }
 
+function collectWallTextureSpecialCornerArcs(
+  chain: WallVisualChain,
+  rules: WallCornerModelRule[],
+  assets: WallRenderAssetObjects,
+): number[] {
+  if (chain.segs.length < 2 || !rules.length) {
+    return []
+  }
+
+  const arcs = new Set<string>()
+  const incoming = new THREE.Vector3()
+  const outgoing = new THREE.Vector3()
+  const addPair = (current: WallRenderSeg, next: WallRenderSeg, closedSeam: boolean) => {
+    if (wallDistanceSqXZ(current.end as any, next.start as any) > WALL_EPSILON) {
+      return
+    }
+    incoming.set(
+      Number(current.end.x) - Number(current.start.x),
+      0,
+      Number(current.end.z) - Number(current.start.z),
+    )
+    outgoing.set(
+      Number(next.end.x) - Number(next.start.x),
+      0,
+      Number(next.end.z) - Number(next.start.z),
+    )
+    if (incoming.lengthSq() <= WALL_INSTANCING_DIR_EPSILON || outgoing.lengthSq() <= WALL_INSTANCING_DIR_EPSILON) {
+      return
+    }
+    incoming.normalize()
+    outgoing.normalize()
+    const angle = Math.acos(THREE.MathUtils.clamp(-incoming.dot(outgoing), -1, 1))
+    if (!Number.isFinite(angle)) {
+      return
+    }
+
+    const hasSpecialTexture = (['body', 'head', 'foot'] as const).some((part) => {
+      const rule = pickWallCornerRule(angle, rules, part, 'texture')
+      const assetId = rule ? resolveWallCornerAssetId(rule, part, 'texture') : null
+      return Boolean(assetId && resolveWallTextureResource(assets, assetId))
+    })
+    if (!hasSpecialTexture) {
+      return
+    }
+    const arc = closedSeam
+      ? Number(chain.segs[0]?.chainArcStart ?? 0)
+      : Number(current.chainArcStart ?? 0) + wallSegmentLengthXZ(current)
+    arcs.add(String(Math.round(arc * 1e6) / 1e6))
+  }
+
+  for (let index = 0; index < chain.segs.length - 1; index += 1) {
+    addPair(chain.segs[index]!, chain.segs[index + 1]!, false)
+  }
+  if (chain.closed) {
+    addPair(chain.segs[chain.segs.length - 1]!, chain.segs[0]!, true)
+  }
+  return Array.from(arcs, (value) => Number(value)).sort((a, b) => a - b)
+}
+
+function resolveWallTextureTurnDegrees(current: WallRenderSeg, next: WallRenderSeg): number {
+  if (wallDistanceSqXZ(current.end as any, next.start as any) > WALL_EPSILON) {
+    return 0
+  }
+  const ax = Number(current.end.x) - Number(current.start.x)
+  const az = Number(current.end.z) - Number(current.start.z)
+  const bx = Number(next.end.x) - Number(next.start.x)
+  const bz = Number(next.end.z) - Number(next.start.z)
+  const al = Math.hypot(ax, az)
+  const bl = Math.hypot(bx, bz)
+  if (al <= WALL_EPSILON || bl <= WALL_EPSILON) {
+    return 0
+  }
+  const dot = THREE.MathUtils.clamp((ax * bx + az * bz) / (al * bl), -1, 1)
+  return THREE.MathUtils.radToDeg(Math.acos(dot))
+}
+
+function collectWallTexturePostLayout(
+  chain: WallVisualChain,
+  rules: WallCornerModelRule[],
+  assets: WallRenderAssetObjects,
+  options: WallRenderOptions,
+): WallTexturePostLayout {
+  const assetId = resolveWallTextureAssetId(options, 'post')
+  const resource = resolveWallTextureResource(assets, assetId)
+  if (!assetId || !resource || !chain.segs.length) {
+    return { active: false, gaps: [], pieces: [] }
+  }
+
+  const chainIndex = Math.max(0, Math.trunc(Number(chain.segs[0]?.chainIndex ?? 0)))
+  const rangeStartArc = Number(chain.segs[0]?.chainArcStart ?? 0)
+  const lastSegment = chain.segs[chain.segs.length - 1]!
+  const rangeEndArc = Number(lastSegment.chainArcStart ?? rangeStartArc) + wallSegmentLengthXZ(lastSegment)
+  const rangeLength = Math.max(0, rangeEndArc - rangeStartArc)
+  const referenceHeight = resolveWallSegmentTotalHeight(chain.segs[0])
+  const postWidth = Math.min(
+    rangeLength,
+    Math.max(WALL_INSTANCING_MIN_TILE_LENGTH, referenceHeight * (resource.width / resource.height)),
+  )
+  const requestedSpacing = Math.max(
+    WALL_POST_SPACING_M_MIN,
+    Number.isFinite(options.postSpacingMeters)
+      ? Number(options.postSpacingMeters)
+      : WALL_POST_SPACING_M_DEFAULT,
+  )
+  const minimumCenterDistance = postWidth + WALL_POST_PANEL_GAP_M
+  const specialCornerArcs = collectWallTextureSpecialCornerArcs(chain, rules, assets)
+  const specialCornerKeys = new Set(
+    specialCornerArcs.map((arc) => String(Math.round(arc * 1e6) / 1e6)),
+  )
+
+  const structuralArcs = new Set<number>([rangeStartArc, rangeEndArc])
+  for (let index = 0; index < chain.segs.length - 1; index += 1) {
+    const current = chain.segs[index]!
+    const next = chain.segs[index + 1]!
+    if (resolveWallTextureTurnDegrees(current, next) > 5) {
+      structuralArcs.add(Number(current.chainArcStart ?? 0) + wallSegmentLengthXZ(current))
+    }
+  }
+  if (chain.closed) {
+    const first = chain.segs[0]!
+    const last = chain.segs[chain.segs.length - 1]!
+    if (resolveWallTextureTurnDegrees(last, first) > 5) {
+      structuralArcs.add(0)
+    }
+  }
+
+  const sortedStructuralArcs = Array.from(structuralArcs)
+    .map((arc) => Math.max(rangeStartArc, Math.min(rangeEndArc, arc)))
+    .sort((a, b) => a - b)
+    .filter((arc, index, values) => index === 0 || Math.abs(arc - values[index - 1]!) > WALL_EPSILON)
+  if (!chain.closed && sortedStructuralArcs[sortedStructuralArcs.length - 1] !== rangeEndArc) {
+    sortedStructuralArcs.push(rangeEndArc)
+  }
+
+  const postCenterKeys = new Set<string>()
+  for (let index = 0; index < sortedStructuralArcs.length - 1; index += 1) {
+    const startArc = sortedStructuralArcs[index]!
+    const rawEndArc = sortedStructuralArcs[index + 1]!
+    const endArc = Math.min(rangeEndArc, rawEndArc)
+    const spanLength = endArc - startArc
+    if (spanLength <= WALL_EPSILON) {
+      continue
+    }
+    const maxByTarget = Math.max(1, Math.ceil(spanLength / requestedSpacing))
+    const maxByPostWidth = spanLength < minimumCenterDistance
+      ? 1
+      : Math.max(1, Math.floor(spanLength / minimumCenterDistance))
+    const bayCount = Math.max(1, Math.min(maxByTarget, maxByPostWidth))
+    const bayWidth = spanLength / bayCount
+    for (let bayIndex = 0; bayIndex <= bayCount; bayIndex += 1) {
+      let centerArc = startArc + bayWidth * bayIndex
+      if (chain.closed && centerArc >= rangeEndArc - WALL_EPSILON) {
+        centerArc = rangeStartArc
+      }
+      const normalized = Math.max(rangeStartArc, Math.min(rangeEndArc, centerArc))
+      const key = String(Math.round(normalized * 1e6) / 1e6)
+      if (!specialCornerKeys.has(key)) {
+        postCenterKeys.add(key)
+      }
+    }
+  }
+
+  const pieces: WallTexturePostPiece[] = []
+  const gaps: WallArcInterval[] = []
+  const pushPiece = (startArc: number, endArc: number, uStart: number, uEnd: number) => {
+    const start = Math.max(rangeStartArc, Math.min(rangeEndArc, startArc))
+    const end = Math.max(rangeStartArc, Math.min(rangeEndArc, endArc))
+    if (end - start <= WALL_EPSILON) {
+      return
+    }
+    pieces.push({ assetId, startArc: start, endArc: end, uStart, uEnd })
+    gaps.push({ chainIndex, start, end })
+  }
+
+  Array.from(postCenterKeys)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .forEach((centerArc) => {
+      const desiredStart = centerArc - postWidth * 0.5
+      const desiredEnd = centerArc + postWidth * 0.5
+      if (chain.closed && (centerArc <= rangeStartArc + WALL_EPSILON || centerArc >= rangeEndArc - WALL_EPSILON)) {
+        pushPiece(rangeStartArc, Math.min(rangeEndArc, rangeStartArc + postWidth * 0.5), 0.5, 1)
+        pushPiece(Math.max(rangeStartArc, rangeEndArc - postWidth * 0.5), rangeEndArc, 0, 0.5)
+        return
+      }
+      const clippedStart = Math.max(rangeStartArc, desiredStart)
+      const clippedEnd = Math.min(rangeEndArc, desiredEnd)
+      const uStart = (clippedStart - desiredStart) / postWidth
+      const uEnd = (clippedEnd - desiredStart) / postWidth
+      pushPiece(clippedStart, clippedEnd, uStart, uEnd)
+    })
+
+  return {
+    active: true,
+    gaps: mergeWallArcIntervals(gaps),
+    pieces,
+  }
+}
+
 function appendWallTextureCorner(
   buckets: Map<string, WallTextureBucket>,
   patch: WallTextureCornerPatch,
-  part: WallTexturePart,
+  part: Exclude<WallTexturePart, 'post'>,
   options: WallRenderOptions,
 ): void {
   const bucket = getWallTextureBucket(buckets, part, patch.assetId)
@@ -2298,9 +2562,10 @@ function rebuildWallTextureGroup(
 ): void {
   const buckets = new Map<string, WallTextureBucket>()
   const rules = Array.isArray(options.cornerModels) ? options.cornerModels : []
-  const parts: WallTexturePart[] = ['body', 'head', 'foot']
+  const parts: Array<Exclude<WallTexturePart, 'post'>> = ['body', 'head', 'foot']
 
   for (const chain of chainDefinitions) {
+    const postLayout = collectWallTexturePostLayout(chain, rules, assets, options)
     for (const part of parts) {
       const assetId = resolveWallTextureAssetId(options, part)
       const resource = resolveWallTextureResource(assets, assetId)
@@ -2309,11 +2574,36 @@ function rebuildWallTextureGroup(
       }
 
       const corners = collectWallTextureCornerPatches(chain, part, rules, assets, options)
-      const straightChains = corners.gaps.length
-        ? buildWallVisualChainsFromSegs(subtractWallArcIntervalsFromSegs(chain.segs, corners.gaps))
+      const occupiedIntervals = [...corners.gaps, ...postLayout.gaps]
+      const straightSegments = occupiedIntervals.length
+        ? subtractWallArcIntervalsFromSegs(chain.segs, occupiedIntervals)
+        : chain.segs
+      const straightChains = occupiedIntervals.length
+        ? buildWallVisualChainsFromSegs(straightSegments)
         : [chain]
 
       for (const straightChain of straightChains) {
+        const bucket = getWallTextureBucket(buckets, part, assetId)
+        if (part === 'body' && postLayout.active) {
+          const firstSegment = straightChain.segs[0]
+          const lastSegment = straightChain.segs[straightChain.segs.length - 1]
+          if (!firstSegment || !lastSegment) {
+            continue
+          }
+          const startArc = Number(firstSegment.chainArcStart ?? 0)
+          const endArc = Number(lastSegment.chainArcStart ?? 0) + wallSegmentLengthXZ(lastSegment)
+          appendWallTextureArcRange(
+            bucket,
+            straightChain.segs,
+            startArc,
+            endArc,
+            (segment) => resolveWallTextureBand(segment, 'body', options),
+            0,
+            1,
+          )
+          continue
+        }
+
         for (const segment of straightChain.segs) {
           const band = resolveWallTextureBand(segment, part, options)
           if (band.height <= WALL_EPSILON) {
@@ -2323,13 +2613,33 @@ function rebuildWallTextureGroup(
             WALL_INSTANCING_MIN_TILE_LENGTH,
             band.height * (resource.width / resource.height),
           )
-          const bucket = getWallTextureBucket(buckets, part, assetId)
           appendWallTextureSegment(bucket, segment, part, options, tileWidth)
         }
       }
 
       for (const patch of corners.patches) {
         appendWallTextureCorner(buckets, patch, part, options)
+      }
+    }
+
+    if (postLayout.active) {
+      const postAssetId = resolveWallTextureAssetId(options, 'post')
+      if (postAssetId) {
+        const postBucket = getWallTextureBucket(buckets, 'post', postAssetId)
+        for (const piece of postLayout.pieces) {
+          appendWallTextureArcRange(
+            postBucket,
+            chain.segs,
+            piece.startArc,
+            piece.endArc,
+            (segment) => ({
+              baseY: 0,
+              height: resolveWallSegmentTotalHeight(segment),
+            }),
+            piece.uStart,
+            piece.uEnd,
+          )
+        }
       }
     }
   }

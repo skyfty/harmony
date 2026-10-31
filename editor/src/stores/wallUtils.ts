@@ -27,6 +27,8 @@ export function buildWallUpdateRenderOptions(props: WallComponentProps) {
     headAssetHeight: normalized.headAssetHeight,
     footAssetHeight: normalized.footAssetHeight,
     bodyTextureAssetId: normalized.bodyTextureAssetId,
+    postTextureAssetId: normalized.postTextureAssetId,
+    postSpacingMeters: normalized.postSpacingMeters,
     headTextureAssetId: normalized.headTextureAssetId,
     footTextureAssetId: normalized.footTextureAssetId,
     bodyUvAxis: normalized.bodyUvAxis,

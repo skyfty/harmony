@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  WALL_COMPONENT_TYPE,
   clampWallProps,
   resolveWallComponentPropsFromMesh,
   type WallCornerModelRule,
@@ -10,6 +11,7 @@ import {
   buildWallDynamicMeshFromWorldSegments,
   buildWallUpdateRenderOptions,
 } from '@/stores/wallUtils'
+import { shouldPreserveTextureWallNodeMaterials } from '@schema/wallRenderMode'
 import {
   BUILTIN_AIR_WALL_PRESET,
   collectWallPresetDependencyAssetIds,
@@ -17,6 +19,7 @@ import {
 } from '@/stores/wallPresetActions'
 import { WALL_PRESET_FORMAT_VERSION } from '@/utils/wallPreset'
 import { buildWallMesh } from '@schema/sceneGraph/dynamicMeshes/wall'
+import { collectSceneNodeDependencyAssetIds } from '@/utils/sceneAssetCollectors'
 
 function makeTextureResource(width = 2, height = 1): WallTextureResource {
   const texture = new THREE.Texture()
@@ -73,6 +76,8 @@ describe('wall texture rendering', () => {
 
     expect(props.wallRenderMode).toBe('texture')
     expect(props.bodyTextureAssetId).toBeNull()
+    expect(props.postTextureAssetId).toBeNull()
+    expect(props.postSpacingMeters).toBe(4)
     expect(props.headTextureAssetId).toBeNull()
     expect(props.footTextureAssetId).toBeNull()
   })
@@ -85,6 +90,8 @@ describe('wall texture rendering', () => {
       bodyTextureAssetId: 'body-image',
       headTextureAssetId: 'head-image',
       footTextureAssetId: 'foot-image',
+      postTextureAssetId: 'post-image',
+      postSpacingMeters: 3.5,
       headAssetHeight: 0.4,
       footAssetHeight: 0.2,
     })
@@ -93,6 +100,8 @@ describe('wall texture rendering', () => {
     expect(options.bodyTextureAssetId).toBe('body-image')
     expect(options.headTextureAssetId).toBe('head-image')
     expect(options.footTextureAssetId).toBe('foot-image')
+    expect(options.postTextureAssetId).toBe('post-image')
+    expect(options.postSpacingMeters).toBe(3.5)
     expect(options.headAssetHeight).toBe(0.4)
     expect(options.footAssetHeight).toBe(0.2)
   })
@@ -179,6 +188,94 @@ describe('wall texture rendering', () => {
     expect(bounds.get('head')?.max.y).toBeCloseTo(baselineY + 3)
   })
 
+  it('creates equal bays with full-height posts and one Body panel per bay', () => {
+    const group = createWallRenderGroup(
+      buildStraightWall(12),
+      {
+        texturesByAssetId: {
+          body: makeTextureResource(1, 1),
+          post: makeTextureResource(1, 4),
+        },
+      },
+      {
+        wallRenderMode: 'texture',
+        bodyTextureAssetId: 'body',
+        postTextureAssetId: 'post',
+        postSpacingMeters: 4,
+      },
+    )
+    const meshes = group.children.filter((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh)
+    const postMesh = meshes.find((mesh) => mesh.userData.wallTexturePart === 'post')
+    const bodyMesh = meshes.find((mesh) => mesh.userData.wallTexturePart === 'body')
+
+    expect(postMesh?.geometry.getIndex()?.count).toBe(24)
+    expect(bodyMesh?.geometry.getIndex()?.count).toBe(18)
+    expect(postMesh).toBeDefined()
+    postMesh!.geometry.computeBoundingBox()
+    expect(postMesh!.geometry.boundingBox?.max.y).toBeCloseTo(
+      Number(postMesh!.geometry.boundingBox?.min.y) + 3,
+    )
+  })
+
+  it('places posts at both sides of an opening and ignores sub-5-degree polyline noise', () => {
+    const opened = buildStraightWall(12)
+    opened.openings = [{ chainIndex: 0, start: 5, end: 7 }]
+    const openedGroup = createWallRenderGroup(
+      opened,
+      {
+        texturesByAssetId: {
+          body: makeTextureResource(1, 1),
+          post: makeTextureResource(1, 20),
+        },
+      },
+      {
+        wallRenderMode: 'texture',
+        bodyTextureAssetId: 'body',
+        postTextureAssetId: 'post',
+        postSpacingMeters: 4,
+      },
+    )
+    const openedPost = openedGroup.children.find(
+      (child): child is THREE.Mesh =>
+        (child as THREE.Mesh).isMesh && child.userData.wallTexturePart === 'post',
+    )
+    expect(openedPost?.geometry.getIndex()?.count).toBe(36)
+
+    const buildTurnedWall = (degrees: number) => {
+      const radians = THREE.MathUtils.degToRad(degrees)
+      return buildWallDynamicMeshFromWorldSegments(
+        [
+          { start: { x: 0, y: 0, z: 0 }, end: { x: 6, y: 0, z: 0 } },
+          {
+            start: { x: 6, y: 0, z: 0 },
+            end: { x: 6 + Math.cos(radians) * 6, y: 0, z: Math.sin(radians) * 6 },
+          },
+        ],
+        { height: 3, width: 0.2, thickness: 0.2 },
+      )!.definition
+    }
+    const postCount = (definition: ReturnType<typeof buildStraightWall>) => {
+      const group = createWallRenderGroup(
+        definition,
+        { texturesByAssetId: { post: makeTextureResource(1, 20) } },
+        {
+          wallRenderMode: 'texture',
+          postTextureAssetId: 'post',
+          postSpacingMeters: 100,
+        },
+      )
+      const mesh = group.children.find(
+        (child): child is THREE.Mesh =>
+          (child as THREE.Mesh).isMesh && child.userData.wallTexturePart === 'post',
+      )
+      return mesh?.geometry.getIndex()?.count ?? 0
+    }
+    expect(postCount(buildTurnedWall(3))).toBe(12)
+    // The corner post spans the bend and is represented by one quad on each
+    // side of the joint.
+    expect(postCount(buildTurnedWall(10))).toBe(24)
+  })
+
   it('replaces the configured joint interval with a bent corner texture', () => {
     const built = buildWallDynamicMeshFromWorldSegments(
       [
@@ -234,7 +331,45 @@ describe('wall texture rendering', () => {
     expect(mesh.geometry.getIndex()?.count).toBe(24)
   })
 
-  it('reads version 9 presets and preserves texture mode settings in version 10', () => {
+  it('uses a specialized corner texture instead of a duplicate generic post', () => {
+    const built = buildWallDynamicMeshFromWorldSegments(
+      [
+        { start: { x: 0, y: 0, z: 0 }, end: { x: 5, y: 0, z: 0 } },
+        { start: { x: 5, y: 0, z: 0 }, end: { x: 5, y: 0, z: 5 } },
+      ],
+      { height: 3, width: 0.2, thickness: 0.2 },
+    )
+    if (!built) {
+      throw new Error('Failed to build corner fixture')
+    }
+    const group = createWallRenderGroup(
+      built.definition,
+      {
+        texturesByAssetId: {
+          body: makeTextureResource(1, 1),
+          corner: makeTextureResource(1, 1),
+          post: makeTextureResource(1, 4),
+        },
+      },
+      {
+        wallRenderMode: 'texture',
+        bodyTextureAssetId: 'body',
+        postTextureAssetId: 'post',
+        postSpacingMeters: 100,
+        cornerModels: [makeCornerRule({ bodyTextureAssetId: 'corner' })],
+      },
+    )
+    const postMesh = group.children.find(
+      (child): child is THREE.Mesh =>
+        (child as THREE.Mesh).isMesh && child.userData.wallTexturePart === 'post',
+    )
+
+    // Only the two open-wall ends receive generic posts. The matching 90°
+    // corner is replaced by its specialized corner texture.
+    expect(postMesh?.geometry.getIndex()?.count).toBe(12)
+  })
+
+  it('reads version 9 presets and preserves texture settings in the current version', () => {
     const legacyProps = JSON.parse(JSON.stringify(BUILTIN_AIR_WALL_PRESET.wallProps))
     delete legacyProps.bodyTextureAssetId
     delete legacyProps.headTextureAssetId
@@ -254,6 +389,8 @@ describe('wall texture rendering', () => {
     }))
     expect(legacy.formatVersion).toBe(WALL_PRESET_FORMAT_VERSION)
     expect(legacy.wallProps.bodyTextureAssetId).toBeNull()
+    expect(legacy.wallProps.postTextureAssetId).toBeNull()
+    expect(legacy.wallProps.postSpacingMeters).toBe(4)
 
     const current = parseWallPresetData(JSON.stringify({
       ...BUILTIN_AIR_WALL_PRESET,
@@ -264,15 +401,40 @@ describe('wall texture rendering', () => {
         bodyTextureAssetId: 'body-image',
         headTextureAssetId: 'head-image',
         footTextureAssetId: 'foot-image',
+        postTextureAssetId: 'post-image',
+        postSpacingMeters: 3.5,
       },
     }))
     expect(current.wallProps.wallRenderMode).toBe('texture')
     expect(current.wallProps.bodyTextureAssetId).toBe('body-image')
     expect(current.wallProps.headTextureAssetId).toBe('head-image')
     expect(current.wallProps.footTextureAssetId).toBe('foot-image')
+    expect(current.wallProps.postTextureAssetId).toBe('post-image')
+    expect(current.wallProps.postSpacingMeters).toBe(3.5)
     expect(collectWallPresetDependencyAssetIds(current)).toEqual(
       expect.arrayContaining(['body-image', 'head-image', 'foot-image']),
     )
+  })
+
+  it('includes the Post image in Preview scene asset dependencies', () => {
+    const dependencies = collectSceneNodeDependencyAssetIds([{
+      id: 'wall-preview-dependency',
+      name: 'Wall',
+      nodeType: 'Mesh',
+      components: {
+        wall: {
+          id: 'wall',
+          type: 'wall',
+          enabled: true,
+          props: {
+            wallRenderMode: 'texture',
+            postTextureAssetId: 'a.png',
+          },
+        },
+      },
+    } as any])
+
+    expect(dependencies.has('a.png')).toBe(true)
   })
 
   it('does not load model assets when building a texture-mode wall', async () => {
@@ -305,6 +467,7 @@ describe('wall texture rendering', () => {
               ...baseProps,
               wallRenderMode: 'texture',
               bodyTextureAssetId: 'body',
+              postTextureAssetId: 'post',
             },
           },
         },
@@ -320,5 +483,31 @@ describe('wall texture rendering', () => {
       }
     })
     expect(meshes.length).toBeGreaterThan(0)
+    expect(meshes.some((mesh) => mesh.userData.wallTexturePart === 'post')).toBe(true)
+  })
+
+  it('protects texture wall materials from generic runtime material overrides', () => {
+    const makeNode = (wallRenderMode: string, enabled = true) => ({
+      dynamicMesh: { type: 'Wall' },
+      components: {
+        [WALL_COMPONENT_TYPE]: {
+          enabled,
+          props: { wallRenderMode },
+        },
+      },
+    }) as any
+
+    expect(shouldPreserveTextureWallNodeMaterials(makeNode('texture'))).toBe(true)
+    expect(shouldPreserveTextureWallNodeMaterials(makeNode('stretch'))).toBe(false)
+    expect(shouldPreserveTextureWallNodeMaterials(makeNode('texture', false))).toBe(false)
+    expect(shouldPreserveTextureWallNodeMaterials({
+      dynamicMesh: { type: 'Floor' },
+      components: {
+        [WALL_COMPONENT_TYPE]: {
+          enabled: true,
+          props: { wallRenderMode: 'texture' },
+        },
+      },
+    } as any)).toBe(false)
   })
 })

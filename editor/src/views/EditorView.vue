@@ -1609,12 +1609,15 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
       revision = lastPreviewBroadcastRevision + 1
     }
     lastPreviewBroadcastRevision = revision
-    broadcastScenePreviewUpdate({
-      revision,
-      document: exportDocument,
-      timestamp: new Date().toISOString(),
-      diagnosticsSummary: exportBundle.diagnostics.summary,
-    })
+    await broadcastScenePreviewUpdate(
+      {
+        revision,
+        document: exportDocument,
+        timestamp: new Date().toISOString(),
+        diagnosticsSummary: exportBundle.diagnostics.summary,
+      },
+      { forcePersist: true },
+    )
   } catch (error) {
     console.warn('[SceneStore] Failed to broadcast preview update', error)
   }
@@ -1647,7 +1650,7 @@ async function saveCurrentSceneWithOptions(options: SaveCurrentSceneOptions = {}
     try {
       const document = await sceneStore.saveActiveScene({force: true})
       if (document && broadcastPreview) {
-        void broadcastScenePreview(document)
+        await broadcastScenePreview(document)
       }
       return true
     } catch (error) {

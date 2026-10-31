@@ -114,6 +114,8 @@ export function computeWallDynamicMeshSignature(
     headAssetHeight?: number
     footAssetHeight?: number
     bodyTextureAssetId?: string | null
+    postTextureAssetId?: string | null
+    postSpacingMeters?: number
     headTextureAssetId?: string | null
     footTextureAssetId?: string | null
     textureState?: string | null
@@ -128,6 +130,8 @@ export function computeWallDynamicMeshSignature(
     headAssetHeight: Number.isFinite(options.headAssetHeight) ? Number(options.headAssetHeight) : 0,
     footAssetHeight: Number.isFinite(options.footAssetHeight) ? Number(options.footAssetHeight) : 0,
     bodyTextureAssetId: options.bodyTextureAssetId ?? null,
+    postTextureAssetId: options.postTextureAssetId ?? null,
+    postSpacingMeters: Number.isFinite(options.postSpacingMeters) ? Number(options.postSpacingMeters) : 4,
     headTextureAssetId: options.headTextureAssetId ?? null,
     footTextureAssetId: options.footTextureAssetId ?? null,
     textureState: options.textureState ?? null,
@@ -161,6 +165,7 @@ function collectWallTextureAssetIds(
   }
   return Array.from(new Set([
     wallProps.bodyTextureAssetId,
+    wallProps.postTextureAssetId,
     wallProps.headTextureAssetId,
     wallProps.footTextureAssetId,
     ...(Array.isArray(wallProps.cornerModels)
@@ -628,6 +633,8 @@ export function createWallRenderer(options: WallRendererOptions) {
         headAssetHeight: normalizedProps.headAssetHeight,
         footAssetHeight: normalizedProps.footAssetHeight,
         bodyTextureAssetId: normalizedProps.bodyTextureAssetId,
+        postTextureAssetId: normalizedProps.postTextureAssetId,
+        postSpacingMeters: normalizedProps.postSpacingMeters,
         headTextureAssetId: normalizedProps.headTextureAssetId,
         footTextureAssetId: normalizedProps.footTextureAssetId,
       }
@@ -691,6 +698,8 @@ export function createWallRenderer(options: WallRendererOptions) {
         headAssetHeight: normalizedProps.headAssetHeight,
         footAssetHeight: normalizedProps.footAssetHeight,
         bodyTextureAssetId: normalizedProps.bodyTextureAssetId,
+        postTextureAssetId: normalizedProps.postTextureAssetId,
+        postSpacingMeters: normalizedProps.postSpacingMeters,
         headTextureAssetId: normalizedProps.headTextureAssetId,
         footTextureAssetId: normalizedProps.footTextureAssetId,
         bodyUvAxis: normalizedProps.bodyUvAxis,
@@ -828,6 +837,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       repeatInstanceStep: source.repeatInstanceStep ?? baseProps.repeatInstanceStep,
       bodyAssetId: source.bodyAssetId ?? baseProps.bodyAssetId,
       bodyTextureAssetId: source.bodyTextureAssetId ?? baseProps.bodyTextureAssetId,
+      postTextureAssetId: source.postTextureAssetId ?? baseProps.postTextureAssetId,
+      postSpacingMeters: source.postSpacingMeters ?? baseProps.postSpacingMeters,
       headAssetId: source.headAssetId ?? baseProps.headAssetId,
       headTextureAssetId: source.headTextureAssetId ?? baseProps.headTextureAssetId,
       headAssetHeight: source.headAssetHeight ?? baseProps.headAssetHeight,
@@ -959,6 +970,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       headAssetHeight: renderOptions.headAssetHeight,
       footAssetHeight: renderOptions.footAssetHeight,
       bodyTextureAssetId: renderOptions.bodyTextureAssetId,
+      postTextureAssetId: renderOptions.postTextureAssetId,
+      postSpacingMeters: renderOptions.postSpacingMeters,
       headTextureAssetId: renderOptions.headTextureAssetId,
       footTextureAssetId: renderOptions.footTextureAssetId,
       textureState: renderOptions.textureState,
@@ -991,6 +1004,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       headAssetHeight: options.headAssetHeight,
       footAssetHeight: options.footAssetHeight,
       bodyTextureAssetId: options.bodyTextureAssetId,
+      postTextureAssetId: options.postTextureAssetId,
+      postSpacingMeters: options.postSpacingMeters,
       headTextureAssetId: options.headTextureAssetId,
       footTextureAssetId: options.footTextureAssetId,
       textureState: options.textureState,
@@ -1157,6 +1172,8 @@ export function createWallRenderer(options: WallRendererOptions) {
       headAssetHeight: wallProps?.headAssetHeight,
       footAssetHeight: wallProps?.footAssetHeight,
       bodyTextureAssetId: wallProps?.bodyTextureAssetId,
+      postTextureAssetId: wallProps?.postTextureAssetId,
+      postSpacingMeters: wallProps?.postSpacingMeters,
       headTextureAssetId: wallProps?.headTextureAssetId,
       footTextureAssetId: wallProps?.footTextureAssetId,
     })

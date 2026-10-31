@@ -5,6 +5,7 @@ import {
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_REPEAT_INSTANCE_STEP,
+  WALL_DEFAULT_POST_SPACING,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
   type WallComponentProps,
@@ -92,6 +93,8 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
     isAirWall: true,
     bodyAssetId: null,
     bodyTextureAssetId: null,
+    postTextureAssetId: null,
+    postSpacingMeters: WALL_DEFAULT_POST_SPACING,
     bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
     bodyUvAxis: 'auto',
     headAssetId: null,
@@ -195,6 +198,7 @@ export function collectWallPresetDependencyAssetIds(
   const wallAssetIds = [
     wallProps.bodyAssetId,
     wallProps.bodyTextureAssetId,
+    wallProps.postTextureAssetId,
     wallProps.headAssetId,
     wallProps.headTextureAssetId,
     wallProps.footAssetId,
@@ -309,6 +313,8 @@ function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallP
     isAirWall: wallProps.isAirWall,
     bodyAssetId: wallProps.bodyAssetId ?? null,
     bodyTextureAssetId: wallProps.bodyTextureAssetId ?? null,
+    postTextureAssetId: wallProps.postTextureAssetId ?? null,
+    postSpacingMeters: wallProps.postSpacingMeters,
     bodyOrientation: wallProps.bodyOrientation,
     bodyUvAxis: wallProps.bodyUvAxis,
     headAssetId: wallProps.headAssetId ?? null,
@@ -342,6 +348,7 @@ function normalizeWallPresetWallPropsAssetIds(
     ...wallProps,
     bodyAssetId: normalizeAssetIdWithRegistry(wallProps.bodyAssetId, presetAssetRegistry),
     bodyTextureAssetId: normalizeAssetIdWithRegistry(wallProps.bodyTextureAssetId, presetAssetRegistry),
+    postTextureAssetId: normalizeAssetIdWithRegistry(wallProps.postTextureAssetId, presetAssetRegistry),
     headAssetId: normalizeAssetIdWithRegistry(wallProps.headAssetId, presetAssetRegistry),
     headTextureAssetId: normalizeAssetIdWithRegistry(wallProps.headTextureAssetId, presetAssetRegistry),
     footAssetId: normalizeAssetIdWithRegistry(wallProps.footAssetId, presetAssetRegistry),
@@ -404,6 +411,11 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
       return WALL_DEFAULT_REPEAT_INSTANCE_STEP
     }
     return num
+  }
+  const optionalPostSpacingMeters = (): number => {
+    const raw = record.postSpacingMeters
+    const num = typeof raw === 'number' ? raw : Number(raw)
+    return Number.isFinite(num) && num > 0 ? num : WALL_DEFAULT_POST_SPACING
   }
 
   const requiredJointTrim = (raw: unknown, label: string): { start: number; end: number } => {
@@ -583,6 +595,8 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     isAirWall: requiredBoolean('isAirWall'),
     bodyAssetId: requiredAssetIdOrNull('bodyAssetId'),
     bodyTextureAssetId: optionalAssetIdOrNull('bodyTextureAssetId'),
+    postTextureAssetId: optionalAssetIdOrNull('postTextureAssetId'),
+    postSpacingMeters: optionalPostSpacingMeters(),
     bodyOrientation: requiredOrientation(record.bodyOrientation, 'bodyOrientation') as any,
     bodyUvAxis: optionalUvAxis(record.bodyUvAxis, 'auto'),
     headAssetId: requiredAssetIdOrNull('headAssetId'),
@@ -631,8 +645,8 @@ export function parseWallPresetData(text: string): WallPresetData {
     throw new Error('墙体预设格式不受支持')
   }
   const sourceFormatVersion = Number(record.formatVersion)
-  if (sourceFormatVersion !== 9 && sourceFormatVersion !== WALL_PRESET_FORMAT_VERSION) {
-    throw new Error(`墙体预设版本不匹配 (expected 9 or ${WALL_PRESET_FORMAT_VERSION})`)
+  if (sourceFormatVersion !== 9 && sourceFormatVersion !== 10 && sourceFormatVersion !== WALL_PRESET_FORMAT_VERSION) {
+    throw new Error(`墙体预设版本不匹配 (expected 9, 10 or ${WALL_PRESET_FORMAT_VERSION})`)
   }
 
   const name = typeof record.name === 'string' && record.name.trim().length ? record.name.trim() : ''
@@ -889,6 +903,7 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
           [
             wallPropsWithMaterialBinding.bodyAssetId,
             wallPropsWithMaterialBinding.bodyTextureAssetId,
+            wallPropsWithMaterialBinding.postTextureAssetId,
             wallPropsWithMaterialBinding.headAssetId,
             wallPropsWithMaterialBinding.headTextureAssetId,
             wallPropsWithMaterialBinding.footAssetId,

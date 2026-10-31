@@ -15,6 +15,8 @@ export const WALL_MIN_WIDTH = 0.0
 export const WALL_MIN_THICKNESS = 0.0
 export const WALL_DEFAULT_REPEAT_INSTANCE_STEP = 0.5
 export const WALL_MIN_REPEAT_INSTANCE_STEP = 0.01
+export const WALL_DEFAULT_POST_SPACING = 4
+export const WALL_MIN_POST_SPACING = 0.1
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 
@@ -106,6 +108,10 @@ export interface WallComponentProps {
   bodyAssetId: string | null
   /** Transparent image asset used for the body in texture render mode. */
   bodyTextureAssetId: string | null
+  /** Full-height post image used to divide texture walls into panel bays. */
+  postTextureAssetId: string | null
+  /** Maximum target distance between adjacent post centers in texture mode. */
+  postSpacingMeters: number
   /** Orientation overrides for the body model. */
   bodyOrientation: WallModelOrientation
   /** UV repeat axis for the body model stretch-tiling. */
@@ -358,9 +364,17 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     }
     return Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, raw)
   }
+  const normalizePostSpacing = (value: unknown): number => {
+    const raw = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(raw)) {
+      return WALL_DEFAULT_POST_SPACING
+    }
+    return Math.max(WALL_MIN_POST_SPACING, raw)
+  }
 
   const bodyAssetId = requiredAssetIdOrNull('bodyAssetId')
   const bodyTextureAssetId = optionalAssetIdOrNull('bodyTextureAssetId')
+  const postTextureAssetId = optionalAssetIdOrNull('postTextureAssetId')
   const headAssetId = requiredAssetIdOrNull('headAssetId')
   const headTextureAssetId = optionalAssetIdOrNull('headTextureAssetId')
   const headAssetHeight = Math.max(0, requiredNumber('headAssetHeight'))
@@ -397,6 +411,8 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     repeatInstanceStep: normalizeRepeatInstanceStep((props as any).repeatInstanceStep),
     bodyAssetId,
     bodyTextureAssetId,
+    postTextureAssetId,
+    postSpacingMeters: normalizePostSpacing((props as any).postSpacingMeters),
     bodyOrientation,
     bodyUvAxis,
     headAssetId,
@@ -436,6 +452,8 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
       bodyAssetId: null,
       bodyTextureAssetId: null,
+      postTextureAssetId: null,
+      postSpacingMeters: WALL_DEFAULT_POST_SPACING,
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
       bodyUvAxis: 'auto',
       headAssetId: null,
@@ -475,6 +493,8 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     bodyAssetId: null,
     bodyTextureAssetId: null,
+    postTextureAssetId: null,
+    postSpacingMeters: WALL_DEFAULT_POST_SPACING,
     headAssetId: null,
     headTextureAssetId: null,
     headAssetHeight: 0,
@@ -536,6 +556,10 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
       : WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     bodyAssetId: props.bodyAssetId ?? null,
     bodyTextureAssetId: props.bodyTextureAssetId ?? null,
+    postTextureAssetId: props.postTextureAssetId ?? null,
+    postSpacingMeters: Number.isFinite(props.postSpacingMeters)
+      ? Math.max(WALL_MIN_POST_SPACING, Number(props.postSpacingMeters))
+      : WALL_DEFAULT_POST_SPACING,
     bodyOrientation: {
       forwardAxis: props.bodyOrientation.forwardAxis,
       yawDeg: props.bodyOrientation.yawDeg,
@@ -688,6 +712,8 @@ export function createWallComponentState(
     repeatInstanceStep: overrides?.repeatInstanceStep ?? defaults.repeatInstanceStep,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     bodyTextureAssetId: overrides?.bodyTextureAssetId ?? defaults.bodyTextureAssetId,
+    postTextureAssetId: overrides?.postTextureAssetId ?? defaults.postTextureAssetId,
+    postSpacingMeters: overrides?.postSpacingMeters ?? defaults.postSpacingMeters,
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
     bodyUvAxis: (overrides as any)?.bodyUvAxis ?? defaults.bodyUvAxis,
     headAssetId: overrides?.headAssetId ?? defaults.headAssetId,

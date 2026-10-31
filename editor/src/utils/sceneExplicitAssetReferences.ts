@@ -73,6 +73,7 @@ function visitWallAssetReferences(
   const partKeys = [
     'bodyAssetId',
     'bodyTextureAssetId',
+    'postTextureAssetId',
     'headAssetId',
     'headTextureAssetId',
     'footAssetId',
