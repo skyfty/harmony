@@ -354,13 +354,25 @@ function collectWallReferences(
     ...record,
     path: `${record.path}.bodyAssetId`,
   })
+  addReference(bucket, normalizeAssetIdCandidate(props?.bodyTextureAssetId), {
+    ...record,
+    path: `${record.path}.bodyTextureAssetId`,
+  })
   addReference(bucket, normalizeAssetIdCandidate(props?.headAssetId), {
     ...record,
     path: `${record.path}.headAssetId`,
   })
+  addReference(bucket, normalizeAssetIdCandidate(props?.headTextureAssetId), {
+    ...record,
+    path: `${record.path}.headTextureAssetId`,
+  })
   addReference(bucket, normalizeAssetIdCandidate(props?.footAssetId), {
     ...record,
     path: `${record.path}.footAssetId`,
+  })
+  addReference(bucket, normalizeAssetIdCandidate(props?.footTextureAssetId), {
+    ...record,
+    path: `${record.path}.footTextureAssetId`,
   })
   addReference(bucket, normalizeAssetIdCandidate(props?.bodyEndCapAssetId), {
     ...record,
@@ -380,13 +392,25 @@ function collectWallReferences(
       ...record,
       path: `${record.path}.cornerModels[${index}].bodyAssetId`,
     })
+    addReference(bucket, normalizeAssetIdCandidate(corner?.bodyTextureAssetId), {
+      ...record,
+      path: `${record.path}.cornerModels[${index}].bodyTextureAssetId`,
+    })
     addReference(bucket, normalizeAssetIdCandidate(corner?.headAssetId), {
       ...record,
       path: `${record.path}.cornerModels[${index}].headAssetId`,
     })
+    addReference(bucket, normalizeAssetIdCandidate(corner?.headTextureAssetId), {
+      ...record,
+      path: `${record.path}.cornerModels[${index}].headTextureAssetId`,
+    })
     addReference(bucket, normalizeAssetIdCandidate(corner?.footAssetId), {
       ...record,
       path: `${record.path}.cornerModels[${index}].footAssetId`,
+    })
+    addReference(bucket, normalizeAssetIdCandidate(corner?.footTextureAssetId), {
+      ...record,
+      path: `${record.path}.cornerModels[${index}].footTextureAssetId`,
     })
   })
 }

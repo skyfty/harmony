@@ -28,6 +28,7 @@ import {
   type WallComponentProps,
 } from '@schema/components'
 import { getCachedModelObject } from '@schema/modelObjectCache'
+import { normalizeWallRenderMode } from '@schema/wallRenderMode'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
@@ -48,6 +49,12 @@ const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 type WallAssetDialogTarget = 'body' | 'head' | 'foot' | 'bodyCap' | 'headCap' | 'footCap' | 'cornerBody' | 'cornerHead' | 'cornerFoot'
 const assetDialogTarget = ref<WallAssetDialogTarget | null>(null)
 const assetDialogCornerIndex = ref<number | null>(null)
+type WallTexturePart = 'body' | 'head' | 'foot'
+const textureAssetDialogVisible = ref(false)
+const textureAssetDialogSelectedId = ref('')
+const textureAssetDialogPart = ref<WallTexturePart>('body')
+const textureAssetDialogCornerIndex = ref<number | null>(null)
+const textureAssetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'body') return 'Select Wall Body Asset'
   if (assetDialogTarget.value === 'head') return 'Select Wall Head Asset'
@@ -60,11 +67,24 @@ const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'cornerFoot') return 'Select Wall Corner Model (Foot)'
   return 'Select Wall Asset'
 })
+const textureAssetDialogTitle = computed(() => {
+  const part = textureAssetDialogPart.value === 'body'
+    ? 'Body'
+    : textureAssetDialogPart.value === 'head'
+      ? 'Head'
+      : 'Foot'
+  return textureAssetDialogCornerIndex.value === null
+    ? `Select Wall ${part} Texture`
+    : `Select Corner ${part} Texture`
+})
 
 const wallComponent = computed(
   () => selectedNode.value?.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined,
 )
 const isAirWallNode = computed(() => Boolean(wallComponent.value?.props?.isAirWall))
+const isTextureMode = computed(
+  () => normalizeWallRenderMode((wallComponent.value?.props as any)?.wallRenderMode) === 'texture',
+)
 
 const panelDropAreaRef = ref<HTMLElement | null>(null)
 const wallPresetDropActive = ref(false)
@@ -126,6 +146,21 @@ const footAsset = computed(() => {
   return sceneStore.getAsset(assetId) ?? null
 })
 
+const bodyTextureAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.bodyTextureAssetId
+  return assetId ? sceneStore.getAsset(assetId) ?? null : null
+})
+
+const headTextureAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.headTextureAssetId
+  return assetId ? sceneStore.getAsset(assetId) ?? null : null
+})
+
+const footTextureAsset = computed(() => {
+  const assetId = wallComponent.value?.props?.footTextureAssetId
+  return assetId ? sceneStore.getAsset(assetId) ?? null : null
+})
+
 const bodyCapAsset = computed(() => {
   const assetId = wallComponent.value?.props?.bodyEndCapAssetId
   if (!assetId) {
@@ -176,6 +211,7 @@ const UV_AXIS_ITEMS: Array<{ title: string; value: WallUvAxis }> = [
 const WALL_RENDER_MODE_ITEMS: Array<{ title: string; value: WallRenderMode }> = [
   { title: 'Stretch', value: 'stretch' },
   { title: 'Repeat Instances', value: 'repeatInstances' },
+  { title: 'Texture', value: 'texture' },
 ]
 
 const cornerModels = computed<WallCornerModelRow[]>(() => {
@@ -313,6 +349,15 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
   const footAssetId = typeof (row as any)?.footAssetId === 'string' && (row as any).footAssetId.trim().length
     ? (row as any).footAssetId
     : null
+  const bodyTextureAssetId = typeof (row as any)?.bodyTextureAssetId === 'string' && (row as any).bodyTextureAssetId.trim().length
+    ? (row as any).bodyTextureAssetId
+    : null
+  const headTextureAssetId = typeof (row as any)?.headTextureAssetId === 'string' && (row as any).headTextureAssetId.trim().length
+    ? (row as any).headTextureAssetId
+    : null
+  const footTextureAssetId = typeof (row as any)?.footTextureAssetId === 'string' && (row as any).footTextureAssetId.trim().length
+    ? (row as any).footTextureAssetId
+    : null
   const angle = clampAngleDegrees((row as any)?.angle, 90)
   const tolerance = clampTolerance((row as any)?.tolerance, 5)
 
@@ -338,6 +383,9 @@ function normalizeCornerModelRow(row: Partial<WallCornerModelRow> | null | undef
     bodyAssetId,
     headAssetId,
     footAssetId,
+    bodyTextureAssetId,
+    headTextureAssetId,
+    footTextureAssetId,
     bodyOffsetLocal,
     headOffsetLocal,
     footOffsetLocal,
@@ -368,6 +416,9 @@ function addCornerModel(): void {
     bodyAssetId: null,
     headAssetId: null,
     footAssetId: null,
+    bodyTextureAssetId: null,
+    headTextureAssetId: null,
+    footTextureAssetId: null,
     bodyOffsetLocal: { x: 0, y: 0, z: 0 },
     headOffsetLocal: { x: 0, y: 0, z: 0 },
     footOffsetLocal: { x: 0, y: 0, z: 0 },
@@ -912,6 +963,79 @@ function cancelOverwriteWallPreset(): void {
   overwriteTargetFilename.value = null
 }
 
+function resolveWallTextureAsset(assetId: string | null | undefined): ProjectAsset | null {
+  const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+  return normalized ? sceneStore.getAsset(normalized) ?? null : null
+}
+
+function resolveWallTexturePreviewStyle(asset: ProjectAsset | null): Record<string, string> | undefined {
+  if (!asset) {
+    return undefined
+  }
+  const imageUrl = asset.thumbnail?.trim() || asset.downloadUrl?.trim()
+  if (imageUrl) {
+    return {
+      backgroundImage: `url(${imageUrl})`,
+      backgroundSize: 'contain',
+      backgroundPosition: 'center',
+      backgroundRepeat: 'no-repeat',
+    }
+  }
+  return asset.previewColor ? { backgroundColor: asset.previewColor } : undefined
+}
+
+function openWallTextureDialog(
+  part: WallTexturePart,
+  event?: MouseEvent,
+  cornerIndex: number | null = null,
+): void {
+  textureAssetDialogPart.value = part
+  textureAssetDialogCornerIndex.value = cornerIndex
+  const props = wallComponent.value?.props as any
+  const corner = cornerIndex === null ? null : cornerModels.value[cornerIndex] as any
+  const selectedId = corner
+    ? part === 'body'
+      ? corner.bodyTextureAssetId
+      : part === 'head'
+        ? corner.headTextureAssetId
+        : corner.footTextureAssetId
+    : part === 'body'
+      ? props?.bodyTextureAssetId
+      : part === 'head'
+        ? props?.headTextureAssetId
+        : props?.footTextureAssetId
+  textureAssetDialogSelectedId.value = typeof selectedId === 'string' ? selectedId : ''
+  textureAssetDialogAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
+  textureAssetDialogVisible.value = true
+}
+
+function handleWallTextureDialogUpdate(asset: ProjectAsset | null): void {
+  const nodeId = selectedNodeId.value
+  const component = wallComponent.value
+  if (!nodeId || !component) {
+    textureAssetDialogVisible.value = false
+    return
+  }
+  if (asset && asset.type !== 'image') {
+    console.warn('Selected wall texture asset is not an image')
+    return
+  }
+
+  const part = textureAssetDialogPart.value
+  const key = part === 'body'
+    ? 'bodyTextureAssetId'
+    : part === 'head'
+      ? 'headTextureAssetId'
+      : 'footTextureAssetId'
+  const cornerIndex = textureAssetDialogCornerIndex.value
+  if (cornerIndex === null) {
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: asset?.id ?? null } as any)
+  } else if (cornerModels.value[cornerIndex]) {
+    updateCornerModel(cornerIndex, { [key]: asset?.id ?? null } as any)
+  }
+  textureAssetDialogVisible.value = false
+}
+
 function openWallAssetDialog(target: WallAssetDialogTarget, event?: MouseEvent): void {
   assetDialogTarget.value = target
   assetDialogSelectedId.value = (() => {
@@ -1240,8 +1364,8 @@ function applyRenderModeUpdate(rawValue: unknown) {
   if (!nodeId || !component) {
     return
   }
-  const nextValue: WallRenderMode = rawValue === 'repeatInstances' ? 'repeatInstances' : 'stretch'
-  const current = (component.props as any)?.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch'
+  const nextValue = normalizeWallRenderMode(rawValue)
+  const current = normalizeWallRenderMode((component.props as any)?.wallRenderMode)
   if (nextValue === current) {
     return
   }
@@ -1429,6 +1553,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
             />
             <div class="wall-dimension-actions">
               <v-btn
+                v-if="!isTextureMode"
                 class="wall-dimension-action-button"
                 density="comfortable"
                 variant="tonal"
@@ -1483,7 +1608,83 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
 
         </div>
 
-        <div v-if="!isAirWallNode" class="wall-asset-section">
+        <div v-if="!isAirWallNode && isTextureMode" class="wall-asset-section">
+          <div class="asset-model-panel asset-model-panel--no-border">
+            <p class="hint-text">
+              Texture mode renders alpha-tested wall sheets. Transparent pixels do not render; collision keeps the full wall outline.
+            </p>
+            <div class="asset-pair-panel">
+              <div class="asset-pair-grid asset-pair-grid--stacked">
+                <div class="asset-pair-item">
+                  <div class="asset-pair-label">Body</div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !bodyTextureAsset }"
+                        :style="resolveWallTexturePreviewStyle(bodyTextureAsset)"
+                        @click.stop="(e) => openWallTextureDialog('body', e)"
+                      />
+                    </div>
+                    <p class="hint-text">Body fills the height remaining after Head and Foot.</p>
+                  </div>
+                </div>
+
+                <div class="asset-pair-item">
+                  <div class="asset-pair-label">Head</div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !headTextureAsset }"
+                        :style="resolveWallTexturePreviewStyle(headTextureAsset)"
+                        @click.stop="(e) => openWallTextureDialog('head', e)"
+                      />
+                    </div>
+                    <v-text-field
+                      density="compact"
+                      variant="underlined"
+                      type="number"
+                      label="Head Height (m)"
+                      hide-details
+                      step="0.01"
+                      min="0"
+                      :model-value="(wallComponent?.props as any)?.headAssetHeight ?? 0"
+                      @update:modelValue="(value) => updateWallAssetHeight('headAssetHeight', value)"
+                    />
+                  </div>
+                </div>
+
+                <div class="asset-pair-item">
+                  <div class="asset-pair-label">Foot</div>
+                  <div class="wall-asset-model-row">
+                    <div class="wall-asset-model-picker">
+                      <div
+                        class="asset-thumbnail"
+                        :class="{ placeholder: !footTextureAsset }"
+                        :style="resolveWallTexturePreviewStyle(footTextureAsset)"
+                        @click.stop="(e) => openWallTextureDialog('foot', e)"
+                      />
+                    </div>
+                    <v-text-field
+                      density="compact"
+                      variant="underlined"
+                      type="number"
+                      label="Foot Height (m)"
+                      hide-details
+                      step="0.01"
+                      min="0"
+                      :model-value="(wallComponent?.props as any)?.footAssetHeight ?? 0"
+                      @update:modelValue="(value) => updateWallAssetHeight('footAssetHeight', value)"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="!isAirWallNode && !isTextureMode" class="wall-asset-section">
           <div class="asset-model-panel asset-model-panel--no-border">
             <div class="asset-pair-panel">
               <div class="asset-pair-grid asset-pair-grid--stacked">
@@ -1966,11 +2167,12 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
               </div>
             </div>
           </div>
+        </div>
 
-  <div v-if="!isAirWallNode" class="corner-models-panel">
+        <div v-if="!isAirWallNode" class="corner-models-panel">
         <div class="wall-corner-models">
           <div class="wall-corner-header">
-            <div class="wall-corner-title">Corner Models</div>
+            <div class="wall-corner-title">{{ isTextureMode ? 'Corner Textures' : 'Corner Models' }}</div>
             <v-btn
               size="small"
               density="compact"
@@ -1983,8 +2185,16 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
             </v-btn>
           </div>
 
+          <p v-if="isTextureMode" class="hint-text">
+            A matched corner image replaces the straight texture. Zero trim auto-fits the image width; manual trim values set the exact intervals before and after the corner.
+          </p>
+
           <div v-if="!cornerModels.length" class="wall-corner-empty">
-            <span class="hint-text">No corner models configured. No corner instances will be generated.</span>
+            <span class="hint-text">
+              {{ isTextureMode
+                ? 'No corner textures configured. Straight wall textures continue through corners.'
+                : 'No corner models configured. No corner instances will be generated.' }}
+            </span>
           </div>
 
           <div
@@ -2072,6 +2282,19 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
             </div>
             <div class="wall-corner-model-row wall-corner-model-row--body">
               <div
+                v-if="isTextureMode"
+                class="wall-corner-model-picker"
+                @click.stop="(e) => openWallTextureDialog('body', e, index)"
+              >
+                <div
+                  class="asset-thumbnail"
+                  :class="{ placeholder: !resolveWallTextureAsset((entry as any).bodyTextureAssetId) }"
+                  :style="resolveWallTexturePreviewStyle(resolveWallTextureAsset((entry as any).bodyTextureAssetId))"
+                />
+                <span class="hint-text">Body</span>
+              </div>
+              <div
+                v-if="!isTextureMode"
                 class="wall-corner-model-picker"
                 @click.stop="(e) => openWallCornerModelDialog(index, 'body', e)"
               >
@@ -2092,7 +2315,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 </template>
               </div>
 
-              <div class="wall-corner-orientation-stack">
+              <div v-if="!isTextureMode" class="wall-corner-orientation-stack">
                 <v-select
                   density="compact"
                   variant="underlined"
@@ -2120,7 +2343,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 />
               </div>
 
-              <div class="wall-corner-offset-grid">
+              <div v-if="!isTextureMode" class="wall-corner-offset-grid">
                 <v-text-field
                   density="compact"
                   variant="underlined"
@@ -2166,6 +2389,19 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
               class="wall-corner-model-row wall-corner-model-row--head"
             >
               <div
+                v-if="isTextureMode"
+                class="wall-corner-model-picker"
+                @click.stop="(e) => openWallTextureDialog('head', e, index)"
+              >
+                <div
+                  class="asset-thumbnail"
+                  :class="{ placeholder: !resolveWallTextureAsset((entry as any).headTextureAssetId) }"
+                  :style="resolveWallTexturePreviewStyle(resolveWallTextureAsset((entry as any).headTextureAssetId))"
+                />
+                <span class="hint-text">Head</span>
+              </div>
+              <div
+                v-if="!isTextureMode"
                 class="wall-corner-model-picker"
                 @click.stop="(e) => openWallCornerModelDialog(index, 'head', e)"
               >
@@ -2186,7 +2422,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 </template>
               </div>
 
-              <div class="wall-corner-orientation-stack">
+              <div v-if="!isTextureMode" class="wall-corner-orientation-stack">
                 <v-select
                   density="compact"
                   variant="underlined"
@@ -2214,7 +2450,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 />
               </div>
 
-              <div class="wall-corner-offset-grid">
+              <div v-if="!isTextureMode" class="wall-corner-offset-grid">
                 <v-text-field
                   density="compact"
                   variant="underlined"
@@ -2260,6 +2496,19 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
               class="wall-corner-model-row"
             >
               <div
+                v-if="isTextureMode"
+                class="wall-corner-model-picker"
+                @click.stop="(e) => openWallTextureDialog('foot', e, index)"
+              >
+                <div
+                  class="asset-thumbnail"
+                  :class="{ placeholder: !resolveWallTextureAsset((entry as any).footTextureAssetId) }"
+                  :style="resolveWallTexturePreviewStyle(resolveWallTextureAsset((entry as any).footTextureAssetId))"
+                />
+                <span class="hint-text">Foot</span>
+              </div>
+              <div
+                v-if="!isTextureMode"
                 class="wall-corner-model-picker"
                 @click.stop="(e) => openWallCornerModelDialog(index, 'foot', e)"
               >
@@ -2280,7 +2529,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 </template>
               </div>
 
-              <div class="wall-corner-orientation-stack">
+              <div v-if="!isTextureMode" class="wall-corner-orientation-stack">
                 <v-select
                   density="compact"
                   variant="underlined"
@@ -2308,7 +2557,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 />
               </div>
 
-              <div class="wall-corner-offset-grid">
+              <div v-if="!isTextureMode" class="wall-corner-offset-grid">
                 <v-text-field
                   density="compact"
                   variant="underlined"
@@ -2363,7 +2612,6 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
           </div>
         </div>
         </div>
-      </div>
 
       <AssetPickerDialog
         v-model="assetDialogVisible"
@@ -2373,6 +2621,16 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
         :anchor="assetDialogAnchor"
         @update:asset="handleWallAssetDialogUpdate"
         @cancel="handleWallAssetDialogCancel"
+      />
+
+      <AssetPickerDialog
+        v-model="textureAssetDialogVisible"
+        :asset-id="textureAssetDialogSelectedId"
+        assetType="image"
+        :title="textureAssetDialogTitle"
+        :anchor="textureAssetDialogAnchor"
+        @update:asset="handleWallTextureDialogUpdate"
+        @cancel="textureAssetDialogVisible = false"
       />
 
       <v-dialog v-model="savePresetDialogVisible" max-width="420">
@@ -2644,6 +2902,7 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
 .wall-corner-model-picker {
   display: flex;
   align-items: center;
+  cursor: pointer;
 }
 
 .wall-corner-orientation-stack {

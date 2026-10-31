@@ -1007,6 +1007,17 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
   }
 
   const wallProps = params.wallProps
+  if (wallProps.wallRenderMode === 'texture') {
+    return {
+      effectiveDefinition,
+      wantsInstancing: false,
+      hasBindings: false,
+      hasProceduralBodyFallback: false,
+      primaryAssetId: null,
+      bindings: [],
+      instancedBounds: null,
+    }
+  }
   const cornerModels = Array.isArray(wallProps.cornerModels) ? wallProps.cornerModels : []
   const bodyCornerAssetIds = Array.from(new Set(cornerModels.map((entry) => entry.bodyAssetId?.trim?.() ?? '').filter(Boolean))).sort()
   const headCornerAssetIds = Array.from(new Set(cornerModels.map((entry) => entry.headAssetId?.trim?.() ?? '').filter(Boolean))).sort()

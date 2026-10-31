@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { SceneNode, WallDynamicMesh, WallOpening, WallRepeatErasedSlot } from '@schema/core'
 import { addWallOpeningToDefinition, compileWallSegmentsFromDefinition } from '@schema/wallLayout'
+import type { WallRenderMode } from '@schema/wallRenderMode'
 import { findSceneNode } from './sceneUtils'
 
 export type WallDoorRectangleSelectionState = {
@@ -32,7 +33,7 @@ type CreateWallDoorSelectionControllerOptions = {
   canvasRef: Ref<HTMLCanvasElement | null>
   surfaceRef: Ref<HTMLElement | null>
   isObjectWorldVisible: (object: THREE.Object3D) => boolean
-  resolveSelectedWallRenderMode: (node: SceneNode) => 'stretch' | 'repeatInstances'
+  resolveSelectedWallRenderMode: (node: SceneNode) => WallRenderMode
   extractWallRepeatInstanceMeta: (mesh: THREE.Mesh | null | undefined) => { chainIndex: number; slotIndex: number } | null
   mergeWallRepeatErasedSlots: (
     existing: Array<{ chainIndex?: unknown; slotIndex?: unknown }> | undefined,

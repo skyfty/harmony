@@ -13,6 +13,15 @@ import {
   type WallVerticalLayout,
   type WallVerticalLayoutOptions,
 } from './wallVerticalLayout'
+import { normalizeWallRenderMode, type WallRenderMode } from './wallRenderMode'
+
+export type { WallRenderMode } from './wallRenderMode'
+
+export type WallTextureResource = {
+  texture: THREE.Texture
+  width: number
+  height: number
+}
 
 export type WallRenderAssetObjects = {
   /** Lower wall body model root (instanced along segments). */
@@ -43,6 +52,8 @@ export type WallRenderAssetObjects = {
    * Multiple assets are supported so walls can pick different models by angle.
    */
   footCornerObjectsByAssetId?: Record<string, THREE.Object3D | null> | null
+  /** Transparent image resources keyed by asset id, shared by straight and corner texture parts. */
+  texturesByAssetId?: Record<string, WallTextureResource | null> | null
 }
 
 export const WALL_ASSET_REPEAT_VARIANT_INFO_KEY = '__harmonyWallAssetRepeatVariantInfo'
@@ -69,6 +80,9 @@ export type WallCornerModelRule = {
   headYawDeg: number
   footForwardAxis: WallForwardAxis
   footYawDeg: number
+  bodyTextureAssetId?: string | null
+  headTextureAssetId?: string | null
+  footTextureAssetId?: string | null
 }
 
 export type WallOffsetLocal = {
@@ -86,7 +100,6 @@ export type WallModelOrientation = {
 
 export type WallUvAxis = 'auto' | 'u' | 'v'
 type WallResolvedUvAxis = 'u' | 'v'
-export type WallRenderMode = 'stretch' | 'repeatInstances'
 
 export type WallRenderOptions = {
   materialConfigId?: string | null
@@ -94,6 +107,11 @@ export type WallRenderOptions = {
   cornerModels?: WallCornerModelRule[]
   wallRenderMode?: WallRenderMode
   repeatInstanceStep?: number
+  bodyTextureAssetId?: string | null
+  headTextureAssetId?: string | null
+  footTextureAssetId?: string | null
+  /** Editor/runtime load state used only to invalidate rebuilt texture geometry. */
+  textureState?: string | null
 
   // Optional explicit vertical-layout overrides used by procedural body fallback.
   headAssetHeight?: number
@@ -669,10 +687,6 @@ function resolveWallSegmentTotalHeight(segment: WallRenderSeg | null | undefined
 
 function sanitizeWallRepeatScale(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 1
-}
-
-function normalizeWallRenderMode(value: unknown): WallRenderMode {
-  return value === 'repeatInstances' ? 'repeatInstances' : 'stretch'
 }
 
 function normalizeWallRepeatInstanceStep(value: unknown): number {
@@ -1294,10 +1308,33 @@ function createWallStaticAssetMeshes(
   }
 }
 
+type WallCornerAssetKind = 'model' | 'texture'
+
+function resolveWallCornerAssetId(
+  rule: WallCornerModelRule,
+  mode: 'body' | 'head' | 'foot',
+  kind: WallCornerAssetKind,
+): string | null {
+  const rawAsset = kind === 'texture'
+    ? mode === 'body'
+      ? rule?.bodyTextureAssetId
+      : mode === 'head'
+        ? rule?.headTextureAssetId
+        : rule?.footTextureAssetId
+    : mode === 'body'
+      ? rule?.bodyAssetId
+      : mode === 'head'
+        ? rule?.headAssetId
+        : rule?.footAssetId
+  const assetId = typeof rawAsset === 'string' ? rawAsset.trim() : ''
+  return assetId.length ? assetId : null
+}
+
 function pickWallCornerRule(
   angleRadians: number,
   rules: WallCornerModelRule[],
   mode: 'body' | 'head' | 'foot',
+  kind: WallCornerAssetKind = 'model',
 ): WallCornerModelRule | null {
   if (!Number.isFinite(angleRadians)) {
     return null
@@ -1308,12 +1345,7 @@ function pickWallCornerRule(
   // always use it and ignore tolerance. Use the radian epsilon constant defined above.
   if (Math.abs(angleRadians - Math.PI) < WALL_INSTANCING_JOINT_ANGLE_EPSILON) {
     for (const rule of rules) {
-      const rawAsset = mode === 'body'
-        ? rule?.bodyAssetId
-        : mode === 'head'
-          ? rule?.headAssetId
-          : rule?.footAssetId
-      const assetId = typeof rawAsset === 'string' && rawAsset.trim().length ? rawAsset.trim() : null
+      const assetId = resolveWallCornerAssetId(rule, mode, kind)
       if (!assetId) {
         continue
       }
@@ -1330,12 +1362,7 @@ function pickWallCornerRule(
     | null = null
 
   for (const rule of rules) {
-    const rawAsset = mode === 'body'
-      ? rule?.bodyAssetId
-      : mode === 'head'
-        ? rule?.headAssetId
-        : rule?.footAssetId
-    const assetId = typeof rawAsset === 'string' && rawAsset.trim().length ? rawAsset.trim() : null
+    const assetId = resolveWallCornerAssetId(rule, mode, kind)
     if (!assetId) {
       continue
     }
@@ -1864,6 +1891,475 @@ function resolveWallUvAxisForTemplate(
   return resolveAutoWallUvAxis(template, orientation.forwardAxis)
 }
 
+type WallTexturePart = 'body' | 'head' | 'foot'
+
+type WallTextureBand = {
+  baseY: number
+  height: number
+}
+
+type WallTextureBucket = {
+  part: WallTexturePart
+  assetId: string
+  positions: number[]
+  uvs: number[]
+  indices: number[]
+}
+
+type WallTextureCornerPatch = {
+  assetId: string
+  current: WallRenderSeg
+  next: WallRenderSeg
+  start: THREE.Vector3
+  joint: THREE.Vector3
+  end: THREE.Vector3
+  startU: number
+  endU: number
+}
+
+type WallTextureCornerCollection = {
+  patches: WallTextureCornerPatch[]
+  gaps: WallArcInterval[]
+}
+
+function resolveWallTextureAssetId(options: WallRenderOptions, part: WallTexturePart): string | null {
+  const raw = part === 'body'
+    ? options.bodyTextureAssetId
+    : part === 'head'
+      ? options.headTextureAssetId
+      : options.footTextureAssetId
+  const normalized = typeof raw === 'string' ? raw.trim() : ''
+  return normalized.length ? normalized : null
+}
+
+function resolveWallTextureResource(
+  assets: WallRenderAssetObjects,
+  assetId: string | null | undefined,
+): WallTextureResource | null {
+  const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalized || !assets.texturesByAssetId) {
+    return null
+  }
+  const resource = assets.texturesByAssetId[normalized]
+  if (
+    !resource?.texture?.isTexture
+    || !Number.isFinite(resource.width)
+    || !Number.isFinite(resource.height)
+    || resource.width <= 0
+    || resource.height <= 0
+  ) {
+    return null
+  }
+  return resource
+}
+
+function resolveWallTextureBand(
+  segment: WallRenderSeg,
+  part: WallTexturePart,
+  options: WallRenderOptions,
+): WallTextureBand {
+  const totalHeight = resolveWallSegmentTotalHeight(segment)
+  const footHeight = Math.min(
+    totalHeight,
+    Math.max(0, Number.isFinite(options.footAssetHeight) ? Number(options.footAssetHeight) : 0),
+  )
+  const remainingAfterFoot = Math.max(0, totalHeight - footHeight)
+  const headHeight = Math.min(
+    remainingAfterFoot,
+    Math.max(0, Number.isFinite(options.headAssetHeight) ? Number(options.headAssetHeight) : 0),
+  )
+  const bodyHeight = Math.max(0, remainingAfterFoot - headHeight)
+
+  if (part === 'foot') {
+    return { baseY: 0, height: footHeight }
+  }
+  if (part === 'head') {
+    return { baseY: footHeight + bodyHeight, height: headHeight }
+  }
+  return { baseY: footHeight, height: bodyHeight }
+}
+
+function getWallTextureBucket(
+  buckets: Map<string, WallTextureBucket>,
+  part: WallTexturePart,
+  assetId: string,
+): WallTextureBucket {
+  const key = `${part}:${assetId}`
+  let bucket = buckets.get(key)
+  if (!bucket) {
+    bucket = {
+      part,
+      assetId,
+      positions: [],
+      uvs: [],
+      indices: [],
+    }
+    buckets.set(key, bucket)
+  }
+  return bucket
+}
+
+function pushWallTextureQuad(
+  bucket: WallTextureBucket,
+  bottomA: THREE.Vector3,
+  bottomB: THREE.Vector3,
+  topA: THREE.Vector3,
+  topB: THREE.Vector3,
+  u0: number,
+  u1: number,
+): void {
+  const base = bucket.positions.length / 3
+  bucket.positions.push(
+    bottomA.x, bottomA.y, bottomA.z,
+    bottomB.x, bottomB.y, bottomB.z,
+    topA.x, topA.y, topA.z,
+    topB.x, topB.y, topB.z,
+  )
+  bucket.uvs.push(
+    u0, 0,
+    u1, 0,
+    u0, 1,
+    u1, 1,
+  )
+  bucket.indices.push(
+    base, base + 1, base + 2,
+    base + 1, base + 3, base + 2,
+  )
+}
+
+function appendWallTextureSegment(
+  bucket: WallTextureBucket,
+  segment: WallRenderSeg,
+  part: WallTexturePart,
+  options: WallRenderOptions,
+  tileWidth: number,
+): void {
+  const band = resolveWallTextureBand(segment, part, options)
+  if (band.height <= WALL_EPSILON) {
+    return
+  }
+
+  const length = wallSegmentLengthXZ(segment)
+  if (length <= WALL_EPSILON) {
+    return
+  }
+
+  const start = new THREE.Vector3(segment.start.x, segment.start.y, segment.start.z)
+  const end = new THREE.Vector3(segment.end.x, segment.end.y, segment.end.z)
+  const bottomA = start.clone()
+  const bottomB = end.clone()
+  bottomA.y += band.baseY
+  bottomB.y += band.baseY
+  const topA = bottomA.clone()
+  const topB = bottomB.clone()
+  topA.y += band.height
+  topB.y += band.height
+
+  const arcStart = Number(segment.chainArcStart ?? 0)
+  const u0 = arcStart / tileWidth
+  const u1 = (arcStart + length) / tileWidth
+  pushWallTextureQuad(bucket, bottomA, bottomB, topA, topB, u0, u1)
+}
+
+function collectWallTextureCornerPatches(
+  chain: WallVisualChain,
+  part: WallTexturePart,
+  rules: WallCornerModelRule[],
+  assets: WallRenderAssetObjects,
+  options: WallRenderOptions,
+): WallTextureCornerCollection {
+  const result: WallTextureCornerCollection = { patches: [], gaps: [] }
+  if (chain.segs.length < 2 || !rules.length) {
+    return result
+  }
+
+  const chainIndex = Math.max(0, Math.trunc(Number(chain.segs[0]?.chainIndex ?? 0)))
+  const chainTotalLength = chain.segs.reduce((sum, segment) => sum + wallSegmentLengthXZ(segment), 0)
+  const incoming = new THREE.Vector3()
+  const outgoing = new THREE.Vector3()
+
+  const applyPair = (current: WallRenderSeg, next: WallRenderSeg, closedSeam: boolean) => {
+    if (wallDistanceSqXZ(current.end as any, next.start as any) > WALL_EPSILON) {
+      return
+    }
+
+    const currentLength = wallSegmentLengthXZ(current)
+    const nextLength = wallSegmentLengthXZ(next)
+    if (currentLength <= WALL_EPSILON || nextLength <= WALL_EPSILON) {
+      return
+    }
+
+    incoming.set(
+      Number(current.end.x) - Number(current.start.x),
+      0,
+      Number(current.end.z) - Number(current.start.z),
+    ).normalize()
+    outgoing.set(
+      Number(next.end.x) - Number(next.start.x),
+      0,
+      Number(next.end.z) - Number(next.start.z),
+    ).normalize()
+
+    const angle = Math.acos(THREE.MathUtils.clamp(-incoming.dot(outgoing), -1, 1))
+    if (!Number.isFinite(angle)) {
+      return
+    }
+
+    const rule = pickWallCornerRule(angle, rules, part, 'texture')
+    if (!rule) {
+      return
+    }
+    const assetId = resolveWallCornerAssetId(rule, part, 'texture')
+    const resource = resolveWallTextureResource(assets, assetId)
+    if (!assetId || !resource) {
+      return
+    }
+
+    let trimBefore = Math.min(
+      currentLength,
+      Math.max(0, Number((rule as any)?.jointTrim?.end) || 0),
+    )
+    let trimAfter = Math.min(
+      nextLength,
+      Math.max(0, Number((rule as any)?.jointTrim?.start) || 0),
+    )
+    if (trimBefore + trimAfter <= WALL_EPSILON) {
+      const band = resolveWallTextureBand(current, part, options)
+      const naturalWidth = Math.max(0, band.height * (resource.width / resource.height))
+      const resolvedWidth = Math.min(currentLength + nextLength, naturalWidth)
+      if (resolvedWidth <= WALL_EPSILON) {
+        return
+      }
+      trimBefore = Math.min(currentLength, resolvedWidth * 0.5)
+      trimAfter = Math.min(nextLength, resolvedWidth - trimBefore)
+      let remainingWidth = resolvedWidth - trimBefore - trimAfter
+      if (remainingWidth > WALL_EPSILON) {
+        const addBefore = Math.min(currentLength - trimBefore, remainingWidth)
+        trimBefore += addBefore
+        remainingWidth -= addBefore
+      }
+      if (remainingWidth > WALL_EPSILON) {
+        trimAfter += Math.min(nextLength - trimAfter, remainingWidth)
+      }
+    }
+
+    const joint = new THREE.Vector3(current.end.x, current.end.y, current.end.z)
+    const start = joint.clone().addScaledVector(incoming, -trimBefore)
+    const end = joint.clone().addScaledVector(outgoing, trimAfter)
+    start.y += (Number(current.start.y) - Number(current.end.y)) * (trimBefore / currentLength)
+    end.y += (Number(next.end.y) - Number(next.start.y)) * (trimAfter / nextLength)
+
+    result.patches.push({
+      assetId,
+      current,
+      next,
+      start,
+      joint,
+      end,
+      startU: 0,
+      endU: 1,
+    })
+
+    if (closedSeam) {
+      result.gaps.push(
+        {
+          chainIndex,
+          start: Math.max(0, chainTotalLength - trimBefore),
+          end: chainTotalLength,
+        },
+        {
+          chainIndex,
+          start: 0,
+          end: trimAfter,
+        },
+      )
+      return
+    }
+
+    const currentArcStart = Number(current.chainArcStart ?? 0)
+    const nextArcStart = Number(next.chainArcStart ?? currentArcStart + currentLength)
+    result.gaps.push({
+      chainIndex,
+      start: currentArcStart + currentLength - trimBefore,
+      end: nextArcStart + trimAfter,
+    })
+  }
+
+  for (let index = 0; index < chain.segs.length - 1; index += 1) {
+    applyPair(chain.segs[index]!, chain.segs[index + 1]!, false)
+  }
+  if (chain.closed) {
+    applyPair(chain.segs[chain.segs.length - 1]!, chain.segs[0]!, true)
+  }
+
+  result.gaps = mergeWallArcIntervals(result.gaps)
+  return result
+}
+
+function appendWallTextureCorner(
+  buckets: Map<string, WallTextureBucket>,
+  patch: WallTextureCornerPatch,
+  part: WallTexturePart,
+  options: WallRenderOptions,
+): void {
+  const bucket = getWallTextureBucket(buckets, part, patch.assetId)
+  const startBand = resolveWallTextureBand(patch.current, part, options)
+  const endBand = resolveWallTextureBand(patch.next, part, options)
+  const jointBand = startBand
+  if (
+    startBand.height <= WALL_EPSILON
+    && endBand.height <= WALL_EPSILON
+  ) {
+    return
+  }
+
+  const startBottom = patch.start.clone()
+  const jointBottom = patch.joint.clone()
+  const endBottom = patch.end.clone()
+  const startTop = startBottom.clone()
+  const jointTop = jointBottom.clone()
+  const endTop = endBottom.clone()
+  startBottom.y += startBand.baseY
+  jointBottom.y += jointBand.baseY
+  endBottom.y += endBand.baseY
+  startTop.y = startBottom.y + startBand.height
+  jointTop.y = jointBottom.y + jointBand.height
+  endTop.y = endBottom.y + endBand.height
+
+  const startLength = Math.sqrt(wallDistanceSqXZ(patch.start, patch.joint))
+  const endLength = Math.sqrt(wallDistanceSqXZ(patch.joint, patch.end))
+  const totalLength = Math.max(WALL_EPSILON, startLength + endLength)
+  const jointU = patch.startU + (patch.endU - patch.startU) * (startLength / totalLength)
+
+  if (startLength > WALL_EPSILON) {
+    pushWallTextureQuad(bucket, startBottom, jointBottom, startTop, jointTop, patch.startU, jointU)
+  }
+  if (endLength > WALL_EPSILON) {
+    pushWallTextureQuad(bucket, jointBottom, endBottom, jointTop, endTop, jointU, patch.endU)
+  }
+}
+
+function createWallTextureGeometry(bucket: WallTextureBucket): THREE.BufferGeometry | null {
+  if (!bucket.positions.length || !bucket.indices.length) {
+    return null
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(bucket.positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(bucket.uvs, 2))
+  geometry.setIndex(bucket.indices)
+  geometry.computeVertexNormals()
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function createWallTextureMesh(
+  bucket: WallTextureBucket,
+  resource: WallTextureResource,
+): THREE.Mesh | null {
+  const geometry = createWallTextureGeometry(bucket)
+  if (!geometry) {
+    return null
+  }
+
+  const texture = resource.texture.clone()
+  texture.name = `${resource.texture.name || bucket.assetId}:wall`
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.wrapS = THREE.RepeatWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.needsUpdate = true
+
+  const material = new THREE.MeshLambertMaterial({
+    color: 0xffffff,
+    map: texture,
+    alphaTest: 0.5,
+    side: THREE.DoubleSide,
+    transparent: false,
+    depthWrite: true,
+  })
+  material.name = `WallTextureMaterial:${bucket.part}`
+  material.shadowSide = THREE.DoubleSide
+
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.name = `WallTextureMesh:${bucket.part}:${bucket.assetId}`
+  mesh.userData.dynamicMeshType = 'Wall'
+  mesh.userData.wallTexturePart = bucket.part
+  mesh.userData[WALL_OWNED_TEXTURES_USERDATA_KEY] = [texture]
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  return mesh
+}
+
+function rebuildWallTextureGroup(
+  group: THREE.Group,
+  chainDefinitions: WallVisualChain[],
+  assets: WallRenderAssetObjects,
+  options: WallRenderOptions,
+): void {
+  const buckets = new Map<string, WallTextureBucket>()
+  const rules = Array.isArray(options.cornerModels) ? options.cornerModels : []
+  const parts: WallTexturePart[] = ['body', 'head', 'foot']
+
+  for (const chain of chainDefinitions) {
+    for (const part of parts) {
+      const assetId = resolveWallTextureAssetId(options, part)
+      const resource = resolveWallTextureResource(assets, assetId)
+      if (!assetId || !resource) {
+        continue
+      }
+
+      const corners = collectWallTextureCornerPatches(chain, part, rules, assets, options)
+      const straightChains = corners.gaps.length
+        ? buildWallVisualChainsFromSegs(subtractWallArcIntervalsFromSegs(chain.segs, corners.gaps))
+        : [chain]
+
+      for (const straightChain of straightChains) {
+        for (const segment of straightChain.segs) {
+          const band = resolveWallTextureBand(segment, part, options)
+          if (band.height <= WALL_EPSILON) {
+            continue
+          }
+          const tileWidth = Math.max(
+            WALL_INSTANCING_MIN_TILE_LENGTH,
+            band.height * (resource.width / resource.height),
+          )
+          const bucket = getWallTextureBucket(buckets, part, assetId)
+          appendWallTextureSegment(bucket, segment, part, options, tileWidth)
+        }
+      }
+
+      for (const patch of corners.patches) {
+        appendWallTextureCorner(buckets, patch, part, options)
+      }
+    }
+  }
+
+  const bounds = new THREE.Box3()
+  bounds.makeEmpty()
+  for (const bucket of buckets.values()) {
+    const resource = resolveWallTextureResource(assets, bucket.assetId)
+    if (!resource) {
+      continue
+    }
+    const mesh = createWallTextureMesh(bucket, resource)
+    if (!mesh) {
+      continue
+    }
+    group.add(mesh)
+    mesh.updateMatrixWorld(true)
+    if (mesh.geometry.boundingBox) {
+      bounds.union(mesh.geometry.boundingBox)
+    }
+  }
+
+  const userData = group.userData ?? (group.userData = {})
+  if (!bounds.isEmpty()) {
+    userData.instancedBounds = serializeBounds(bounds)
+  } else {
+    delete userData.instancedBounds
+  }
+}
+
 function rebuildWallGroup(
   group: THREE.Group,
   definition: WallDynamicMesh,
@@ -1885,6 +2381,12 @@ function rebuildWallGroup(
   if (!chainDefinitions.length) {
     const userData = group.userData ?? (group.userData = {})
     delete userData.instancedBounds
+    return
+  }
+
+  const wallRenderMode = normalizeWallRenderMode(options.wallRenderMode)
+  if (wallRenderMode === 'texture') {
+    rebuildWallTextureGroup(group, chainDefinitions, assets, options)
     return
   }
 
@@ -1916,7 +2418,6 @@ function rebuildWallGroup(
     Number.isFinite(options.footAssetHeight) ? Number(options.footAssetHeight) : resolvedFootAssetHeight,
   )
 
-  const wallRenderMode = normalizeWallRenderMode(options.wallRenderMode)
   const repeatInstanceStep = normalizeWallRepeatInstanceStep(options.repeatInstanceStep)
   const repeatErasedSlotSet = new Set(
     Array.isArray((definition as any).repeatErasedSlots)

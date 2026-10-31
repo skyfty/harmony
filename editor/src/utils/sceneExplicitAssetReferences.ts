@@ -7,10 +7,12 @@ import {
   GUIDE_ROUTE_COMPONENT_TYPE,
   LOD_COMPONENT_TYPE,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
+  WALL_COMPONENT_TYPE,
   type BillboardComponentProps,
   type DisplayBoardComponentProps,
   type GuideRouteComponentProps,
   type LodComponentProps,
+  type WallComponentProps,
 } from '@schema/components'
 
 export interface ExplicitSceneAssetReference {
@@ -61,6 +63,40 @@ function visitGuideRouteAssetReferences(
       assetId: stop?.thumbnailAssetId,
       path: `stops[${index}].thumbnailAssetId`,
     })
+  })
+}
+
+function visitWallAssetReferences(
+  props: Partial<WallComponentProps> | null | undefined,
+  visit: (reference: ExplicitSceneAssetReference) => void,
+): void {
+  const partKeys = [
+    'bodyAssetId',
+    'bodyTextureAssetId',
+    'headAssetId',
+    'headTextureAssetId',
+    'footAssetId',
+    'footTextureAssetId',
+    'bodyEndCapAssetId',
+    'headEndCapAssetId',
+    'footEndCapAssetId',
+  ] as const
+  partKeys.forEach((key) => visit({ assetId: props?.[key], path: key }))
+
+  const corners = Array.isArray(props?.cornerModels) ? props.cornerModels : []
+  corners.forEach((corner, index) => {
+    const cornerKeys = [
+      'bodyAssetId',
+      'bodyTextureAssetId',
+      'headAssetId',
+      'headTextureAssetId',
+      'footAssetId',
+      'footTextureAssetId',
+    ] as const
+    cornerKeys.forEach((key) => visit({
+      assetId: corner?.[key],
+      path: `cornerModels[${index}].${key}`,
+    }))
   })
 }
 
@@ -132,6 +168,9 @@ export function visitExplicitComponentAssetReferences(
       return
     case BILLBOARD_COMPONENT_TYPE:
       visitDisplayAssetReference(props as Partial<BillboardComponentProps> | null | undefined, visit)
+      return
+    case WALL_COMPONENT_TYPE:
+      visitWallAssetReferences(props as Partial<WallComponentProps> | null | undefined, visit)
       return
     case GUIDE_ROUTE_COMPONENT_TYPE:
       visitGuideRouteAssetReferences(

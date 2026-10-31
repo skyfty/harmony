@@ -10,11 +10,13 @@ import {
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
-  createWallGroup,
+  createWallRenderGroup,
   updateWallGroup,
   type WallRenderAssetObjects,
   type WallRenderOptions,
+  type WallTextureResource,
 } from '@schema/wallMesh'
+import { normalizeWallRenderMode, type WallRenderMode } from '@schema/wallRenderMode'
 import {
   WALL_COMPONENT_TYPE,
   clampWallProps,
@@ -30,6 +32,7 @@ import {
   syncWallDragBindingMatrices,
 } from '@schema/wallInstancing'
 import type { AssetCacheStoreLike } from '@/stores/assetCacheStore'
+import { loadTextureFromFile } from '@/utils/textureAsset'
 
 const AIR_WALL_OPACITY = 0.35
 const AIR_WALL_MATERIAL_ORIGINAL_KEY = '__harmonyAirWallOriginal'
@@ -107,9 +110,13 @@ export function applyAirWallVisualToWallGroup(group: THREE.Group, isAirWall: boo
 export function computeWallDynamicMeshSignature(
   definition: WallDynamicMesh,
   options: {
-    wallRenderMode?: 'stretch' | 'repeatInstances'
+    wallRenderMode?: WallRenderMode
     headAssetHeight?: number
     footAssetHeight?: number
+    bodyTextureAssetId?: string | null
+    headTextureAssetId?: string | null
+    footTextureAssetId?: string | null
+    textureState?: string | null
     cornerModels?: WallRenderOptions['cornerModels']
   } = {},
 ): string {
@@ -117,9 +124,13 @@ export function computeWallDynamicMeshSignature(
     chains: definition.chains ?? [],
     openings: definition.openings ?? [],
     dimensions: definition.dimensions ?? { height: 3, width: 0.2, thickness: 0.1 },
-    wallRenderMode: options.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
+    wallRenderMode: normalizeWallRenderMode(options.wallRenderMode),
     headAssetHeight: Number.isFinite(options.headAssetHeight) ? Number(options.headAssetHeight) : 0,
     footAssetHeight: Number.isFinite(options.footAssetHeight) ? Number(options.footAssetHeight) : 0,
+    bodyTextureAssetId: options.bodyTextureAssetId ?? null,
+    headTextureAssetId: options.headTextureAssetId ?? null,
+    footTextureAssetId: options.footTextureAssetId ?? null,
+    textureState: options.textureState ?? null,
     cornerModels: Array.isArray(options.cornerModels) ? options.cornerModels : [],
   })
   return hashString(serialized)
@@ -140,6 +151,28 @@ export type WallPreviewRenderData = {
   wantsInstancing: boolean
   hasMissingAssets: boolean
   signatureData: string
+}
+
+function collectWallTextureAssetIds(
+  wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined,
+): string[] {
+  if (!wallProps) {
+    return []
+  }
+  return Array.from(new Set([
+    wallProps.bodyTextureAssetId,
+    wallProps.headTextureAssetId,
+    wallProps.footTextureAssetId,
+    ...(Array.isArray(wallProps.cornerModels)
+      ? wallProps.cornerModels.flatMap((rule) => [
+        rule.bodyTextureAssetId,
+        rule.headTextureAssetId,
+        rule.footTextureAssetId,
+      ])
+      : []),
+  ]
+    .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+    .filter((assetId) => assetId.length > 0)))
 }
 
 function disposeWallGroupResources(group: THREE.Group): void {
@@ -181,6 +214,10 @@ function resolveWallEffectiveDefinition(
 export function createWallRenderer(options: WallRendererOptions) {
   const wallModelRequestCache = new Map<string, Promise<void>>()
   const wallAssetWaiters = new Map<string, Set<string>>()
+  const wallTextureResources = new Map<string, WallTextureResource | null>()
+  const wallTextureRequestCache = new Map<string, Promise<void>>()
+  const wallTextureWaiters = new Map<string, Set<string>>()
+  let wallRendererDisposed = false
   const resyncSignatureKeyByNodeId = new Map<string, string>()
   const suppressedCommittedWallNodeIds = new Set<string>()
   const previewNodeById = new Map<string, SceneNode>()
@@ -188,6 +225,100 @@ export function createWallRenderer(options: WallRendererOptions) {
 
   // Keep editor drag and committed wall placement on the exact same schema-side path.
   const getWallAssetBounds = (assetId: string): THREE.Box3 | null => getCachedModelObject(assetId)?.boundingBox ?? null
+
+  function scheduleWallTextureLoad(assetId: string, nodeId: string, signatureKey: string): void {
+    if (wallRendererDisposed) {
+      return
+    }
+    resyncSignatureKeyByNodeId.set(nodeId, signatureKey)
+    const waiters = wallTextureWaiters.get(assetId) ?? new Set<string>()
+    waiters.add(nodeId)
+    wallTextureWaiters.set(assetId, waiters)
+
+    if (wallTextureResources.has(assetId) || wallTextureRequestCache.has(assetId)) {
+      return
+    }
+
+    const request = (async () => {
+      let resource: WallTextureResource | null = null
+      try {
+        const sceneStore = useSceneStore()
+        const asset = sceneStore.getAsset(assetId)
+        const file = await options.assetCacheStore.ensureAssetFile(assetId, { asset: asset ?? undefined })
+        if (!file) {
+          throw new Error('asset file is unavailable')
+        }
+        const texture = await loadTextureFromFile(file)
+        const image = texture.image as {
+          width?: number
+          height?: number
+          naturalWidth?: number
+          naturalHeight?: number
+        } | null | undefined
+        const width = Number(image?.naturalWidth ?? image?.width)
+        const height = Number(image?.naturalHeight ?? image?.height)
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+          texture.dispose()
+          throw new Error('image dimensions are invalid')
+        }
+        resource = { texture, width, height }
+      } catch (error) {
+        console.warn('[WallRenderer] Failed to load wall texture', assetId, error)
+      } finally {
+        if (wallRendererDisposed) {
+          resource?.texture.dispose()
+        } else {
+          wallTextureResources.set(assetId, resource)
+        }
+        wallTextureRequestCache.delete(assetId)
+        options.assetCacheStore.releaseInMemoryBlob(assetId)
+        const waitingIds = wallTextureWaiters.get(assetId)
+        wallTextureWaiters.delete(assetId)
+        waitingIds?.forEach((id) => scheduleWallResync(id))
+      }
+    })()
+    wallTextureRequestCache.set(assetId, request)
+  }
+
+  function resolveWallTextureRenderAssets(params: {
+    wallProps: Partial<WallComponentProps> | WallComponentProps | null | undefined
+    nodeId: string
+    signatureKey: string
+  }): {
+    assets: WallRenderAssetObjects
+    hasPending: boolean
+    hasFailures: boolean
+    stateKey: string
+  } {
+    const texturesByAssetId: Record<string, WallTextureResource | null> = {}
+    const state: string[] = []
+    let hasPending = false
+    let hasFailures = false
+
+    for (const assetId of collectWallTextureAssetIds(params.wallProps)) {
+      if (!wallTextureResources.has(assetId)) {
+        hasPending = true
+        state.push(`${assetId}:pending`)
+        scheduleWallTextureLoad(assetId, params.nodeId, params.signatureKey)
+        continue
+      }
+      const resource = wallTextureResources.get(assetId) ?? null
+      texturesByAssetId[assetId] = resource
+      if (!resource) {
+        hasFailures = true
+        state.push(`${assetId}:failed`)
+      } else {
+        state.push(`${assetId}:${resource.width}x${resource.height}`)
+      }
+    }
+
+    return {
+      assets: { texturesByAssetId },
+      hasPending,
+      hasFailures,
+      stateKey: state.join('|'),
+    }
+  }
 
   type WallDragBindingEntry = {
     assetId: string
@@ -480,10 +611,40 @@ export function createWallRenderer(options: WallRendererOptions) {
     previewKey: string
   }): WallPreviewRenderData {
     const normalizedProps = normalizeWallPreviewProps(params.definition, params.wallProps)
+    const syntheticNodeId = buildPreviewNodeId(typeof params.previewKey === 'string' ? params.previewKey : '')
 
     const cornerModels = Array.isArray(normalizedProps?.cornerModels)
       ? normalizedProps.cornerModels
       : []
+    if (normalizedProps?.wallRenderMode === 'texture' && !normalizedProps.isAirWall) {
+      const textureRender = resolveWallTextureRenderAssets({
+        wallProps: normalizedProps,
+        nodeId: syntheticNodeId,
+        signatureKey: PREVIEW_SIGNATURE_KEY,
+      })
+      const renderOptions: WallRenderOptions = {
+        cornerModels,
+        wallRenderMode: 'texture',
+        headAssetHeight: normalizedProps.headAssetHeight,
+        footAssetHeight: normalizedProps.footAssetHeight,
+        bodyTextureAssetId: normalizedProps.bodyTextureAssetId,
+        headTextureAssetId: normalizedProps.headTextureAssetId,
+        footTextureAssetId: normalizedProps.footTextureAssetId,
+      }
+      return {
+        assets: textureRender.assets,
+        renderOptions,
+        isAirWall: false,
+        wantsInstancing: false,
+        hasMissingAssets: textureRender.hasPending,
+        signatureData: stableSerialize({
+          normalizedProps,
+          renderOptions,
+          textureState: textureRender.stateKey,
+          textureFailures: textureRender.hasFailures,
+        }),
+      }
+    }
     const bodyCornerAssetIds = Array.from(
       new Set(
         cornerModels
@@ -527,6 +688,11 @@ export function createWallRenderer(options: WallRendererOptions) {
         cornerModels,
         wallRenderMode: normalizedProps.wallRenderMode,
         repeatInstanceStep: normalizedProps.repeatInstanceStep,
+        headAssetHeight: normalizedProps.headAssetHeight,
+        footAssetHeight: normalizedProps.footAssetHeight,
+        bodyTextureAssetId: normalizedProps.bodyTextureAssetId,
+        headTextureAssetId: normalizedProps.headTextureAssetId,
+        footTextureAssetId: normalizedProps.footTextureAssetId,
         bodyUvAxis: normalizedProps.bodyUvAxis,
         headUvAxis: normalizedProps.headUvAxis,
         footUvAxis: normalizedProps.footUvAxis,
@@ -543,7 +709,6 @@ export function createWallRenderer(options: WallRendererOptions) {
       : {}
 
     const assets: WallRenderAssetObjects = {}
-    const syntheticNodeId = buildPreviewNodeId(typeof params.previewKey === 'string' ? params.previewKey : '')
     let hasMissingAssets = false
 
     const resolvePreviewAsset = (assetId: string | null | undefined): THREE.Object3D | null => {
@@ -662,9 +827,12 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallRenderMode: source.wallRenderMode ?? baseProps.wallRenderMode,
       repeatInstanceStep: source.repeatInstanceStep ?? baseProps.repeatInstanceStep,
       bodyAssetId: source.bodyAssetId ?? baseProps.bodyAssetId,
+      bodyTextureAssetId: source.bodyTextureAssetId ?? baseProps.bodyTextureAssetId,
       headAssetId: source.headAssetId ?? baseProps.headAssetId,
+      headTextureAssetId: source.headTextureAssetId ?? baseProps.headTextureAssetId,
       headAssetHeight: source.headAssetHeight ?? baseProps.headAssetHeight,
       footAssetId: source.footAssetId ?? baseProps.footAssetId,
+      footTextureAssetId: source.footTextureAssetId ?? baseProps.footTextureAssetId,
       footAssetHeight: source.footAssetHeight ?? baseProps.footAssetHeight,
       bodyUvAxis: source.bodyUvAxis ?? baseProps.bodyUvAxis,
       headUvAxis: source.headUvAxis ?? baseProps.headUvAxis,
@@ -775,6 +943,7 @@ export function createWallRenderer(options: WallRendererOptions) {
     signatureKey: string,
     wallDefinition: WallDynamicMesh,
     renderOptions: WallRenderOptions,
+    assets: WallRenderAssetObjects = {},
   ): THREE.Group {
     const userData = container.userData ?? (container.userData = {})
     let wallGroup = userData.wallGroup as THREE.Group | undefined
@@ -783,12 +952,16 @@ export function createWallRenderer(options: WallRendererOptions) {
       return wallGroup
     }
 
-    wallGroup = createWallGroup(wallDefinition, renderOptions)
+    wallGroup = createWallRenderGroup(wallDefinition, assets, renderOptions)
     tagWallInternalGroup(wallGroup, node.id)
     wallGroup.userData[signatureKey] = computeWallDynamicMeshSignature(wallDefinition, {
       wallRenderMode: renderOptions.wallRenderMode,
       headAssetHeight: renderOptions.headAssetHeight,
       footAssetHeight: renderOptions.footAssetHeight,
+      bodyTextureAssetId: renderOptions.bodyTextureAssetId,
+      headTextureAssetId: renderOptions.headTextureAssetId,
+      footTextureAssetId: renderOptions.footTextureAssetId,
+      textureState: renderOptions.textureState,
       cornerModels: renderOptions.cornerModels,
     })
     wallGroup.userData.__harmonyWallBodyMaterialConfigId = renderOptions.bodyMaterialConfigId ?? null
@@ -803,8 +976,10 @@ export function createWallRenderer(options: WallRendererOptions) {
     definition: WallDynamicMesh,
     signatureKey: string,
     options: WallRenderOptions = {},
+    assets: WallRenderAssetObjects = {},
   ): void {
     const groupData = wallGroup.userData ?? (wallGroup.userData = {})
+    groupData.wallRenderAssets = assets
     const ownerNodeId = typeof groupData.ownerNodeId === 'string' && groupData.ownerNodeId.length
       ? groupData.ownerNodeId
       : null
@@ -815,6 +990,10 @@ export function createWallRenderer(options: WallRendererOptions) {
       wallRenderMode: options.wallRenderMode,
       headAssetHeight: options.headAssetHeight,
       footAssetHeight: options.footAssetHeight,
+      bodyTextureAssetId: options.bodyTextureAssetId,
+      headTextureAssetId: options.headTextureAssetId,
+      footTextureAssetId: options.footTextureAssetId,
+      textureState: options.textureState,
       cornerModels: options.cornerModels,
     })
     const nextBodyMaterialConfigId = options.bodyMaterialConfigId ?? null
@@ -977,9 +1156,49 @@ export function createWallRenderer(options: WallRendererOptions) {
       cornerModels: Array.isArray(wallProps?.cornerModels) ? wallProps.cornerModels : [],
       headAssetHeight: wallProps?.headAssetHeight,
       footAssetHeight: wallProps?.footAssetHeight,
+      bodyTextureAssetId: wallProps?.bodyTextureAssetId,
+      headTextureAssetId: wallProps?.headTextureAssetId,
+      footTextureAssetId: wallProps?.footTextureAssetId,
     })
 
     const userData = container.userData ?? (container.userData = {})
+
+    if (wallRenderMode === 'texture' && !isAirWall) {
+      releaseModelInstancesForNode(node.id)
+      clearWallInstancedBindingsOnObject(container)
+      delete userData.instancedAssetId
+      delete userData.instancedBounds
+      options.removeInstancedPickProxy(container)
+
+      const textureRender = resolveWallTextureRenderAssets({
+        wallProps,
+        nodeId: node.id,
+        signatureKey,
+      })
+      const wallRenderOptions: WallRenderOptions = {
+        ...buildProceduralWallRenderOptions(),
+        wallRenderMode: 'texture',
+        textureState: textureRender.stateKey,
+      }
+      const wallGroup = ensureWallGroup(
+        container,
+        node,
+        signatureKey,
+        effectiveDefinition,
+        wallRenderOptions,
+        textureRender.assets,
+      )
+      wallGroup.visible = true
+      updateWallGroupIfNeeded(
+        wallGroup,
+        effectiveDefinition,
+        signatureKey,
+        wallRenderOptions,
+        textureRender.assets,
+      )
+      applyAirWallVisualToWallGroup(wallGroup, false)
+      return
+    }
 
     // ============================
     // 1) 空气墙：强制使用程序墙体（并应用半透明材质覆盖）
@@ -1213,5 +1432,12 @@ export function createWallRenderer(options: WallRendererOptions) {
     syncWallDragInstancedMatrices,
     isWallDragActive,
     resolveWallPreviewRenderData,
+    disposeWallTextures: () => {
+      wallRendererDisposed = true
+      wallTextureResources.forEach((resource) => resource?.texture.dispose())
+      wallTextureResources.clear()
+      wallTextureRequestCache.clear()
+      wallTextureWaiters.clear()
+    },
   }
 }

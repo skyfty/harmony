@@ -912,6 +912,30 @@ class SceneGraphBuilder {
           (message) => this.warn(message),
         ).forEach((nodeMaterial) => this.collectTextureRefsFromMaterial(nodeMaterial, ids));
       }
+      const wallState = node.components?.['wall']
+      const wallProps = !omitNodeTextures && wallState?.enabled !== false
+        ? wallState?.props as Partial<Record<string, unknown>> | undefined
+        : undefined
+      if (wallProps?.wallRenderMode === 'texture') {
+        const addWallTextureRef = (value: unknown) => {
+          if (typeof value === 'string' && value.trim().length) {
+            ids.add(value.trim())
+          }
+        }
+        addWallTextureRef(wallProps.bodyTextureAssetId)
+        addWallTextureRef(wallProps.headTextureAssetId)
+        addWallTextureRef(wallProps.footTextureAssetId)
+        const corners = Array.isArray(wallProps.cornerModels) ? wallProps.cornerModels : []
+        corners.forEach((corner) => {
+          if (!corner || typeof corner !== 'object') {
+            return
+          }
+          const typed = corner as Record<string, unknown>
+          addWallTextureRef(typed.bodyTextureAssetId)
+          addWallTextureRef(typed.headTextureAssetId)
+          addWallTextureRef(typed.footTextureAssetId)
+        })
+      }
       if (Array.isArray(node.children) && node.children.length) {
         node.children.forEach((child) => {
           stack.push({ node: child as SceneNodeWithExtras, inSkippedSubtree: nodeInsideSkippedSubtree });
@@ -2062,6 +2086,7 @@ class SceneGraphBuilder {
     return buildWallDynamicMesh(
       {
         loadAssetMesh: (assetId) => this.loadAssetMesh(assetId),
+        loadWallTexture: (assetId) => this.loadWallTexture(assetId),
         resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
         pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
         applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
@@ -2070,6 +2095,30 @@ class SceneGraphBuilder {
       meshInfo,
       node,
     );
+  }
+
+  private async loadWallTexture(assetId: string): Promise<{
+    texture: THREE.Texture
+    width: number
+    height: number
+  } | null> {
+    const texture = await this.materialFactory.loadTexture(assetId)
+    if (!texture) {
+      return null
+    }
+    const image = texture.image as {
+      width?: number
+      height?: number
+      naturalWidth?: number
+      naturalHeight?: number
+    } | null | undefined
+    const width = Number(image?.naturalWidth ?? image?.width)
+    const height = Number(image?.naturalHeight ?? image?.height)
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      console.warn('[Wall] Wall texture has invalid dimensions', assetId)
+      return null
+    }
+    return { texture, width, height }
   }
 
   private async buildFloorMesh(meshInfo: FloorDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {

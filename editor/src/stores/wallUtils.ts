@@ -17,6 +17,33 @@ type WallStoreDeps = {
   updateWallGroup: (group: Object3D, definition: WallDynamicMesh, options?: any) => void
 }
 
+export function buildWallUpdateRenderOptions(props: WallComponentProps) {
+  const normalized = clampWallProps(props)
+  return {
+    bodyMaterialConfigId: normalized.bodyMaterialConfigId,
+    cornerModels: normalized.cornerModels,
+    wallRenderMode: normalized.wallRenderMode,
+    repeatInstanceStep: normalized.repeatInstanceStep,
+    headAssetHeight: normalized.headAssetHeight,
+    footAssetHeight: normalized.footAssetHeight,
+    bodyTextureAssetId: normalized.bodyTextureAssetId,
+    headTextureAssetId: normalized.headTextureAssetId,
+    footTextureAssetId: normalized.footTextureAssetId,
+    bodyUvAxis: normalized.bodyUvAxis,
+    headUvAxis: normalized.headUvAxis,
+    footUvAxis: normalized.footUvAxis,
+    bodyOrientation: normalized.bodyOrientation,
+    headOrientation: normalized.headOrientation,
+    footOrientation: normalized.footOrientation,
+    bodyEndCapOffsetLocal: normalized.bodyEndCapOffsetLocal,
+    bodyEndCapOrientation: normalized.bodyEndCapOrientation,
+    headEndCapOffsetLocal: normalized.headEndCapOffsetLocal,
+    headEndCapOrientation: normalized.headEndCapOrientation,
+    footEndCapOffsetLocal: normalized.footEndCapOffsetLocal,
+    footEndCapOrientation: normalized.footEndCapOrientation,
+  }
+}
+
 export type WallWorldSegment = {
   start: THREE.Vector3
   end: THREE.Vector3
@@ -385,10 +412,7 @@ export function applyWallComponentPropsToNode(
     runtime.traverse((child: Object3D & { type?: string; name?: string; userData?: Record<string, unknown> | undefined }) => {
       if (child.type === 'Group' && child.name === 'WallGroup' && child.userData?.dynamicMeshType === 'Wall') {
         if (node.dynamicMesh && node.dynamicMesh.type === 'Wall') {
-          deps.updateWallGroup(child, node.dynamicMesh, {
-            wallRenderMode: normalized.wallRenderMode,
-            repeatInstanceStep: normalized.repeatInstanceStep,
-          } as any)
+          deps.updateWallGroup(child, node.dynamicMesh, buildWallUpdateRenderOptions(normalized))
         }
         return
       }

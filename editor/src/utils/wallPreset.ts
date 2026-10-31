@@ -1,3 +1,5 @@
+import type { WallRenderMode as SchemaWallRenderMode } from '@schema/wallRenderMode'
+
 function normalizeName(value: string | null | undefined): string {
   if (typeof value !== 'string') {
     return ''
@@ -5,11 +7,11 @@ function normalizeName(value: string | null | undefined): string {
   return value.trim()
 }
 
-export const WALL_PRESET_FORMAT_VERSION = 9
+export const WALL_PRESET_FORMAT_VERSION = 10
 
 export type WallForwardAxis = '+x' | '-x' | '+z' | '-z'
 export type WallUvAxis = 'auto' | 'u' | 'v'
-export type WallRenderMode = 'stretch' | 'repeatInstances'
+export type WallRenderMode = SchemaWallRenderMode
 
 export type WallModelOrientation = {
   forwardAxis: WallForwardAxis
@@ -26,6 +28,9 @@ export type StrictWallPresetCornerModelRule = {
   bodyAssetId: string | null
   headAssetId: string | null
   footAssetId: string | null
+  bodyTextureAssetId: string | null
+  headTextureAssetId: string | null
+  footTextureAssetId: string | null
   bodyOffsetLocal: WallOffsetLocal
   headOffsetLocal: WallOffsetLocal
   footOffsetLocal: WallOffsetLocal
@@ -54,13 +59,16 @@ export type StrictWallPresetWallProps = {
   forbidden: boolean
   isAirWall: boolean
   bodyAssetId: string | null
+  bodyTextureAssetId: string | null
   bodyOrientation: WallModelOrientation
   bodyUvAxis: WallUvAxis
   headAssetId: string | null
+  headTextureAssetId: string | null
   headAssetHeight: number
   headOrientation: WallModelOrientation
   headUvAxis: WallUvAxis
   footAssetId: string | null
+  footTextureAssetId: string | null
   footAssetHeight: number
   footOrientation: WallModelOrientation
   footUvAxis: WallUvAxis

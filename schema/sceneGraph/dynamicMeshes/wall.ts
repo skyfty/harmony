@@ -7,7 +7,12 @@ import {
   clampWallProps,
   resolveWallBodyMaterialConfigIdForRender,
 } from '../../components/definitions/wallComponent';
-import { createWallGroup, WALL_ASSET_REPEAT_VARIANT_INFO_KEY } from '../../wallMesh';
+import {
+  createWallGroup,
+  createWallRenderGroup,
+  WALL_ASSET_REPEAT_VARIANT_INFO_KEY,
+  type WallTextureResource,
+} from '../../wallMesh';
 import {
   createAutoTiledMaterialVariant,
   createWallRepeatScaleMaterialVariant,
@@ -80,6 +85,7 @@ function applyWallMaterialConfigAssignment(
 export async function buildWallMesh(
   deps: {
     loadAssetMesh: (assetId: string) => Promise<THREE.Object3D | null>;
+    loadWallTexture: (assetId: string) => Promise<WallTextureResource | null>;
     resolveNodeMaterials: (node: SceneNodeWithExtras) => Promise<THREE.Material[]>;
     pickMaterialAssignment: (materials: THREE.Material[]) => THREE.Material | THREE.Material[] | null;
     applyTransform: (object: THREE.Object3D, node: SceneNodeWithExtras) => void;
@@ -92,6 +98,56 @@ export async function buildWallMesh(
     | SceneNodeComponentState<WallComponentProps>
     | undefined;
   const wallProps = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
+
+  const buildTextureWallGroup = async (): Promise<THREE.Group> => {
+    const textureAssetIds = Array.from(new Set([
+      wallProps.bodyTextureAssetId,
+      wallProps.headTextureAssetId,
+      wallProps.footTextureAssetId,
+      ...(Array.isArray(wallProps.cornerModels)
+        ? wallProps.cornerModels.flatMap((rule) => [
+          rule.bodyTextureAssetId,
+          rule.headTextureAssetId,
+          rule.footTextureAssetId,
+        ])
+        : []),
+    ]
+      .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+      .filter((assetId) => assetId.length > 0)));
+
+    const entries = await Promise.all(textureAssetIds.map(async (assetId) => {
+      try {
+        return [assetId, await deps.loadWallTexture(assetId)] as const;
+      } catch (error) {
+        console.warn('[Wall] Failed to load wall texture', assetId, error);
+        return [assetId, null] as const;
+      }
+    }));
+    const texturesByAssetId = Object.fromEntries(entries) as Record<string, WallTextureResource | null>;
+    const group = createWallRenderGroup(meshInfo, { texturesByAssetId }, {
+      wallRenderMode: 'texture',
+      cornerModels: wallProps.cornerModels,
+      headAssetHeight: wallProps.headAssetHeight,
+      footAssetHeight: wallProps.footAssetHeight,
+      bodyTextureAssetId: wallProps.bodyTextureAssetId,
+      headTextureAssetId: wallProps.headTextureAssetId,
+      footTextureAssetId: wallProps.footTextureAssetId,
+    });
+    group.name = node.name ?? (group.name || 'Wall');
+    deps.applyTransform(group, node);
+    deps.applyVisibility(group, node);
+    group.userData = {
+      ...(group.userData ?? {}),
+      dynamicMeshType: 'Wall',
+      isAirWall: false,
+      hidden: false,
+    };
+    return group;
+  };
+
+  if (wallProps.wallRenderMode === 'texture' && !wallProps.isAirWall) {
+    return buildTextureWallGroup();
+  }
 
   const ensureModelGroup = async (assetId: string | null | undefined): Promise<ModelInstanceGroup | null> => {
     const normalized = typeof assetId === 'string' ? assetId.trim() : '';

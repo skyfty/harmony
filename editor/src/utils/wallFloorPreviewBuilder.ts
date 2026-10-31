@@ -68,7 +68,28 @@ function collectWallAssetIds(node: SceneNode): string[] {
   )
 }
 
-function buildWallRenderAssetsFromNode(node: SceneNode, loadedAssetObjects: Map<string, THREE.Object3D>): WallRenderAssetObjects {
+function collectWallTextureAssetIds(node: SceneNode): string[] {
+  const wallState = node.components?.[WALL_COMPONENT_TYPE]
+  const wallProps = clampWallProps((wallState?.props ?? null) as Record<string, unknown> | null | undefined)
+  return Array.from(new Set([
+    wallProps.bodyTextureAssetId,
+    wallProps.headTextureAssetId,
+    wallProps.footTextureAssetId,
+    ...wallProps.cornerModels.flatMap((entry) => [
+      entry.bodyTextureAssetId,
+      entry.headTextureAssetId,
+      entry.footTextureAssetId,
+    ]),
+  ]
+    .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+    .filter((assetId) => assetId.length > 0)))
+}
+
+function buildWallRenderAssetsFromNode(
+  node: SceneNode,
+  loadedAssetObjects: Map<string, THREE.Object3D>,
+  loadedTextures: Map<string, THREE.Texture>,
+): WallRenderAssetObjects {
   const wallState = node.components?.[WALL_COMPONENT_TYPE]
   const wallProps = clampWallProps((wallState?.props ?? null) as Record<string, unknown> | null | undefined)
 
@@ -95,7 +116,9 @@ function buildWallRenderAssetsFromNode(node: SceneNode, loadedAssetObjects: Map<
   const headCornerAssetIds = Array.from(new Set((wallProps.cornerModels ?? []).map((entry) => entry.headAssetId).filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)))
   const footCornerAssetIds = Array.from(new Set((wallProps.cornerModels ?? []).map((entry) => entry.footAssetId).filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)))
 
-  const assets: WallRenderAssetObjects = {}
+  const assets: WallRenderAssetObjects = {
+    texturesByAssetId: {},
+  }
   const bodyObject = resolveAsset(wallProps.bodyAssetId)
   if (bodyObject) assets.bodyObject = bodyObject
   const headObject = resolveAsset(wallProps.headAssetId)
@@ -116,6 +139,24 @@ function buildWallRenderAssetsFromNode(node: SceneNode, loadedAssetObjects: Map<
   const footCornerMap = resolveCornerAssetMap(footCornerAssetIds)
   if (footCornerMap) assets.footCornerObjectsByAssetId = footCornerMap
 
+  for (const assetId of collectWallTextureAssetIds(node)) {
+    const texture = loadedTextures.get(assetId)
+    if (!texture) {
+      continue
+    }
+    const image = texture.image as {
+      width?: number
+      height?: number
+      naturalWidth?: number
+      naturalHeight?: number
+    } | null | undefined
+    const width = Number(image?.naturalWidth ?? image?.width)
+    const height = Number(image?.naturalHeight ?? image?.height)
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      assets.texturesByAssetId![assetId] = { texture, width, height }
+    }
+  }
+
   return assets
 }
 
@@ -131,6 +172,9 @@ function buildWallRenderOptionsFromNode(node: SceneNode, definition: WallDynamic
     cornerModels: wallProps.cornerModels ?? [],
     wallRenderMode: wallProps.wallRenderMode,
     repeatInstanceStep: wallProps.repeatInstanceStep,
+    bodyTextureAssetId: wallProps.bodyTextureAssetId,
+    headTextureAssetId: wallProps.headTextureAssetId,
+    footTextureAssetId: wallProps.footTextureAssetId,
     headAssetHeight: Number.isFinite(wallProps.headAssetHeight) ? Number(wallProps.headAssetHeight) : undefined,
     footAssetHeight: Number.isFinite(wallProps.footAssetHeight) ? Number(wallProps.footAssetHeight) : undefined,
     bodyUvAxis: wallProps.bodyUvAxis,
@@ -198,7 +242,8 @@ export async function buildWallPreviewObjectFromNode(options: {
   const renderOptions = buildWallRenderOptionsFromNode(options.node, definition)
 
   const loadedAssetObjects = new Map<string, THREE.Object3D>()
-  const assetIds = collectWallAssetIds(options.node)
+  const loadedTextures = new Map<string, THREE.Texture>()
+  const assetIds = wallProps.wallRenderMode === 'texture' ? [] : collectWallAssetIds(options.node)
   for (const assetId of assetIds) {
     const file = await options.resolveAssetFile(assetId)
     if (!file) {
@@ -210,11 +255,23 @@ export async function buildWallPreviewObjectFromNode(options: {
     }
   }
 
+  for (const assetId of collectWallTextureAssetIds(options.node)) {
+    const file = await options.resolveAssetFile(assetId)
+    if (!file) {
+      continue
+    }
+    const texture = await loadTextureFromFile(file).catch(() => null)
+    if (texture) {
+      loadedTextures.set(assetId, texture)
+    }
+  }
+
   const wallObject = createWallRenderGroup(
     definition,
-    buildWallRenderAssetsFromNode(options.node, loadedAssetObjects),
+    buildWallRenderAssetsFromNode(options.node, loadedAssetObjects, loadedTextures),
     renderOptions,
   )
+  loadedTextures.forEach((texture) => texture.dispose())
   wallObject.name = options.node.name || 'Wall'
   applyNodeTransform(wallObject, options.node)
   applyNodeVisibility(wallObject, options.node)

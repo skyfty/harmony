@@ -2,6 +2,9 @@ import type { Object3D } from 'three'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { WallDynamicMesh, SceneNodeComponentState, SceneNode } from '../../index'
+import { normalizeWallRenderMode, type WallRenderMode } from '../../wallRenderMode'
+
+export { normalizeWallRenderMode, type WallRenderMode } from '../../wallRenderMode'
 
 export const WALL_COMPONENT_TYPE = 'wall'
 export const WALL_DEFAULT_HEIGHT = 3
@@ -36,7 +39,6 @@ export type WallOffsetLocal = {
 }
 
 export type WallUvAxis = 'auto' | 'u' | 'v'
-export type WallRenderMode = 'stretch' | 'repeatInstances'
 
 export type WallCornerModelRule = {
   /** Asset id of the lower wall body corner/joint model to be instanced. */
@@ -63,6 +65,12 @@ export type WallCornerModelRule = {
   footForwardAxis: WallForwardAxis
   /** Extra yaw offset in degrees for the foot corner model. */
   footYawDeg: number
+  /** Optional transparent texture used for the body part when texture mode matches this corner. */
+  bodyTextureAssetId: string | null
+  /** Optional transparent texture used for the head part when texture mode matches this corner. */
+  headTextureAssetId: string | null
+  /** Optional transparent texture used for the foot part when texture mode matches this corner. */
+  footTextureAssetId: string | null
   /**
    * Target interior corner angle (degrees). Straight = 180°.
    * Runtime picks the closest match within tolerance.
@@ -96,12 +104,16 @@ export interface WallComponentProps {
   repeatInstanceStep: number
   /** Lower wall body model asset id (required to enable model mode). */
   bodyAssetId: string | null
+  /** Transparent image asset used for the body in texture render mode. */
+  bodyTextureAssetId: string | null
   /** Orientation overrides for the body model. */
   bodyOrientation: WallModelOrientation
   /** UV repeat axis for the body model stretch-tiling. */
   bodyUvAxis: WallUvAxis
   /** Upper wall head model asset id (optional; rendered independently when set). */
   headAssetId: string | null
+  /** Transparent image asset used for the head in texture render mode. */
+  headTextureAssetId: string | null
   /** Persisted wall head model height (meters). */
   headAssetHeight: number
   /** Orientation overrides for the head model. */
@@ -110,6 +122,8 @@ export interface WallComponentProps {
   headUvAxis: WallUvAxis
   /** Lower wall foot model asset id (optional; rendered independently when set). */
   footAssetId: string | null
+  /** Transparent image asset used for the foot in texture render mode. */
+  footTextureAssetId: string | null
   /** Persisted wall foot model height (meters). */
   footAssetHeight: number
   /** Orientation overrides for the foot model. */
@@ -167,6 +181,18 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     return raw.trim()
   }
 
+  const optionalAssetIdOrNull = (key: keyof WallComponentProps): string | null => {
+    const raw = (props as any)?.[key]
+    if (raw == null) {
+      return null
+    }
+    if (typeof raw !== 'string') {
+      throw new Error(`WallComponentProps missing/invalid optional asset id: ${String(key)}`)
+    }
+    const trimmed = raw.trim()
+    return trimmed.length ? trimmed : null
+  }
+
   const optionalMaterialConfigId = (key: keyof WallComponentProps): string | null => {
     const raw = (props as any)?.[key]
     if (raw == null) {
@@ -193,11 +219,11 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     throw new Error(`WallComponentProps missing/invalid uvAxis: ${label}`)
   }
 
-  const requiredRenderMode = (value: unknown, label: string): WallRenderMode => {
-    if (value === 'stretch' || value === 'repeatInstances') {
+  const requiredRenderMode = (value: unknown, _label: string): WallRenderMode => {
+    if (value === 'stretch' || value === 'repeatInstances' || value === 'texture') {
       return value
     }
-    throw new Error(`WallComponentProps missing/invalid render mode: ${label}`)
+    return normalizeWallRenderMode(value)
   }
 
   const requiredYawDeg = (value: unknown, label: string): number => {
@@ -291,10 +317,23 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     const bodyAssetId = parseRuleAssetId(record.bodyAssetId, 'bodyAssetId')
     const headAssetId = parseRuleAssetId(record.headAssetId, 'headAssetId')
     const footAssetId = parseRuleAssetId(record.footAssetId, 'footAssetId')
+    const optionalRuleTextureAssetId = (value: unknown): string | null => {
+      if (value == null) {
+        return null
+      }
+      if (typeof value !== 'string') {
+        throw new Error(`WallComponentProps cornerModels[${index}] missing/invalid texture asset id`)
+      }
+      const trimmed = value.trim()
+      return trimmed.length ? trimmed : null
+    }
     return {
       bodyAssetId,
       headAssetId,
       footAssetId,
+      bodyTextureAssetId: optionalRuleTextureAssetId(record.bodyTextureAssetId),
+      headTextureAssetId: optionalRuleTextureAssetId(record.headTextureAssetId),
+      footTextureAssetId: optionalRuleTextureAssetId(record.footTextureAssetId),
       bodyOffsetLocal: normalizeOffsetLocal(record.bodyOffsetLocal),
       headOffsetLocal: normalizeOffsetLocal(record.headOffsetLocal),
       footOffsetLocal: normalizeOffsetLocal(record.footOffsetLocal),
@@ -321,9 +360,12 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
   }
 
   const bodyAssetId = requiredAssetIdOrNull('bodyAssetId')
+  const bodyTextureAssetId = optionalAssetIdOrNull('bodyTextureAssetId')
   const headAssetId = requiredAssetIdOrNull('headAssetId')
+  const headTextureAssetId = optionalAssetIdOrNull('headTextureAssetId')
   const headAssetHeight = Math.max(0, requiredNumber('headAssetHeight'))
   const footAssetId = requiredAssetIdOrNull('footAssetId')
+  const footTextureAssetId = optionalAssetIdOrNull('footTextureAssetId')
   const footAssetHeight = Math.max(0, requiredNumber('footAssetHeight'))
 
   const bodyEndCapAssetId = requiredAssetIdOrNull('bodyEndCapAssetId')
@@ -354,13 +396,16 @@ export function clampWallProps(props: Partial<WallComponentProps> | null | undef
     wallRenderMode: requiredRenderMode((props as any).wallRenderMode, 'wallRenderMode'),
     repeatInstanceStep: normalizeRepeatInstanceStep((props as any).repeatInstanceStep),
     bodyAssetId,
+    bodyTextureAssetId,
     bodyOrientation,
     bodyUvAxis,
     headAssetId,
+    headTextureAssetId,
     headAssetHeight,
     headOrientation,
     headUvAxis,
     footAssetId,
+    footTextureAssetId,
     footAssetHeight,
     footOrientation,
     footUvAxis,
@@ -390,13 +435,16 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
       wallRenderMode: 'stretch',
       repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
       bodyAssetId: null,
+      bodyTextureAssetId: null,
       bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
       bodyUvAxis: 'auto',
       headAssetId: null,
+      headTextureAssetId: null,
       headAssetHeight: 0,
       headOrientation: { forwardAxis: '+z', yawDeg: 0 },
       headUvAxis: 'auto',
       footAssetId: null,
+      footTextureAssetId: null,
       footAssetHeight: 0,
       footOrientation: { forwardAxis: '+z', yawDeg: 0 },
       footUvAxis: 'auto',
@@ -426,9 +474,12 @@ export function resolveWallComponentPropsFromMesh(mesh: WallDynamicMesh | undefi
     wallRenderMode: 'stretch',
     repeatInstanceStep: WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     bodyAssetId: null,
+    bodyTextureAssetId: null,
     headAssetId: null,
+    headTextureAssetId: null,
     headAssetHeight: 0,
     footAssetId: null,
+    footTextureAssetId: null,
     footAssetHeight: 0,
     bodyUvAxis: 'auto',
     headUvAxis: 'auto',
@@ -479,17 +530,19 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     bodyMaterialConfigId: props.bodyMaterialConfigId ?? null,
     forbidden: Boolean(props.forbidden),
     isAirWall: Boolean(props.isAirWall),
-    wallRenderMode: props.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch',
+    wallRenderMode: normalizeWallRenderMode(props.wallRenderMode),
     repeatInstanceStep: Number.isFinite(props.repeatInstanceStep)
       ? Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, Number(props.repeatInstanceStep))
       : WALL_DEFAULT_REPEAT_INSTANCE_STEP,
     bodyAssetId: props.bodyAssetId ?? null,
+    bodyTextureAssetId: props.bodyTextureAssetId ?? null,
     bodyOrientation: {
       forwardAxis: props.bodyOrientation.forwardAxis,
       yawDeg: props.bodyOrientation.yawDeg,
     },
     bodyUvAxis: props.bodyUvAxis === 'v' ? 'v' : props.bodyUvAxis === 'u' ? 'u' : 'auto',
     headAssetId: props.headAssetId ?? null,
+    headTextureAssetId: props.headTextureAssetId ?? null,
     headAssetHeight: Math.max(0, Number(props.headAssetHeight) || 0),
     headOrientation: {
       forwardAxis: props.headOrientation.forwardAxis,
@@ -497,6 +550,7 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
     },
     headUvAxis: props.headUvAxis === 'v' ? 'v' : props.headUvAxis === 'u' ? 'u' : 'auto',
     footAssetId: props.footAssetId ?? null,
+    footTextureAssetId: props.footTextureAssetId ?? null,
     footAssetHeight: Math.max(0, Number(props.footAssetHeight) || 0),
     footOrientation: {
       forwardAxis: props.footOrientation.forwardAxis,
@@ -538,6 +592,9 @@ export function cloneWallComponentProps(props: WallComponentProps): WallComponen
         bodyAssetId: typeof entry?.bodyAssetId === 'string' ? entry.bodyAssetId : null,
         headAssetId: typeof entry?.headAssetId === 'string' ? entry.headAssetId : null,
         footAssetId: typeof entry?.footAssetId === 'string' ? entry.footAssetId : null,
+        bodyTextureAssetId: typeof entry?.bodyTextureAssetId === 'string' ? entry.bodyTextureAssetId : null,
+        headTextureAssetId: typeof entry?.headTextureAssetId === 'string' ? entry.headTextureAssetId : null,
+        footTextureAssetId: typeof entry?.footTextureAssetId === 'string' ? entry.footTextureAssetId : null,
         bodyOffsetLocal: {
           x: Number((entry as any)?.bodyOffsetLocal?.x) || 0,
           y: Number((entry as any)?.bodyOffsetLocal?.y) || 0,
@@ -630,13 +687,16 @@ export function createWallComponentState(
     wallRenderMode: overrides?.wallRenderMode ?? defaults.wallRenderMode,
     repeatInstanceStep: overrides?.repeatInstanceStep ?? defaults.repeatInstanceStep,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
+    bodyTextureAssetId: overrides?.bodyTextureAssetId ?? defaults.bodyTextureAssetId,
     bodyOrientation: (overrides as any)?.bodyOrientation ?? defaults.bodyOrientation,
     bodyUvAxis: (overrides as any)?.bodyUvAxis ?? defaults.bodyUvAxis,
     headAssetId: overrides?.headAssetId ?? defaults.headAssetId,
+    headTextureAssetId: overrides?.headTextureAssetId ?? defaults.headTextureAssetId,
     headAssetHeight: overrides?.headAssetHeight ?? defaults.headAssetHeight,
     headOrientation: (overrides as any)?.headOrientation ?? defaults.headOrientation,
     headUvAxis: (overrides as any)?.headUvAxis ?? defaults.headUvAxis,
     footAssetId: overrides?.footAssetId ?? defaults.footAssetId,
+    footTextureAssetId: overrides?.footTextureAssetId ?? defaults.footTextureAssetId,
     footAssetHeight: overrides?.footAssetHeight ?? defaults.footAssetHeight,
     footOrientation: (overrides as any)?.footOrientation ?? defaults.footOrientation,
     footUvAxis: (overrides as any)?.footUvAxis ?? defaults.footUvAxis,

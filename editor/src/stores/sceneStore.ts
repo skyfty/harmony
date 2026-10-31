@@ -383,6 +383,8 @@ import {
   clampSkinComponentProps,
   clampWallProps,
   cloneWallComponentProps,
+  normalizeWallRenderMode,
+  type WallRenderMode,
   ROAD_DEFAULT_WIDTH,
   ROAD_MIN_WIDTH,
   ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
@@ -3283,6 +3285,7 @@ import {
   buildWallDynamicMeshFromWorldSegments,
   buildWallDynamicMeshForExistingNodeTransform,
   applyWallComponentPropsToNode as applyWallComponentPropsToNodeImported,
+  buildWallUpdateRenderOptions,
 } from './wallUtils'
 
 // Local wrapper to inject runtime helpers into the moved wall helper.
@@ -3290,12 +3293,11 @@ function applyWallComponentPropsToNode(node: SceneNode, props: WallComponentProp
   return applyWallComponentPropsToNodeImported(node, props, { getRuntimeObject, updateWallGroup })
 }
 
-function resolveWallRenderMode(node: SceneNode | null | undefined): 'stretch' | 'repeatInstances' {
+function resolveWallRenderMode(node: SceneNode | null | undefined): WallRenderMode {
   const component = node?.components?.[WALL_COMPONENT_TYPE] as
     | { props?: Partial<WallComponentProps> | null }
     | undefined
-  const value = (component?.props as any)?.wallRenderMode
-  return value === 'repeatInstances' ? 'repeatInstances' : 'stretch'
+  return normalizeWallRenderMode((component?.props as any)?.wallRenderMode)
 }
 
 function resolveWallRepeatInstanceStep(node: SceneNode | null | undefined): number {
@@ -20195,10 +20197,11 @@ export const useSceneStore = defineStore('scene', {
           if (!(group?.isGroup && group.name === 'WallGroup' && (group.userData as any)?.dynamicMeshType === 'Wall')) {
             return
           }
-          updateWallGroup(group, nextDefinition, {
-            wallRenderMode: resolveWallRenderMode(node),
-            repeatInstanceStep: resolveWallRepeatInstanceStep(node),
-          } as any)
+          updateWallGroup(
+            group,
+            nextDefinition,
+            buildWallUpdateRenderOptions(nextProps as WallComponentProps),
+          )
         })
       }
       return true
@@ -20544,9 +20547,12 @@ export const useSceneStore = defineStore('scene', {
         const typedPatch = patch as Partial<WallComponentProps>
         const hasBodyMaterialConfigId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyMaterialConfigId')
         const hasBodyAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyAssetId')
+        const hasBodyTextureAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyTextureAssetId')
         const hasHeadAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetId')
+        const hasHeadTextureAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'headTextureAssetId')
         const hasHeadAssetHeight = Object.prototype.hasOwnProperty.call(typedPatch, 'headAssetHeight')
         const hasFootAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footAssetId')
+        const hasFootTextureAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'footTextureAssetId')
         const hasFootAssetHeight = Object.prototype.hasOwnProperty.call(typedPatch, 'footAssetHeight')
         const hasWallBaseOffsetLocal = Object.prototype.hasOwnProperty.call(typedPatch, 'wallBaseOffsetLocal')
         const hasBodyEndCapAssetId = Object.prototype.hasOwnProperty.call(typedPatch, 'bodyEndCapAssetId')
@@ -20610,6 +20616,12 @@ export const useSceneStore = defineStore('scene', {
             const headAssetB = typeof entryB?.headAssetId === 'string' ? entryB.headAssetId : null
             const footAssetA = typeof entryA?.footAssetId === 'string' ? entryA.footAssetId : null
             const footAssetB = typeof entryB?.footAssetId === 'string' ? entryB.footAssetId : null
+            const bodyTextureA = typeof entryA?.bodyTextureAssetId === 'string' ? entryA.bodyTextureAssetId : null
+            const bodyTextureB = typeof entryB?.bodyTextureAssetId === 'string' ? entryB.bodyTextureAssetId : null
+            const headTextureA = typeof entryA?.headTextureAssetId === 'string' ? entryA.headTextureAssetId : null
+            const headTextureB = typeof entryB?.headTextureAssetId === 'string' ? entryB.headTextureAssetId : null
+            const footTextureA = typeof entryA?.footTextureAssetId === 'string' ? entryA.footTextureAssetId : null
+            const footTextureB = typeof entryB?.footTextureAssetId === 'string' ? entryB.footTextureAssetId : null
             const angleA = typeof entryA?.angle === 'number' ? entryA.angle : Number(entryA?.angle)
             const angleB = typeof entryB?.angle === 'number' ? entryB.angle : Number(entryB?.angle)
             const toleranceA = typeof entryA?.tolerance === 'number' ? entryA.tolerance : Number(entryA?.tolerance)
@@ -20648,6 +20660,15 @@ export const useSceneStore = defineStore('scene', {
               return false
             }
             if ((footAssetA ?? null) !== (footAssetB ?? null)) {
+              return false
+            }
+            if ((bodyTextureA ?? null) !== (bodyTextureB ?? null)) {
+              return false
+            }
+            if ((headTextureA ?? null) !== (headTextureB ?? null)) {
+              return false
+            }
+            if ((footTextureA ?? null) !== (footTextureB ?? null)) {
               return false
             }
             if (!Number.isFinite(angleA) || !Number.isFinite(angleB) || Math.abs(angleA - angleB) > 1e-6) {
@@ -20734,15 +20755,24 @@ export const useSceneStore = defineStore('scene', {
           bodyAssetId: hasBodyAssetId
             ? (typedPatch.bodyAssetId as string | null | undefined)
             : currentProps.bodyAssetId,
+          bodyTextureAssetId: hasBodyTextureAssetId
+            ? (typedPatch.bodyTextureAssetId as string | null | undefined)
+            : currentProps.bodyTextureAssetId,
           headAssetId: hasHeadAssetId
             ? (typedPatch.headAssetId as string | null | undefined)
             : currentProps.headAssetId,
+          headTextureAssetId: hasHeadTextureAssetId
+            ? (typedPatch.headTextureAssetId as string | null | undefined)
+            : currentProps.headTextureAssetId,
           headAssetHeight: hasHeadAssetHeight
             ? (typedPatch.headAssetHeight as number | undefined)
             : currentProps.headAssetHeight,
           footAssetId: hasFootAssetId
             ? (typedPatch.footAssetId as string | null | undefined)
             : currentProps.footAssetId,
+          footTextureAssetId: hasFootTextureAssetId
+            ? (typedPatch.footTextureAssetId as string | null | undefined)
+            : currentProps.footTextureAssetId,
           footAssetHeight: hasFootAssetHeight
             ? (typedPatch.footAssetHeight as number | undefined)
             : currentProps.footAssetHeight,
@@ -20807,9 +20837,12 @@ export const useSceneStore = defineStore('scene', {
           currentProps.wallRenderMode === merged.wallRenderMode &&
           Math.abs(currentProps.repeatInstanceStep - merged.repeatInstanceStep) <= 1e-6 &&
           (currentProps.bodyAssetId ?? null) === (merged.bodyAssetId ?? null) &&
+          (currentProps.bodyTextureAssetId ?? null) === (merged.bodyTextureAssetId ?? null) &&
           (currentProps.headAssetId ?? null) === (merged.headAssetId ?? null) &&
+          (currentProps.headTextureAssetId ?? null) === (merged.headTextureAssetId ?? null) &&
           Math.abs(currentProps.headAssetHeight - merged.headAssetHeight) <= 1e-6 &&
           (currentProps.footAssetId ?? null) === (merged.footAssetId ?? null) &&
+          (currentProps.footTextureAssetId ?? null) === (merged.footTextureAssetId ?? null) &&
           Math.abs(currentProps.footAssetHeight - merged.footAssetHeight) <= 1e-6 &&
           (currentProps.bodyEndCapAssetId ?? null) === (merged.bodyEndCapAssetId ?? null) &&
           offsetLocalEqual(currentProps.bodyEndCapOffsetLocal, merged.bodyEndCapOffsetLocal) &&
@@ -21178,10 +21211,11 @@ export const useSceneStore = defineStore('scene', {
                 if (!(group?.isGroup && group.name === 'WallGroup' && (group.userData as any)?.dynamicMeshType === 'Wall')) {
                   return
                 }
-                updateWallGroup(group, node.dynamicMesh as WallDynamicMesh, {
-                  wallRenderMode: resolveWallRenderMode(node),
-                  repeatInstanceStep: resolveWallRepeatInstanceStep(node),
-                } as any)
+                updateWallGroup(
+                  group,
+                  node.dynamicMesh as WallDynamicMesh,
+                  buildWallUpdateRenderOptions(nextProps as WallComponentProps),
+                )
               })
             }
           }

@@ -446,6 +446,7 @@ import {
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE,
 } from '@schema/components'
+import { normalizeWallRenderMode } from '@schema/wallRenderMode'
 import { moveGuideRoutePathAnchor as moveGuideRoutePathAnchorInProps } from '@schema/guideRouteEditing'
 import {
   resolveGuideRouteEndpointHandle,
@@ -1577,6 +1578,16 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
   if (node.dynamicMesh?.type === 'Floor') {
     refreshFloorRuntimeMaterials(node.id, targetObject)
     return
+  }
+  if (node.dynamicMesh?.type === 'Wall') {
+    const wallProps = node.components?.[WALL_COMPONENT_TYPE]?.props as
+      | { wallRenderMode?: unknown }
+      | undefined
+    if (normalizeWallRenderMode(wallProps?.wallRenderMode) === 'texture') {
+      // Texture walls own alpha-tested image materials; applying a generic node
+      // material would replace the map and make the wall disappear.
+      return
+    }
   }
 
   // Lightweight import nodes render with their own inline material override or
@@ -3875,10 +3886,15 @@ function syncWallPreviewGroupForEditor(options: {
     previewKey: options.previewKey,
   })
 
-  if (node?.materials && node.materials.length) {
-    applyMaterialOverrides(group, node.materials, materialOverrideOptions)
-  } else {
-    resetMaterialOverrides(group)
+  const wallRenderMode = normalizeWallRenderMode(
+    (wallProps as { wallRenderMode?: unknown } | null | undefined)?.wallRenderMode,
+  )
+  if (wallRenderMode !== 'texture') {
+    if (node?.materials && node.materials.length) {
+      applyMaterialOverrides(group, node.materials, materialOverrideOptions)
+    } else {
+      resetMaterialOverrides(group)
+    }
   }
 
   if (!rootGroup.children.includes(group)) {
@@ -4219,7 +4235,7 @@ function shouldRemoveWallNodeAfterErase(
   wallObject: THREE.Object3D | null,
 ): boolean {
   const renderMode = resolveSelectedWallRenderMode(node)
-  if (renderMode === 'stretch') {
+  if (renderMode !== 'repeatInstances') {
     return compileWallSegmentsFromDefinition(nextWallMesh).length === 0
   }
 
@@ -27560,6 +27576,7 @@ onBeforeUnmount(() => {
   disposeScene()
   disposeWallDoorSelectionController()
   disposeWallEraseHoverPresenter()
+  wallRenderer.disposeWallTextures()
   disposeCachedTextures()
   if (canvasRef.value) {
     canvasRef.value.removeEventListener('wheel', handleViewportWheel, { capture: true })

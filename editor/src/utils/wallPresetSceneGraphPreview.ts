@@ -61,7 +61,26 @@ function collectWallPresetAssetIds(preset: WallPresetData): string[] {
   )
 }
 
-function buildWallRenderAssetsFromPreset(preset: WallPresetData, loadedAssetObjects: Map<string, THREE.Object3D>): WallRenderAssetObjects {
+function collectWallPresetTextureAssetIds(preset: WallPresetData): string[] {
+  return Array.from(new Set([
+    preset.wallProps.bodyTextureAssetId,
+    preset.wallProps.headTextureAssetId,
+    preset.wallProps.footTextureAssetId,
+    ...preset.wallProps.cornerModels.flatMap((entry) => [
+      entry.bodyTextureAssetId,
+      entry.headTextureAssetId,
+      entry.footTextureAssetId,
+    ]),
+  ]
+    .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+    .filter((assetId) => assetId.length > 0)))
+}
+
+function buildWallRenderAssetsFromPreset(
+  preset: WallPresetData,
+  loadedAssetObjects: Map<string, THREE.Object3D>,
+  loadedTextures: Map<string, THREE.Texture>,
+): WallRenderAssetObjects {
   const wallProps = preset.wallProps
   const resolveAsset = (assetId: string | null | undefined): THREE.Object3D | null => {
     const normalized = typeof assetId === 'string' ? assetId.trim() : ''
@@ -85,7 +104,9 @@ function buildWallRenderAssetsFromPreset(preset: WallPresetData, loadedAssetObje
   const headCornerAssetIds = Array.from(new Set((wallProps.cornerModels ?? []).map((entry) => entry.headAssetId).filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)))
   const footCornerAssetIds = Array.from(new Set((wallProps.cornerModels ?? []).map((entry) => entry.footAssetId).filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)))
 
-  const assets: WallRenderAssetObjects = {}
+  const assets: WallRenderAssetObjects = {
+    texturesByAssetId: {},
+  }
   const bodyObject = resolveAsset(wallProps.bodyAssetId)
   if (bodyObject) assets.bodyObject = bodyObject
   const headObject = resolveAsset(wallProps.headAssetId)
@@ -106,6 +127,24 @@ function buildWallRenderAssetsFromPreset(preset: WallPresetData, loadedAssetObje
   const footCornerMap = resolveCornerAssetMap(footCornerAssetIds)
   if (footCornerMap) assets.footCornerObjectsByAssetId = footCornerMap
 
+  for (const assetId of collectWallPresetTextureAssetIds(preset)) {
+    const texture = loadedTextures.get(assetId)
+    if (!texture) {
+      continue
+    }
+    const image = texture.image as {
+      width?: number
+      height?: number
+      naturalWidth?: number
+      naturalHeight?: number
+    } | null | undefined
+    const width = Number(image?.naturalWidth ?? image?.width)
+    const height = Number(image?.naturalHeight ?? image?.height)
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      assets.texturesByAssetId![assetId] = { texture, width, height }
+    }
+  }
+
   return assets
 }
 
@@ -115,6 +154,9 @@ function buildWallRenderOptionsFromPreset(preset: WallPresetData, definition: Wa
     cornerModels: preset.wallProps.cornerModels ?? [],
     wallRenderMode: preset.wallProps.wallRenderMode,
     repeatInstanceStep: preset.wallProps.repeatInstanceStep,
+    bodyTextureAssetId: preset.wallProps.bodyTextureAssetId,
+    headTextureAssetId: preset.wallProps.headTextureAssetId,
+    footTextureAssetId: preset.wallProps.footTextureAssetId,
     headAssetHeight: Number.isFinite(preset.wallProps.headAssetHeight) ? Number(preset.wallProps.headAssetHeight) : undefined,
     footAssetHeight: Number.isFinite(preset.wallProps.footAssetHeight) ? Number(preset.wallProps.footAssetHeight) : undefined,
     bodyUvAxis: preset.wallProps.bodyUvAxis,
@@ -179,10 +221,13 @@ export function buildWallPresetPreviewDynamicMesh(
 export async function buildWallPresetPreviewObject(options: {
   preset: WallPresetData
   loadAssetMesh: (assetId: string) => Promise<THREE.Object3D | null>
+  loadWallTexture: (assetId: string) => Promise<THREE.Texture | null>
 }): Promise<THREE.Object3D | null> {
   const definition = buildWallPresetPreviewDynamicMesh(options.preset, { rectSizeMeters: 10 })
   const loadedAssetObjects = new Map<string, THREE.Object3D>()
-  const assetIds = collectWallPresetAssetIds(options.preset)
+  const loadedTextures = new Map<string, THREE.Texture>()
+  const isTextureMode = options.preset.wallProps.wallRenderMode === 'texture'
+  const assetIds = isTextureMode ? [] : collectWallPresetAssetIds(options.preset)
 
 
   for (const assetId of assetIds) {
@@ -196,11 +241,19 @@ export async function buildWallPresetPreviewObject(options: {
 
   }
 
-  const renderAssets = buildWallRenderAssetsFromPreset(options.preset, loadedAssetObjects)
+  for (const assetId of collectWallPresetTextureAssetIds(options.preset)) {
+    const texture = await options.loadWallTexture(assetId).catch(() => null)
+    if (texture) {
+      loadedTextures.set(assetId, texture)
+    }
+  }
+
+  const renderAssets = buildWallRenderAssetsFromPreset(options.preset, loadedAssetObjects, loadedTextures)
   const renderOptions = buildWallRenderOptionsFromPreset(options.preset, definition)
 
 
   const wallObject = createWallRenderGroup(definition, renderAssets, renderOptions)
+  loadedTextures.forEach((texture) => texture.dispose())
   wallObject.name = options.preset.name || 'Wall Preset Preview'
 
 
@@ -219,6 +272,12 @@ export async function renderWallPresetThumbnailDataUrl(options: {
   const wallObject = await buildWallPresetPreviewObject({
     preset: options.preset,
     loadAssetMesh: options.loadAssetMesh,
+    loadWallTexture: async (assetId) => {
+      if (!options.resolveTexture) {
+        return null
+      }
+      return await options.resolveTexture({ assetId })
+    },
   })
   if (!wallObject) {
     return null

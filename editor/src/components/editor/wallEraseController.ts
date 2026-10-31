@@ -24,6 +24,7 @@ import {
   type WallComponentProps,
 } from '@schema/components'
 import { addWallOpeningToDefinition, removeWallOpeningFromDefinition } from '@schema/wallLayout'
+import { normalizeWallRenderMode, type WallRenderMode } from '@schema/wallRenderMode'
 import {
   getWallLocalPointAtDefinitionChainDistance,
   computeWallOpeningForLocalHit,
@@ -101,11 +102,11 @@ export type SelectedWallEraseTarget =
     dragKey: string
   }
 
-export function resolveSelectedWallRenderMode(node: SceneNode): 'stretch' | 'repeatInstances' {
+export function resolveSelectedWallRenderMode(node: SceneNode): WallRenderMode {
   const component = node.components?.[WALL_COMPONENT_TYPE] as SceneNodeComponentState<WallComponentProps> | undefined
   try {
     const props = clampWallProps(component?.props as Partial<WallComponentProps> | null)
-    return props.wallRenderMode === 'repeatInstances' ? 'repeatInstances' : 'stretch'
+    return normalizeWallRenderMode(props.wallRenderMode)
   } catch {
     return 'stretch'
   }
@@ -431,10 +432,10 @@ export function createWallEraseController(options: CreateWallEraseControllerOpti
 
     const renderMode = resolveSelectedWallRenderMode(wallNode)
     const rayHit = resolveWallRayHitFromCurrentRay(wallObject, options.raycaster, options.groundPlane, {
-      allowPlaneFallback: options.wallRepairModeActive.value && renderMode === 'stretch',
+      allowPlaneFallback: options.wallRepairModeActive.value && renderMode !== 'repeatInstances',
       preferredHitObject: renderMode === 'repeatInstances'
         ? (object) => Boolean(extractWallRepeatInstanceMetaFromHitObject(object, wallObject))
-        : renderMode === 'stretch' && !options.wallRepairModeActive.value
+        : !options.wallRepairModeActive.value
           ? (object) => Boolean(extractWallHitArcMetaFromHitObject(object, wallObject))
           : undefined,
     })
@@ -485,7 +486,7 @@ export function createWallEraseController(options: CreateWallEraseControllerOpti
     }
 
     if (!rayHit) {
-      if (renderMode === 'stretch' && !options.wallRepairModeActive.value) {
+      if (!options.wallRepairModeActive.value) {
         const instancedHit = resolveSelectedWallInstancedPickHitFromCurrentRay(
           selectedWallId,
           wallObject,

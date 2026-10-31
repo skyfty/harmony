@@ -9,6 +9,7 @@ import {
   WALL_DEFAULT_WIDTH,
   type WallComponentProps,
 } from '@schema/components'
+import { normalizeWallRenderMode } from '@schema/wallRenderMode'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { extractExtension } from '@/utils/blob'
@@ -21,7 +22,6 @@ import {
   isWallPresetFilename,
   type StrictWallPresetWallProps,
   type WallForwardAxis,
-  type WallRenderMode,
   type WallUvAxis,
   type WallPresetData,
   type WallPresetMaterialPatch,
@@ -91,13 +91,16 @@ export const BUILTIN_AIR_WALL_PRESET: WallPresetData = {
     forbidden: false,
     isAirWall: true,
     bodyAssetId: null,
+    bodyTextureAssetId: null,
     bodyOrientation: { forwardAxis: '+z', yawDeg: 0 },
     bodyUvAxis: 'auto',
     headAssetId: null,
+    headTextureAssetId: null,
     headAssetHeight: 0,
     headOrientation: { forwardAxis: '+z', yawDeg: 0 },
     headUvAxis: 'auto',
     footAssetId: null,
+    footTextureAssetId: null,
     footAssetHeight: 0,
     footOrientation: { forwardAxis: '+z', yawDeg: 0 },
     footUvAxis: 'auto',
@@ -191,15 +194,25 @@ export function collectWallPresetDependencyAssetIds(
   const aliases = buildWallPresetDependencyAliasMap(preset)
   const wallAssetIds = [
     wallProps.bodyAssetId,
+    wallProps.bodyTextureAssetId,
     wallProps.headAssetId,
+    wallProps.headTextureAssetId,
     wallProps.footAssetId,
+    wallProps.footTextureAssetId,
     wallProps.bodyEndCapAssetId,
     wallProps.headEndCapAssetId,
     wallProps.footEndCapAssetId,
   ]
   const registryAssetIds = Object.keys((preset.assetRegistry ?? {}) as Record<string, unknown>)
   const cornerAssetIds = (((wallProps as any).cornerModels ?? []) as any[])
-    .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId])
+    .flatMap((rule) => [
+      rule?.bodyAssetId,
+      rule?.headAssetId,
+      rule?.footAssetId,
+      rule?.bodyTextureAssetId,
+      rule?.headTextureAssetId,
+      rule?.footTextureAssetId,
+    ])
   const textureAssetIds = Object.values(preset.materialPatches ?? {}).flatMap((patch) => {
     const textures = ((patch as any)?.props as any)?.textures as Record<string, any> | null | undefined
     if (!textures || typeof textures !== 'object') {
@@ -275,10 +288,6 @@ function resolveWallBodyMaterialConfigId(materialIds: string[], preferredId: unk
   return materialIds[0] ?? null
 }
 
-function normalizeWallRenderMode(value: unknown, fallback: WallRenderMode = 'stretch'): WallRenderMode {
-  return value === 'repeatInstances' ? 'repeatInstances' : fallback
-}
-
 function resolveWallPresetMaterialPatchId(key: string, patch: Record<string, unknown>): string {
   const normalizedPatchId = normalizeOptionalAssetId(patch.id)
   if (normalizedPatchId) {
@@ -299,13 +308,16 @@ function buildWallComponentPropsPatchFromPreset(wallProps: StrictWallPresetWallP
     forbidden: wallProps.forbidden,
     isAirWall: wallProps.isAirWall,
     bodyAssetId: wallProps.bodyAssetId ?? null,
+    bodyTextureAssetId: wallProps.bodyTextureAssetId ?? null,
     bodyOrientation: wallProps.bodyOrientation,
     bodyUvAxis: wallProps.bodyUvAxis,
     headAssetId: wallProps.headAssetId ?? null,
+    headTextureAssetId: wallProps.headTextureAssetId ?? null,
     headAssetHeight: wallProps.headAssetHeight,
     headOrientation: wallProps.headOrientation,
     headUvAxis: wallProps.headUvAxis,
     footAssetId: wallProps.footAssetId ?? null,
+    footTextureAssetId: wallProps.footTextureAssetId ?? null,
     footAssetHeight: wallProps.footAssetHeight,
     footOrientation: wallProps.footOrientation,
     footUvAxis: wallProps.footUvAxis,
@@ -329,8 +341,11 @@ function normalizeWallPresetWallPropsAssetIds(
   return {
     ...wallProps,
     bodyAssetId: normalizeAssetIdWithRegistry(wallProps.bodyAssetId, presetAssetRegistry),
+    bodyTextureAssetId: normalizeAssetIdWithRegistry(wallProps.bodyTextureAssetId, presetAssetRegistry),
     headAssetId: normalizeAssetIdWithRegistry(wallProps.headAssetId, presetAssetRegistry),
+    headTextureAssetId: normalizeAssetIdWithRegistry(wallProps.headTextureAssetId, presetAssetRegistry),
     footAssetId: normalizeAssetIdWithRegistry(wallProps.footAssetId, presetAssetRegistry),
+    footTextureAssetId: normalizeAssetIdWithRegistry(wallProps.footTextureAssetId, presetAssetRegistry),
     bodyEndCapAssetId: normalizeAssetIdWithRegistry(wallProps.bodyEndCapAssetId, presetAssetRegistry),
     headEndCapAssetId: normalizeAssetIdWithRegistry(wallProps.headEndCapAssetId, presetAssetRegistry),
     footEndCapAssetId: normalizeAssetIdWithRegistry(wallProps.footEndCapAssetId, presetAssetRegistry),
@@ -339,6 +354,9 @@ function normalizeWallPresetWallPropsAssetIds(
       bodyAssetId: normalizeAssetIdWithRegistry(entry.bodyAssetId, presetAssetRegistry),
       headAssetId: normalizeAssetIdWithRegistry(entry.headAssetId, presetAssetRegistry),
       footAssetId: normalizeAssetIdWithRegistry(entry.footAssetId, presetAssetRegistry),
+      bodyTextureAssetId: normalizeAssetIdWithRegistry(entry.bodyTextureAssetId, presetAssetRegistry),
+      headTextureAssetId: normalizeAssetIdWithRegistry(entry.headTextureAssetId, presetAssetRegistry),
+      footTextureAssetId: normalizeAssetIdWithRegistry(entry.footTextureAssetId, presetAssetRegistry),
     })),
   }
 }
@@ -417,6 +435,17 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     }
     return normalized
   }
+  const optionalAssetIdOrNull = (key: string): string | null => {
+    const raw = record[key]
+    if (raw == null) {
+      return null
+    }
+    const normalized = normalizeOptionalAssetId(raw)
+    if (!normalized) {
+      throw new Error(`墙体预设 wallProps 缺少或无效字段: ${key}`)
+    }
+    return normalized
+  }
 
   const requiredForwardAxis = (value: unknown, label: string): WallForwardAxis => {
     if (value === '+x' || value === '-x' || value === '+z' || value === '-z') {
@@ -481,6 +510,17 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     const bodyAssetId = row.bodyAssetId === null ? null : normalizeOptionalAssetId(row.bodyAssetId)
     const headAssetId = row.headAssetId === null ? null : normalizeOptionalAssetId(row.headAssetId)
     const footAssetId = row.footAssetId === null ? null : normalizeOptionalAssetId(row.footAssetId)
+    const optionalCornerTextureAssetId = (key: string): string | null => {
+      const raw = row[key]
+      if (raw == null) {
+        return null
+      }
+      const normalized = normalizeOptionalAssetId(raw)
+      if (!normalized) {
+        throw new Error(`墙体预设 wallProps.cornerModels[${index}] 缺少或无效字段: ${key}`)
+      }
+      return normalized
+    }
     if (row.bodyAssetId !== null && bodyAssetId === null) {
       throw new Error(`墙体预设 wallProps.cornerModels[${index}] 缺少或无效字段: bodyAssetId`)
     }
@@ -511,6 +551,9 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
       bodyAssetId: bodyAssetId ?? null,
       headAssetId: headAssetId ?? null,
       footAssetId: footAssetId ?? null,
+      bodyTextureAssetId: optionalCornerTextureAssetId('bodyTextureAssetId'),
+      headTextureAssetId: optionalCornerTextureAssetId('headTextureAssetId'),
+      footTextureAssetId: optionalCornerTextureAssetId('footTextureAssetId'),
       bodyOffsetLocal,
       headOffsetLocal,
       footOffsetLocal,
@@ -539,13 +582,16 @@ function assertStrictWallPresetWallProps(value: unknown): StrictWallPresetWallPr
     forbidden: optionalBoolean('forbidden', false),
     isAirWall: requiredBoolean('isAirWall'),
     bodyAssetId: requiredAssetIdOrNull('bodyAssetId'),
+    bodyTextureAssetId: optionalAssetIdOrNull('bodyTextureAssetId'),
     bodyOrientation: requiredOrientation(record.bodyOrientation, 'bodyOrientation') as any,
     bodyUvAxis: optionalUvAxis(record.bodyUvAxis, 'auto'),
     headAssetId: requiredAssetIdOrNull('headAssetId'),
+    headTextureAssetId: optionalAssetIdOrNull('headTextureAssetId'),
     headAssetHeight: Math.max(0, requiredNumber('headAssetHeight')),
     headOrientation: requiredOrientation(record.headOrientation, 'headOrientation') as any,
     headUvAxis: optionalUvAxis(record.headUvAxis, optionalUvAxis(record.bodyUvAxis, 'auto')),
     footAssetId: requiredAssetIdOrNull('footAssetId'),
+    footTextureAssetId: optionalAssetIdOrNull('footTextureAssetId'),
     footAssetHeight: Math.max(0, requiredNumber('footAssetHeight')),
     footOrientation: requiredOrientation(record.footOrientation, 'footOrientation') as any,
     footUvAxis: optionalUvAxis(record.footUvAxis, optionalUvAxis(record.bodyUvAxis, 'auto')),
@@ -584,8 +630,9 @@ export function parseWallPresetData(text: string): WallPresetData {
   if (record.kind !== 'wall-preset') {
     throw new Error('墙体预设格式不受支持')
   }
-  if (record.formatVersion !== WALL_PRESET_FORMAT_VERSION) {
-    throw new Error(`墙体预设版本不匹配 (expected ${WALL_PRESET_FORMAT_VERSION})`)
+  const sourceFormatVersion = Number(record.formatVersion)
+  if (sourceFormatVersion !== 9 && sourceFormatVersion !== WALL_PRESET_FORMAT_VERSION) {
+    throw new Error(`墙体预设版本不匹配 (expected 9 or ${WALL_PRESET_FORMAT_VERSION})`)
   }
 
   const name = typeof record.name === 'string' && record.name.trim().length ? record.name.trim() : ''
@@ -841,13 +888,23 @@ export function createWallPresetActions(deps: WallPresetActionsDeps) {
         new Set(
           [
             wallPropsWithMaterialBinding.bodyAssetId,
+            wallPropsWithMaterialBinding.bodyTextureAssetId,
             wallPropsWithMaterialBinding.headAssetId,
+            wallPropsWithMaterialBinding.headTextureAssetId,
             wallPropsWithMaterialBinding.footAssetId,
+            wallPropsWithMaterialBinding.footTextureAssetId,
             wallPropsWithMaterialBinding.bodyEndCapAssetId,
             wallPropsWithMaterialBinding.headEndCapAssetId,
             wallPropsWithMaterialBinding.footEndCapAssetId,
             ...(((wallPropsWithMaterialBinding as any).cornerModels ?? []) as any[])
-              .flatMap((rule) => [rule?.bodyAssetId, rule?.headAssetId, rule?.footAssetId])
+              .flatMap((rule) => [
+                rule?.bodyAssetId,
+                rule?.headAssetId,
+                rule?.footAssetId,
+                rule?.bodyTextureAssetId,
+                rule?.headTextureAssetId,
+                rule?.footTextureAssetId,
+              ])
               .map((value) => (typeof value === 'string' ? value.trim() : ''))
               .filter((value) => value.length > 0),
             ...normalizedNodeMaterials.flatMap((material) => {
