@@ -6,6 +6,7 @@ import {
   markSurfaceImageRuntimeOwnership,
   normalizeSurfaceImageMetadata,
   resetSurfaceImageRuntimeTransform,
+  resolvePreviewSurfaceMaterialOptions,
   resolveSurfaceImageBasis,
   resolveSurfaceImageAttachmentParent,
 } from '@/utils/surfaceImageDecal'
@@ -259,6 +260,29 @@ describe('surface image decal geometry', () => {
     expect(runtimeSnapshot.position.toArray()).toEqual([0, 0, 0])
     expect(runtimeSnapshot.rotation.toArray().slice(0, 3)).toEqual([0, 0, 0])
     expect(runtimeSnapshot.scale.toArray()).toEqual([1, 1, 1])
+  })
+
+  it('keeps transparent Surface Image materials visible in Preview and SceneryViewer without changing normal node hiding', () => {
+    const surfaceNode = {
+      userData: {
+        __surfaceImage: {
+          version: 1,
+          assetId: 'image-1',
+          targetNodeId: 'wall-1',
+          attachmentMode: 'world',
+          widthMeters: 1,
+          heightMeters: 1,
+        },
+      },
+      materials: [],
+    } as unknown as Parameters<typeof resolvePreviewSurfaceMaterialOptions>[0]
+    const baseOptions = { hideTransparentMaterials: true }
+    expect(resolvePreviewSurfaceMaterialOptions(surfaceNode, baseOptions)).toEqual({
+      hideTransparentMaterials: false,
+    })
+
+    const normalNode = { userData: {}, materials: [] } as unknown as typeof surfaceNode
+    expect(resolvePreviewSurfaceMaterialOptions(normalNode, baseOptions)).toBe(baseOptions)
   })
 
   it('attaches to the target, nearest capable ancestor, or world with deterministic fallback', () => {

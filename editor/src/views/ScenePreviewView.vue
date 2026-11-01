@@ -123,6 +123,7 @@ import {
 	resetMaterialOverrides,
 	type MaterialTextureAssignmentOptions,
 } from '@schema/material'
+import { resolvePreviewSurfaceMaterialOptions } from '@/utils/surfaceImageDecal'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
@@ -312,6 +313,7 @@ import {
 	skinComponentDefinition,
 	generalMeshComponentDefinition,
 	proceduralLandscapeComponentDefinition,
+	landscapeExclusionZoneComponentDefinition,
 	particleSystemComponentDefinition,
 	warpGateComponentDefinition,
 	rigidbodyComponentDefinition,
@@ -1929,6 +1931,7 @@ previewComponentManager.registerDefinition(preloadableComponentDefinition)
 previewComponentManager.registerDefinition(onlineComponentDefinition)
 previewComponentManager.registerDefinition(generalMeshComponentDefinition)
 previewComponentManager.registerDefinition(proceduralLandscapeComponentDefinition)
+previewComponentManager.registerDefinition(landscapeExclusionZoneComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -16674,9 +16677,11 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
 	const instancedAssetId = typeof targetObject.userData?.instancedAssetId === 'string'
 		? targetObject.userData.instancedAssetId
 		: null
-	const overrideOptions = isImportedModelOverrideNode(node) && node.materials && node.materials.length
-		? { ...materialOverrideOptions, hideTransparentMaterials: false, inheritUnspecifiedTextures: true }
-		: materialOverrideOptions
+	const overrideOptions = resolvePreviewSurfaceMaterialOptions(
+		node,
+		materialOverrideOptions,
+		isImportedModelOverrideNode(node),
+	)
 	if (instancedAssetId && isImportedModelOverrideNode(node)) {
 		// Imported model overrides must never mutate the shared cached
 		// InstancedMesh materials. The runtime instancing predicate keeps these

@@ -1175,6 +1175,9 @@ import {
   PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
 } from '@harmony/schema/components/definitions/proceduralLandscapeComponent';
 import {
+  landscapeExclusionZoneComponentDefinition,
+} from '@harmony/schema/components/definitions/landscapeExclusionZoneComponent';
+import {
   collectActiveProceduralLandscapeNodeIds as collectActiveProceduralLandscapeNodeIdsFromNodes,
   collectProceduralLandscapeCoreTexturePreloadForNodes,
   collectProceduralLandscapeTexturePreloadForNodes,
@@ -1384,6 +1387,7 @@ import {
 import {
   applyMaterialOverrides,
   disposeMaterialTextures,
+  resolveNodeMaterialTextureAssignmentOptions,
   resolveSceneNodeMaterialSlots,
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
@@ -2645,6 +2649,7 @@ previewComponentManager.registerDefinition(preloadableComponentDefinition);
 previewComponentManager.registerDefinition(deviceAdaptationComponentDefinition);
 previewComponentManager.registerDefinition(generalMeshComponentDefinition);
 previewComponentManager.registerDefinition(proceduralLandscapeComponentDefinition);
+previewComponentManager.registerDefinition(landscapeExclusionZoneComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
@@ -14451,9 +14456,11 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
   }
   // Imported model overrides are incremental: unlisted texture slots keep the
   // model's own texture instead of being cleared.
-  const importedOverrideOptions = isImportedModelOverrideNode(node)
-    ? { ...materialOverrideOptions, inheritUnspecifiedTextures: true }
-    : materialOverrideOptions;
+  const overrideOptions = resolveNodeMaterialTextureAssignmentOptions(
+    node,
+    materialOverrideOptions,
+    isImportedModelOverrideNode(node),
+  );
   const selectedMaterials = node.materials?.length
     ? resolveSceneNodeMaterialSlots(node.materials, activeDeviceAdaptationProfile?.id ?? null)
     : [];
@@ -14464,7 +14471,7 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
     const modelGroup = getCachedModelObject(instancedAssetId);
     modelGroup?.meshes.forEach((mesh) => {
       if (selectedMaterials.length) {
-        applyMaterialOverrides(mesh, selectedMaterials, importedOverrideOptions);
+        applyMaterialOverrides(mesh, selectedMaterials, overrideOptions);
       } else {
         resetMaterialOverrides(mesh);
       }
@@ -14473,11 +14480,11 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
   }
 
   if (selectedMaterials.length) {
-    applyMaterialOverrides(targetObject, selectedMaterials, importedOverrideOptions);
+    applyMaterialOverrides(targetObject, selectedMaterials, overrideOptions);
   } else if (isImportedModelOverrideNode(node)) {
     resetMaterialOverrides(targetObject);
   } else {
-    applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions);
+    applyMaterialOverrides(targetObject, node.materials, overrideOptions);
   }
 }
 

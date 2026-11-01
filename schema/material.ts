@@ -8,6 +8,7 @@ import type {
   SceneMaterialTextureSlot,
   SceneMaterialTextureSlotMap,
   SceneMaterialType,
+  SceneNode,
   SceneNodeMaterial,
   SceneResourceSummaryEntry,
 } from './core';
@@ -302,6 +303,38 @@ export interface MaterialTextureAssignmentOptions {
    * owns all texture slots and unset ones are cleared.
    */
   inheritUnspecifiedTextures?: boolean
+}
+
+/**
+ * Resolve the options used when runtime node materials replace the materials
+ * already present on a scene object.
+ *
+ * Surface images are user-authored transparent decals. Hiding every
+ * transparent material would make the complete decal object disappear in
+ * runtime viewers. Imported-model overrides similarly need their own
+ * transparent texture slots to remain available.
+ */
+export function resolveNodeMaterialTextureAssignmentOptions<
+  T extends MaterialTextureAssignmentOptions,
+>(
+  node: Pick<SceneNode, 'userData' | 'materials'>,
+  options: T,
+  importedModelOverride = false,
+): T {
+  if (node.userData?.__surfaceImage) {
+    return {
+      ...options,
+      hideTransparentMaterials: false,
+    };
+  }
+  if (importedModelOverride && Array.isArray(node.materials) && node.materials.length > 0) {
+    return {
+      ...options,
+      hideTransparentMaterials: false,
+      inheritUnspecifiedTextures: true,
+    };
+  }
+  return options;
 }
 
 export function createTextureSettings(

@@ -6,6 +6,7 @@ import {
   extractCompiledStaticMeshMetadataFromUserData,
   orientCompiledStaticMeshTrianglesTowardPositiveZ,
 } from '@schema/compiledStaticMesh'
+import { resolveNodeMaterialTextureAssignmentOptions } from '@schema/material'
 import type { SceneNode } from '@schema/core'
 
 export const SURFACE_IMAGE_USERDATA_KEY = '__surfaceImage'
@@ -199,6 +200,17 @@ export function resetSurfaceImageRuntimeTransform(object: THREE.Object3D): void 
   object.rotation.set(0, 0, 0)
   object.scale.set(1, 1, 1)
   object.updateMatrix()
+}
+
+export function resolvePreviewSurfaceMaterialOptions<T extends {
+  hideTransparentMaterials?: boolean
+  inheritUnspecifiedTextures?: boolean
+}>(
+  node: SceneNode,
+  options: T,
+  importedModelOverride = false,
+): T {
+  return resolveNodeMaterialTextureAssignmentOptions(node, options, importedModelOverride)
 }
 
 export function isSurfaceImageObject(object: THREE.Object3D | null | undefined): boolean {
