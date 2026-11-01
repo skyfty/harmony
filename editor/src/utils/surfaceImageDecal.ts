@@ -194,6 +194,13 @@ export function markSurfaceImageRuntimeOwnership(nodeId: string, object: THREE.O
   object.userData.ownerNodeId = nodeId
 }
 
+export function resetSurfaceImageRuntimeTransform(object: THREE.Object3D): void {
+  object.position.set(0, 0, 0)
+  object.rotation.set(0, 0, 0)
+  object.scale.set(1, 1, 1)
+  object.updateMatrix()
+}
+
 export function isSurfaceImageObject(object: THREE.Object3D | null | undefined): boolean {
   let current = object
   while (current) {

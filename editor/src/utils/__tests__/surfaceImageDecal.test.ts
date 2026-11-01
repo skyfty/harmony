@@ -5,6 +5,7 @@ import {
   buildSurfaceImageDecalGeometry,
   markSurfaceImageRuntimeOwnership,
   normalizeSurfaceImageMetadata,
+  resetSurfaceImageRuntimeTransform,
   resolveSurfaceImageBasis,
   resolveSurfaceImageAttachmentParent,
 } from '@/utils/surfaceImageDecal'
@@ -247,6 +248,17 @@ describe('surface image decal geometry', () => {
     markSurfaceImageRuntimeOwnership('surface-image', runtime)
     expect(runtime.userData.nodeId).toBeUndefined()
     expect(runtime.userData.ownerNodeId).toBe('surface-image')
+  })
+
+  it('drops the snapshot transform before wrapping a copied surface image in its node container', () => {
+    const runtimeSnapshot = new THREE.Group()
+    runtimeSnapshot.position.set(3, 2, 1)
+    runtimeSnapshot.rotation.set(0.2, 0.4, 0.1)
+    runtimeSnapshot.scale.set(2, 2, 2)
+    resetSurfaceImageRuntimeTransform(runtimeSnapshot)
+    expect(runtimeSnapshot.position.toArray()).toEqual([0, 0, 0])
+    expect(runtimeSnapshot.rotation.toArray().slice(0, 3)).toEqual([0, 0, 0])
+    expect(runtimeSnapshot.scale.toArray()).toEqual([1, 1, 1])
   })
 
   it('attaches to the target, nearest capable ancestor, or world with deterministic fallback', () => {

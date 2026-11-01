@@ -412,6 +412,7 @@ import {
   createSurfaceImageRuntimeMesh,
   extractSurfaceImageMetadataFromUserData,
   markSurfaceImageRuntimeOwnership,
+  resetSurfaceImageRuntimeTransform,
   resolveSurfaceImageBasis,
 } from '@/utils/surfaceImageDecal'
 import {
@@ -27065,6 +27066,11 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         runtimeObject.removeFromParent()
         if (surfaceImageMetadata) {
           markSurfaceImageRuntimeOwnership(node.id, runtimeObject)
+          // Clipboard runtime snapshots already carry the node's local
+          // transform. The Mesh wrapper below owns that transform, so retaining
+          // it here applies the position/rotation/scale twice and offsets only
+          // the copied surface image.
+          resetSurfaceImageRuntimeTransform(runtimeObject)
         } else {
           runtimeObject.userData.nodeId = node.id
         }
