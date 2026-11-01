@@ -242,7 +242,12 @@ import {
   GUIDE_ROUTE_EDITOR_RENDER_OPTIONS,
 } from '@schema/guideRouteMesh'
 import { syncProceduralCityRuntimeArtifact } from '@schema/components/definitions/proceduralCityComponent'
-import { COMPILED_STATIC_MESH_USERDATA_KEY } from '@schema/compiledStaticMesh'
+import {
+  COMPILED_STATIC_MESH_USERDATA_KEY,
+  createCompiledStaticMeshRuntimeMesh,
+  extractCompiledStaticMeshMetadataFromUserData,
+  type CompiledStaticMeshMetadata,
+} from '@schema/compiledStaticMesh'
 import { buildRegionDynamicMeshFromLocalVertices, buildRegionDynamicMeshFromWorldPoints } from '@schema/regionUtils'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
@@ -312,6 +317,16 @@ import {
   normalizeAiModelMeshInput,
   type AiModelMeshMetadata,
 } from '@/utils/aiModelMesh'
+import {
+  SURFACE_IMAGE_USERDATA_KEY,
+  SURFACE_IMAGE_VERSION,
+  cloneSurfaceImageMetadata,
+  extractSurfaceImageMetadataFromUserData,
+  normalizeSurfaceImageMetadata,
+  resolveSurfaceImageAttachmentParent,
+  type SurfaceImageAttachmentMode,
+  type SurfaceImageMetadataV1,
+} from '@/utils/surfaceImageDecal'
 
 import {
   ASSET_CATEGORY_CONFIG,
@@ -5061,6 +5076,17 @@ function cloneAiModelMeshMetadata(metadata: AiModelMeshMetadata): AiModelMeshMet
   }
 }
 
+function cloneCompiledStaticMeshMetadata(metadata: CompiledStaticMeshMetadata): CompiledStaticMeshMetadata {
+  return {
+    version: metadata.version,
+    name: metadata.name,
+    vertices: [...metadata.vertices],
+    indices: [...metadata.indices],
+    uvs: metadata.uvs ? [...metadata.uvs] : undefined,
+    groups: metadata.groups ? metadata.groups.map((group) => ({ ...group })) : undefined,
+  }
+}
+
 function createAiModelMeshMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color: '#d0d0d0',
@@ -5108,6 +5134,39 @@ function ensureAiModelMeshRuntime(node: SceneNode): boolean {
     return true
   } catch (error) {
     console.warn('Failed to rebuild AI generated mesh runtime', node.id, error)
+    return false
+  }
+}
+
+function ensureCompiledStaticMeshRuntime(node: SceneNode): boolean {
+  const metadata = extractCompiledStaticMeshMetadataFromUserData(node.userData)
+  if (!metadata || node.dynamicMesh || getRuntimeObject(node.id)) {
+    return false
+  }
+  if (extractSurfaceImageMetadataFromUserData(node.userData)) {
+    const primaryMaterial = node.materials?.[0]
+    if (primaryMaterial && primaryMaterial.type !== 'MeshBasicMaterial') {
+      primaryMaterial.type = 'MeshBasicMaterial'
+    }
+  }
+  try {
+    const runtime = createCompiledStaticMeshRuntimeMesh(metadata, {
+      name: node.name ?? metadata.name ?? 'Compiled Static Mesh',
+    })
+    runtime.castShadow = false
+    runtime.receiveShadow = true
+    runtime.userData = {
+      ...(runtime.userData ?? {}),
+      [COMPILED_STATIC_MESH_USERDATA_KEY]: cloneCompiledStaticMeshMetadata(metadata),
+    }
+    prepareRuntimeObjectForNode(runtime)
+    tagObjectWithNodeId(runtime, node.id)
+    registerRuntimeObject(node.id, runtime)
+    componentManager.attachRuntime(node, runtime)
+    componentManager.syncNode(node)
+    return true
+  } catch (error) {
+    console.warn('Failed to rebuild compiled static mesh runtime', node.id, error)
     return false
   }
 }
@@ -17605,12 +17664,177 @@ export const useSceneStore = defineStore('scene', {
       return node
     },
 
+    createSurfaceImageNode(payload: {
+      assetId: string
+      assetName?: string | null
+      targetNodeId: string
+      geometry: CompiledStaticMeshMetadata
+      worldCenter: THREE.Vector3
+      worldQuaternion: THREE.Quaternion
+      widthMeters: number
+      heightMeters: number
+    }): { node: SceneNode; attachmentMode: SurfaceImageAttachmentMode } | null {
+      const assetId = payload.assetId.trim()
+      const targetNodeId = payload.targetNodeId.trim()
+      const widthMeters = Number(payload.widthMeters)
+      const heightMeters = Number(payload.heightMeters)
+      if (
+        !assetId
+        || !targetNodeId
+        || !Number.isFinite(widthMeters)
+        || !Number.isFinite(heightMeters)
+        || widthMeters <= 0
+        || heightMeters <= 0
+      ) {
+        return null
+      }
+      if (!findNodeById(this.nodes, targetNodeId)) {
+        return null
+      }
+      if (
+        !Number.isFinite(payload.worldCenter.x)
+        || !Number.isFinite(payload.worldCenter.y)
+        || !Number.isFinite(payload.worldCenter.z)
+        || !Number.isFinite(payload.worldQuaternion.x)
+        || !Number.isFinite(payload.worldQuaternion.y)
+        || !Number.isFinite(payload.worldQuaternion.z)
+        || !Number.isFinite(payload.worldQuaternion.w)
+        || payload.worldQuaternion.lengthSq() <= 1e-12
+      ) {
+        return null
+      }
+
+      const parentMap = buildParentMap(this.nodes)
+      const attachment = resolveSurfaceImageAttachmentParent(
+        targetNodeId,
+        (nodeId) => parentMap.get(nodeId) ?? null,
+        (nodeId) => allowsChildNodes(nodeId ? findNodeById(this.nodes, nodeId) : null),
+      )
+      let parentId = attachment.parentNodeId
+      let attachmentMode = attachment.attachmentMode
+
+      const desiredWorldMatrix = new THREE.Matrix4().compose(
+        payload.worldCenter.clone(),
+        payload.worldQuaternion.clone().normalize(),
+        new THREE.Vector3(1, 1, 1),
+      )
+      let localMatrix = desiredWorldMatrix
+      let parentWorldMatrix: THREE.Matrix4 | null = null
+      if (parentId) {
+        parentWorldMatrix = computeWorldMatrixForNode(this.nodes, parentId)
+        if (!parentWorldMatrix) {
+          return null
+        }
+        localMatrix = parentWorldMatrix.clone().invert().multiply(desiredWorldMatrix)
+      }
+      let localPosition = new THREE.Vector3()
+      let localQuaternion = new THREE.Quaternion()
+      let localScale = new THREE.Vector3()
+      localMatrix.decompose(localPosition, localQuaternion, localScale)
+      if (parentId && parentWorldMatrix) {
+        const reconstructedLocal = new THREE.Matrix4().compose(localPosition, localQuaternion, localScale)
+        const reconstructedWorld = parentWorldMatrix.clone().multiply(reconstructedLocal)
+        const matrixPreserved = reconstructedWorld.elements.every(
+          (value, index) => Math.abs(value - desiredWorldMatrix.elements[index]!) <= 1e-5,
+        )
+        if (!matrixPreserved) {
+          parentId = null
+          attachmentMode = 'world'
+          localMatrix = desiredWorldMatrix
+          localPosition = new THREE.Vector3()
+          localQuaternion = new THREE.Quaternion()
+          localScale = new THREE.Vector3()
+          localMatrix.decompose(localPosition, localQuaternion, localScale)
+        }
+      }
+      const localEuler = new THREE.Euler().setFromQuaternion(localQuaternion, 'XYZ')
+
+      const geometryMetadata = cloneCompiledStaticMeshMetadata(payload.geometry)
+      const nodeName = this.generateSurfaceImageNodeName()
+      const surfaceImageMetadata: SurfaceImageMetadataV1 = {
+        version: SURFACE_IMAGE_VERSION,
+        assetId,
+        targetNodeId,
+        attachmentMode,
+        widthMeters,
+        heightMeters,
+      }
+      const normalizedSurfaceImageMetadata = normalizeSurfaceImageMetadata(surfaceImageMetadata)
+      if (!normalizedSurfaceImageMetadata) {
+        return null
+      }
+
+      const runtime = createCompiledStaticMeshRuntimeMesh(geometryMetadata, {
+        name: nodeName,
+      })
+      runtime.castShadow = false
+      runtime.receiveShadow = true
+      runtime.userData = {
+        ...(runtime.userData ?? {}),
+        [COMPILED_STATIC_MESH_USERDATA_KEY]: cloneCompiledStaticMeshMetadata(geometryMetadata),
+        [SURFACE_IMAGE_USERDATA_KEY]: cloneSurfaceImageMetadata(normalizedSurfaceImageMetadata),
+      }
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const node = this.addSceneNode({
+          nodeType: 'Mesh',
+          object: runtime,
+          name: nodeName,
+          position: toPlainVector(localPosition),
+          rotation: {
+            x: localEuler.x,
+            y: localEuler.y,
+            z: localEuler.z,
+          },
+          scale: toPlainVector(localScale),
+          parentId,
+          userData: {
+            [COMPILED_STATIC_MESH_USERDATA_KEY]: cloneCompiledStaticMeshMetadata(geometryMetadata),
+            [SURFACE_IMAGE_USERDATA_KEY]: cloneSurfaceImageMetadata(normalizedSurfaceImageMetadata),
+          },
+        })
+        if (!node) {
+          return null
+        }
+
+        const primaryMaterial = node.materials?.[0] ?? this.addNodeMaterial(node.id)
+        if (primaryMaterial) {
+          primaryMaterial.type = 'MeshBasicMaterial'
+          node.materials = node.materials ? [...node.materials] : [primaryMaterial]
+          this.updateNodeMaterialProps(node.id, primaryMaterial.id, {
+            color: '#ffffff',
+            side: 'double',
+            transparent: true,
+            opacity: 1,
+            alphaTest: 0.01,
+            metalness: 0,
+            roughness: 0.85,
+            wireframe: false,
+          })
+          const textureRef: SceneMaterialTextureRef = payload.assetName?.trim()
+            ? { assetId, name: payload.assetName.trim() }
+            : { assetId }
+          this.setNodePrimaryTexture(node.id, textureRef, 'albedo')
+        }
+
+        return {
+          node: findNodeById(this.nodes, node.id) ?? node,
+          attachmentMode,
+        }
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
     rebuildGeneratedMeshRuntimes() {
       let created = 0
       const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
       const visitNodes = (list: SceneNode[]) => {
         list.forEach((node) => {
           const ensured = ensureDynamicMeshRuntime(node, groundNode)
+            || ensureCompiledStaticMeshRuntime(node)
             || ensureAiModelMeshRuntime(node)
             || ensureWaterSurfaceMeshRuntime(node)
           if (ensured) {
@@ -17825,6 +18049,38 @@ export const useSceneStore = defineStore('scene', {
     generateWaterNodeName() {
       const prefix = 'Water '
       const pattern = /^Water\s(\d{2})$/
+      const taken = new Set<string>()
+      const collectNames = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (typeof node.name === 'string' && node.name.startsWith(prefix)) {
+            taken.add(node.name)
+          }
+          if (node.children?.length) {
+            collectNames(node.children)
+          }
+        })
+      }
+      collectNames(this.nodes)
+      for (let index = 1; index < 1000; index += 1) {
+        const candidate = `${prefix}${index.toString().padStart(2, '0')}`
+        if (!taken.has(candidate)) {
+          return candidate
+        }
+      }
+      const fallback = Array.from(taken)
+        .map((name) => {
+          const match = name.match(pattern)
+          return match ? Number(match[1]) : Number.NaN
+        })
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b)
+      const nextIndex = (fallback[fallback.length - 1] ?? 0) + 1
+      return `${prefix}${nextIndex.toString().padStart(2, '0')}`
+    },
+
+    generateSurfaceImageNodeName() {
+      const prefix = 'Surface Image '
+      const pattern = /^Surface Image\s(\d{2})$/
       const taken = new Set<string>()
       const collectNames = (nodes: SceneNode[]) => {
         nodes.forEach((node) => {

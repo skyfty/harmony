@@ -5,6 +5,8 @@ export type PlacementSurfaceHit = {
   normal: THREE.Vector3
   nodeId: string
   distance: number
+  object?: THREE.Object3D
+  instanceId?: number | null
 }
 
 /**

@@ -185,3 +185,44 @@ export function createCompiledStaticMeshRuntimeMesh(
   mesh.name = options.name?.trim() || metadata.name || 'Compiled Static Mesh'
   return mesh
 }
+
+/**
+ * Surface-image geometry is authored in the node's local XY plane and must
+ * face local +Z. Older decals could preserve the target triangle winding from
+ * a back-face hit, which makes computeVertexNormals point into the wall and
+ * leaves the lit image nearly black. Reordering indices is idempotent and
+ * keeps UVs/material groups intact.
+ */
+export function orientCompiledStaticMeshTrianglesTowardPositiveZ(
+  metadata: CompiledStaticMeshMetadata,
+): CompiledStaticMeshMetadata {
+  const oriented = normalizeCompiledStaticMeshMetadata(metadata)
+  const indices = [...oriented.indices]
+  const a = new THREE.Vector3()
+  const b = new THREE.Vector3()
+  const c = new THREE.Vector3()
+  const edgeA = new THREE.Vector3()
+  const edgeB = new THREE.Vector3()
+  const normal = new THREE.Vector3()
+
+  for (let offset = 0; offset + 2 < indices.length; offset += 3) {
+    const ia = indices[offset]!
+    const ib = indices[offset + 1]!
+    const ic = indices[offset + 2]!
+    a.fromArray(oriented.vertices, ia * 3)
+    b.fromArray(oriented.vertices, ib * 3)
+    c.fromArray(oriented.vertices, ic * 3)
+    edgeA.subVectors(b, a)
+    edgeB.subVectors(c, a)
+    normal.crossVectors(edgeA, edgeB)
+    if (normal.z < 0) {
+      indices[offset + 1] = ic
+      indices[offset + 2] = ib
+    }
+  }
+
+  return {
+    ...oriented,
+    indices,
+  }
+}

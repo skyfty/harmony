@@ -73,6 +73,7 @@ import { applyMirroredScaleToObject } from './mirror';
 import {
   createCompiledStaticMeshRuntimeMesh,
   extractCompiledStaticMeshMetadataFromUserData,
+  orientCompiledStaticMeshTrianglesTowardPositiveZ,
 } from './compiledStaticMesh';
 import { compileRoadStaticMeshMetadata } from './roadMesh'
 import { GENERAL_MESH_COMPONENT_TYPE } from './components/definitions/generalMeshComponent'
@@ -1731,6 +1732,9 @@ class SceneGraphBuilder {
 
   private async buildCompiledStaticMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
     let compiledStaticMesh = extractCompiledStaticMeshMetadataFromUserData(node.userData);
+    if (compiledStaticMesh && node.userData?.__surfaceImage) {
+      compiledStaticMesh = orientCompiledStaticMeshTrianglesTowardPositiveZ(compiledStaticMesh);
+    }
     if (node.dynamicMesh?.type === 'Road' && compiledStaticMesh) {
       const expectedUvCount = (compiledStaticMesh.vertices.length / 3) * 2;
       if (!Array.isArray(compiledStaticMesh.uvs) || compiledStaticMesh.uvs.length < expectedUvCount) {

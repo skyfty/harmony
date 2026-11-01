@@ -55,6 +55,8 @@ const SCHEMA_CHUNK_CANDIDATES = [
   'pages/scenery/chunks/schema.js',
   'pages/scenery-schema/chunks/schema.js',
 ];
+const MESHOPT_WASM_FILE = 'pages/scenery/wasms/meshopt_decoder.wasm.br';
+const MESHOPT_ASSET_KEY = 'wasm:meshopt_decoder.wasm';
 
 const failures = [];
 
@@ -127,6 +129,47 @@ function resolveSchemaChunk(outDir) {
   throw new Error(
     `scenery schema chunk not found; looked for ${SCHEMA_CHUNK_CANDIDATES.join(', ')}`,
   );
+}
+
+function checkMeshoptRuntime(appRoot, outDir) {
+  const wasmPath = join(outDir, MESHOPT_WASM_FILE);
+  if (!existsSync(wasmPath)) {
+    fail(`Meshopt base WASM is missing from the scenery subpackage: ${MESHOPT_WASM_FILE}`);
+    return;
+  }
+
+  const adapterWasmDir = join(
+    appRoot,
+    'node_modules',
+    '@minisheep',
+    'three-platform-adapter',
+    'dist',
+    'three-override',
+    'local',
+    'wasm',
+  );
+  const baseWasmPath = join(adapterWasmDir, 'meshopt_decoder_base.wasm.br');
+  const simdWasmPath = join(adapterWasmDir, 'meshopt_decoder_simd.wasm.br');
+  const emittedWasm = readFileSync(wasmPath);
+  if (existsSync(baseWasmPath) && !emittedWasm.equals(readFileSync(baseWasmPath))) {
+    fail('Meshopt build did not package the selected non-SIMD base WASM.');
+  } else if (existsSync(simdWasmPath) && emittedWasm.equals(readFileSync(simdWasmPath))) {
+    fail('Meshopt build unexpectedly packaged the SIMD WASM despite useSIMD=false.');
+  } else {
+    info(`[ok] Meshopt base WASM is packaged (${MESHOPT_WASM_FILE})`);
+  }
+
+  const hasAssetReference = walkFiles(outDir)
+    .filter((file) => file.endsWith('.js'))
+    .some((file) => {
+      const source = readFileSync(file, 'utf8');
+      return source.includes(MESHOPT_ASSET_KEY) && source.includes(MESHOPT_WASM_FILE);
+    });
+  if (!hasAssetReference) {
+    fail('Built JavaScript does not reference the packaged Meshopt base WASM asset.');
+  } else {
+    info('[ok] built JavaScript references the Meshopt base WASM asset');
+  }
 }
 
 function checkPackaging(outDir, appJson, schemaChunk) {
@@ -421,6 +464,7 @@ function main() {
     }
   }
 
+  checkMeshoptRuntime(appRoot, outDir);
   checkPackaging(outDir, appJson, schemaChunk);
   checkCrossPackageRequires(outDir, appJson);
 

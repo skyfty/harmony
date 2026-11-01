@@ -430,6 +430,11 @@ export default defineConfig({
         worker: 'pages/scenery/workers',
         wasm: 'pages/scenery/wasms',
       },
+      loaderOptions: {
+        meshOptDecoder: {
+          useSIMD: false,
+        },
+      },
     }),
     emitMpWorkerAssetPlugin({
       sourceChunkName: 'instancedLodCulling.worker',

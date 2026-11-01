@@ -54,7 +54,11 @@ import type {
   WallCircleCenterDragState,
   WallCircleRadiusDragState,
 } from './pointer/types'
-import { extractCompiledStaticMeshMetadataFromUserData, createCompiledStaticMeshRuntimeMesh } from '@schema/compiledStaticMesh'
+import {
+  extractCompiledStaticMeshMetadataFromUserData,
+  createCompiledStaticMeshRuntimeMesh,
+  createCompiledStaticMeshMetadataFromGeometry,
+} from '@schema/compiledStaticMesh'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -401,6 +405,15 @@ import {
   type PlacementSurfaceHit,
 } from '@/utils/placementSurfaceHit'
 import { isProceduralLandscapePlacementArtifact } from '@/utils/proceduralLandscapePlacementArtifact'
+import {
+  SURFACE_IMAGE_DEFAULT_WIDTH_METERS,
+  buildSurfaceImageDecalGeometry,
+  collectSurfaceImageTargetMeshes,
+  createSurfaceImageRuntimeMesh,
+  extractSurfaceImageMetadataFromUserData,
+  markSurfaceImageRuntimeOwnership,
+  resolveSurfaceImageBasis,
+} from '@/utils/surfaceImageDecal'
 import {
   componentManager,
   PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
@@ -14103,6 +14116,45 @@ const dragPreview = useDragPreview({
     sceneStore.preparePrefabAsset(assetId, { prefabAssetIdForDownloadProgress: assetId }),
 })
 const dragPreviewGroup = dragPreview.group
+const surfaceImagePreviewGroup = new THREE.Group()
+surfaceImagePreviewGroup.name = 'Surface Image Preview'
+surfaceImagePreviewGroup.visible = false
+surfaceImagePreviewGroup.userData = {
+  ...(surfaceImagePreviewGroup.userData ?? {}),
+  editorOnly: true,
+}
+const surfaceImagePreviewGeometry = new THREE.PlaneGeometry(1, 1, 1, 1)
+const surfaceImagePreviewMaterial = new THREE.MeshBasicMaterial({
+  color: 0x64b5f6,
+  side: THREE.DoubleSide,
+  transparent: true,
+  opacity: 0.88,
+  alphaTest: 0.01,
+  depthWrite: false,
+  toneMapped: false,
+})
+const surfaceImagePreviewMesh = new THREE.Mesh(surfaceImagePreviewGeometry, surfaceImagePreviewMaterial)
+surfaceImagePreviewMesh.userData = {
+  ...(surfaceImagePreviewMesh.userData ?? {}),
+  editorOnly: true,
+}
+surfaceImagePreviewMesh.renderOrder = 120
+surfaceImagePreviewGroup.add(surfaceImagePreviewMesh)
+const surfaceImageDropHint = ref('')
+const surfaceImagePlacementNotice = ref<string | null>(null)
+let surfaceImagePlacementNoticeTimer: number | null = null
+let surfaceImagePreviewTexture: THREE.Texture | null = null
+let surfaceImagePreviewAssetId: string | null = null
+let surfaceImagePreviewRequestToken = 0
+let surfaceImagePreviewPendingAssetId: string | null = null
+let surfaceImagePreviewPendingPromise: Promise<boolean> | null = null
+let surfaceImagePreviewDimensions = new THREE.Vector2(1, 1)
+type SurfaceImagePreviewPlacement = {
+  center: THREE.Vector3
+  normal: THREE.Vector3
+  quaternion: THREE.Quaternion
+}
+let surfaceImagePreviewPlacement: SurfaceImagePreviewPlacement | null = null
 const warpGatePlacementPreviewController = createWarpGateEffectInstance(clampWarpGateComponentProps(null))
 const warpGatePlacementPreviewGroup = new THREE.Group()
 warpGatePlacementPreviewGroup.name = 'Warp Gate Preview'
@@ -16656,6 +16708,7 @@ function initScene() {
   scene.add(scatterPreviewGroup)
   scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
+  scene.add(surfaceImagePreviewGroup)
   scene.add(warpGatePlacementPreviewGroup)
   gridHighlight = createGridHighlight()
   if (gridHighlight) {
@@ -16674,6 +16727,7 @@ function initScene() {
     scatterPreviewGroup,
     groundSelectionGroup,
     dragPreviewGroup,
+    surfaceImagePreviewGroup,
     warpGatePlacementPreviewGroup,
     instancedOutlineGroup,
     wallDoorSelectionHighlightGroup,
@@ -17273,6 +17327,14 @@ function disposeScene() {
   clearOutlineSelectionTargets()
   dragPreview.dispose()
   dragPreviewGroup.removeFromParent()
+  clearSurfaceImagePreview(true)
+  surfaceImagePreviewGroup.removeFromParent()
+  surfaceImagePreviewGeometry.dispose()
+  surfaceImagePreviewMaterial.dispose()
+  if (surfaceImagePlacementNoticeTimer !== null) {
+    window.clearTimeout(surfaceImagePlacementNoticeTimer)
+    surfaceImagePlacementNoticeTimer = null
+  }
   hideWarpGatePlacementPreview()
   warpGatePlacementPreviewController.group.removeFromParent()
   warpGatePlacementPreviewController.dispose()
@@ -22786,6 +22848,8 @@ function computePlacementSurfaceHit(): PlacementSurfaceHit | null {
       normal: resolveIntersectionWorldNormal(intersection) ?? new THREE.Vector3(0, 1, 0),
       nodeId,
       distance: intersection.distance,
+      object: intersection.object,
+      instanceId: typeof intersection.instanceId === 'number' ? intersection.instanceId : null,
     }
   }
 
@@ -23547,6 +23611,225 @@ function isTextureAsset(asset: ProjectAsset | null | undefined): boolean {
   return asset.type === 'texture' || asset.type === 'image'
 }
 
+const SURFACE_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif', 'bmp', 'gif'])
+
+function getSurfaceImageExtension(asset: ProjectAsset): string | null {
+  const extension = asset.extension?.trim().toLowerCase()
+    || getLastExtensionFromFilenameOrUrl(asset.name || asset.downloadUrl || asset.id)
+  return extension && SURFACE_IMAGE_EXTENSIONS.has(extension) ? extension : null
+}
+
+function isSurfaceImageAsset(asset: ProjectAsset | null | undefined): asset is ProjectAsset {
+  return Boolean(
+    asset
+    && (asset.type === 'image' || asset.type === 'texture')
+    && getSurfaceImageExtension(asset),
+  )
+}
+
+type SurfaceImageDropTarget = {
+  hit: PlacementSurfaceHit & { object: THREE.Object3D }
+  sceneNode: SceneNode
+  targetObject: THREE.Object3D
+  meshes: ReturnType<typeof collectSurfaceImageTargetMeshes>
+}
+
+function updateDragRaycaster(event: Pick<DragEvent, 'clientX' | 'clientY'>): boolean {
+  if (!camera || !canvasRef.value) {
+    return false
+  }
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) {
+    return false
+  }
+  pointer.set(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1,
+  )
+  raycaster.setFromCamera(pointer, camera)
+  return true
+}
+
+function resolveSurfaceImageDropTarget(event: DragEvent): SurfaceImageDropTarget | null {
+  if (!updateDragRaycaster(event)) {
+    return null
+  }
+  const hit = computeNearestPlacementSurfaceHit()
+  if (!hit?.object || hit.nodeId === GROUND_NODE_ID) {
+    return null
+  }
+  const sceneNode = sceneStore.getNodeById(hit.nodeId)
+  if (!sceneNode || sceneNode.id === GROUND_NODE_ID) {
+    return null
+  }
+  if (sceneNode.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]) {
+    return null
+  }
+  if (
+    sceneNode.dynamicMesh?.type === 'Ground'
+    || sceneNode.dynamicMesh?.type === 'Landform'
+    || sceneNode.dynamicMesh?.type === 'Region'
+    || sceneNode.dynamicMesh?.type === 'ModelCollision'
+  ) {
+    return null
+  }
+  const targetObject = objectMap.get(sceneNode.id) ?? null
+  if (!targetObject) {
+    return null
+  }
+  const meshes = collectSurfaceImageTargetMeshes(targetObject, hit.object, hit.instanceId)
+  if (!meshes.length) {
+    return null
+  }
+  return {
+    hit: hit as PlacementSurfaceHit & { object: THREE.Object3D },
+    sceneNode,
+    targetObject,
+    meshes,
+  }
+}
+
+function resolveSurfaceImageProjector(
+  target: SurfaceImageDropTarget,
+  widthMeters = SURFACE_IMAGE_DEFAULT_WIDTH_METERS,
+): { center: THREE.Vector3; normal: THREE.Vector3; quaternion: THREE.Quaternion; width: number; height: number } {
+  const activeCamera = camera as THREE.Camera | null
+  const cameraRight = new THREE.Vector3(1, 0, 0)
+  if (activeCamera) {
+    activeCamera.updateMatrixWorld()
+    cameraRight.setFromMatrixColumn(activeCamera.matrixWorld, 0)
+  }
+  const basis = resolveSurfaceImageBasis(target.hit.normal, cameraRight)
+  const sourceWidth = Math.max(1, surfaceImagePreviewDimensions.x)
+  const sourceHeight = Math.max(1, surfaceImagePreviewDimensions.y)
+  return {
+    center: target.hit.point.clone(),
+    normal: basis.normal,
+    quaternion: basis.quaternion,
+    width: widthMeters,
+    height: Math.max(0.01, widthMeters * (sourceHeight / sourceWidth)),
+  }
+}
+
+function refreshSurfaceImagePreviewTransform(): void {
+  const placement = surfaceImagePreviewPlacement
+  if (!placement) {
+    surfaceImagePreviewGroup.visible = false
+    return
+  }
+  const sourceWidth = Math.max(1, surfaceImagePreviewDimensions.x)
+  const sourceHeight = Math.max(1, surfaceImagePreviewDimensions.y)
+  const width = SURFACE_IMAGE_DEFAULT_WIDTH_METERS
+  const height = Math.max(0.01, width * (sourceHeight / sourceWidth))
+  surfaceImagePreviewGroup.position.copy(placement.center).addScaledVector(placement.normal, 0.0015)
+  surfaceImagePreviewGroup.quaternion.copy(placement.quaternion)
+  surfaceImagePreviewGroup.scale.set(width, height, 1)
+  surfaceImagePreviewGroup.visible = true
+}
+
+function disposeSurfaceImagePreviewTexture(): void {
+  surfaceImagePreviewRequestToken += 1
+  surfaceImagePreviewMaterial.map = null
+  surfaceImagePreviewMaterial.color.set(0x64b5f6)
+  surfaceImagePreviewMaterial.needsUpdate = true
+  surfaceImagePreviewTexture?.dispose()
+  surfaceImagePreviewTexture = null
+  surfaceImagePreviewAssetId = null
+}
+
+function clearSurfaceImagePreview(disposeTexture = false): void {
+  surfaceImageDropHint.value = ''
+  surfaceImagePreviewGroup.visible = false
+  surfaceImagePreviewPlacement = null
+  if (disposeTexture) {
+    disposeSurfaceImagePreviewTexture()
+  }
+}
+
+function showSurfaceImagePlacementNotice(message: string, duration = 3200): void {
+  surfaceImagePlacementNotice.value = message
+  if (surfaceImagePlacementNoticeTimer !== null) {
+    window.clearTimeout(surfaceImagePlacementNoticeTimer)
+  }
+  surfaceImagePlacementNoticeTimer = window.setTimeout(() => {
+    surfaceImagePlacementNotice.value = null
+    surfaceImagePlacementNoticeTimer = null
+  }, duration)
+}
+
+function prepareSurfaceImagePreview(asset: ProjectAsset): Promise<boolean> {
+  if (surfaceImagePreviewAssetId === asset.id && surfaceImagePreviewTexture) {
+    return Promise.resolve(true)
+  }
+  if (surfaceImagePreviewPendingAssetId === asset.id && surfaceImagePreviewPendingPromise) {
+    return surfaceImagePreviewPendingPromise
+  }
+  disposeSurfaceImagePreviewTexture()
+  surfaceImagePreviewAssetId = asset.id
+  surfaceImagePreviewPendingAssetId = asset.id
+  const token = surfaceImagePreviewRequestToken
+  surfaceImagePreviewDimensions.set(
+    Number.isFinite(asset.imageWidth) && Number(asset.imageWidth) > 0 ? Number(asset.imageWidth) : 1,
+    Number.isFinite(asset.imageHeight) && Number(asset.imageHeight) > 0 ? Number(asset.imageHeight) : 1,
+  )
+  refreshSurfaceImagePreviewTransform()
+  const task = (async (): Promise<boolean> => {
+    try {
+      const file = await assetCacheStore.ensureAssetFile(asset.id, { asset })
+      if (!file) {
+        return false
+      }
+      const texture = await loadTextureFromFile(file)
+      if (token !== surfaceImagePreviewRequestToken || surfaceImagePreviewAssetId !== asset.id) {
+        texture.dispose()
+        return false
+      }
+      texture.colorSpace = THREE.SRGBColorSpace
+      texture.wrapS = THREE.ClampToEdgeWrapping
+      texture.wrapT = THREE.ClampToEdgeWrapping
+      texture.needsUpdate = true
+      const image = texture.image as { naturalWidth?: number; naturalHeight?: number; width?: number; height?: number }
+      surfaceImagePreviewDimensions.set(
+        Math.max(1, image?.naturalWidth ?? image?.width ?? surfaceImagePreviewDimensions.x),
+        Math.max(1, image?.naturalHeight ?? image?.height ?? surfaceImagePreviewDimensions.y),
+      )
+      surfaceImagePreviewTexture = texture
+      surfaceImagePreviewMaterial.map = texture
+      surfaceImagePreviewMaterial.color.set(0xffffff)
+      surfaceImagePreviewMaterial.needsUpdate = true
+      refreshSurfaceImagePreviewTransform()
+      return true
+    } catch (error) {
+      if (token === surfaceImagePreviewRequestToken) {
+        console.warn('Failed to prepare surface image preview', asset.id, error)
+      }
+      return false
+    } finally {
+      assetCacheStore.releaseInMemoryBlob(asset.id)
+    }
+  })()
+  surfaceImagePreviewPendingPromise = task
+  void task.finally(() => {
+    if (surfaceImagePreviewPendingPromise === task) {
+      surfaceImagePreviewPendingPromise = null
+      surfaceImagePreviewPendingAssetId = null
+    }
+  })
+  return task
+}
+
+function updateSurfaceImagePreview(target: SurfaceImageDropTarget): void {
+  const projector = resolveSurfaceImageProjector(target)
+  surfaceImagePreviewPlacement = {
+    center: projector.center,
+    normal: projector.normal,
+    quaternion: projector.quaternion,
+  }
+  refreshSurfaceImagePreviewTransform()
+  surfaceImageDropHint.value = '松开鼠标创建贴合图像 · 宽度 1 m'
+  updateGridHighlightFromObject(target.targetObject)
+}
+
 function handleViewportDragEnter(event: DragEvent) {
   if (!isAssetDrag(event)) return
   event.preventDefault()
@@ -23568,6 +23851,25 @@ function handleViewportDragOver(event: DragEvent) {
     updateGridHighlight(point)
     clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
+    return
+  }
+  if (asset && isSurfaceImageAsset(asset) && event.shiftKey) {
+    event.preventDefault()
+    isDragHovering.value = true
+    const target = resolveSurfaceImageDropTarget(event)
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = target ? 'copy' : 'none'
+    }
+    clearAssetPlacementPreviewSnapshot()
+    dragPreview.dispose()
+    if (target) {
+      updateSurfaceImagePreview(target)
+      void prepareSurfaceImagePreview(asset)
+    } else {
+      clearSurfaceImagePreview()
+      surfaceImageDropHint.value = 'Shift：移动到可见模型或建筑表面'
+      updateGridHighlight(null)
+    }
     return
   }
   if (asset?.type === 'material') {
@@ -23620,6 +23922,9 @@ function handleViewportDragOver(event: DragEvent) {
   }
 
   if (asset && isTextureAsset(asset)) {
+    if (isSurfaceImageAsset(asset)) {
+      surfaceImageDropHint.value = '按住 Shift 可放置为贴合表面的图像'
+    }
     event.preventDefault()
     isDragHovering.value = true
     const target = resolveMaterialDropTarget(event)
@@ -23731,6 +24036,7 @@ function handleViewportDragLeave(event: DragEvent) {
   clearPlacementSideSnapMarkers()
   clearAssetPlacementPreviewSnapshot()
   dragPreview.dispose()
+  clearSurfaceImagePreview(true)
   restoreGridHighlightForSelection()
 }
 
@@ -23745,6 +24051,60 @@ function cancelPendingViewportAssetDrop(message?: string): void {
   restoreGridHighlightForSelection()
   snapController.resetPlacementSideSnap()
   clearPlacementSideSnapMarkers()
+}
+
+async function commitSurfaceImageDrop(event: DragEvent, asset: ProjectAsset): Promise<boolean> {
+  const target = resolveSurfaceImageDropTarget(event)
+  if (!target) {
+    showSurfaceImagePlacementNotice('当前落点不是可贴图的可见模型或建筑表面')
+    return false
+  }
+  const textureReady = await prepareSurfaceImagePreview(asset)
+  if (!textureReady) {
+    showSurfaceImagePlacementNotice('图片加载失败，未创建表面图像')
+    return false
+  }
+
+  const projector = resolveSurfaceImageProjector(target)
+  const built = buildSurfaceImageDecalGeometry({
+    targets: target.meshes,
+    projector,
+  })
+  if (!built) {
+    showSurfaceImagePlacementNotice('目标表面没有可用的静态三角面，未创建图像')
+    return false
+  }
+
+  try {
+    const geometry = createCompiledStaticMeshMetadataFromGeometry(
+      built.geometry,
+      `Surface Image ${asset.name || asset.id}`,
+    )
+    const created = sceneStore.createSurfaceImageNode({
+      assetId: asset.id,
+      assetName: asset.name,
+      targetNodeId: target.sceneNode.id,
+      geometry,
+      worldCenter: projector.center,
+      worldQuaternion: projector.quaternion,
+      widthMeters: built.width,
+      heightMeters: built.height,
+    })
+    if (!created) {
+      showSurfaceImagePlacementNotice('无法创建表面图像节点')
+      return false
+    }
+    if (created.attachmentMode === 'world') {
+      showSurfaceImagePlacementNotice('目标节点不能包含子节点，已作为独立网格放置')
+    }
+    return true
+  } catch (error) {
+    console.warn('Failed to commit surface image', asset.id, target.sceneNode.id, error)
+    showSurfaceImagePlacementNotice('创建表面图像失败')
+    return false
+  } finally {
+    built.geometry.dispose()
+  }
 }
 
 async function handleViewportDrop(event: DragEvent) {
@@ -23769,6 +24129,21 @@ async function handleViewportDrop(event: DragEvent) {
   const asset = info.asset ?? sceneStore.getAsset(assetId) ?? null
   const assetType = asset?.type ?? null
   const isTexture = assetType === 'texture' || assetType === 'image'
+
+  if (asset && event.shiftKey && isSurfaceImageAsset(asset)) {
+    try {
+      await commitSurfaceImageDrop(event, asset)
+    } finally {
+      clearSurfaceImagePreview(true)
+      sceneStore.setDraggingAssetObject(null)
+      updateGridHighlight(null)
+      restoreGridHighlightForSelection()
+      snapController.resetPlacementSideSnap()
+    }
+    return
+  }
+
+  clearSurfaceImagePreview(true)
 
   if (asset && isTerrainDemPackAsset(asset)) {
     const placement = computeDropPlacement(event)
@@ -26561,19 +26936,37 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       container.add(regionGroup)
       ;(containerData as any).regionGroup = regionGroup
     } else {
-      const runtimeObject = resolveNodeContainerObject(node)
+      const compiledStaticMesh = !node.sourceAssetId
+        ? extractCompiledStaticMeshMetadataFromUserData(node.userData)
+        : null
+      const surfaceImageMetadata = extractSurfaceImageMetadataFromUserData(node.userData)
+      let runtimeObject = resolveNodeContainerObject(node)
+      if (!runtimeObject && compiledStaticMesh) {
+        runtimeObject = createSurfaceImageRuntimeMesh(node)
+          ?? createCompiledStaticMeshRuntimeMesh(compiledStaticMesh, {
+            name: node.name ?? compiledStaticMesh.name ?? 'Compiled Static Mesh',
+          })
+        registerRuntimeObject(node.id, runtimeObject)
+      }
       if (runtimeObject) {
         runtimeObject.removeFromParent()
-        runtimeObject.userData.nodeId = node.id
+        if (surfaceImageMetadata) {
+          markSurfaceImageRuntimeOwnership(node.id, runtimeObject)
+        } else {
+          runtimeObject.userData.nodeId = node.id
+        }
         runtimeObject.traverse((child) => {
           const meshChild = child as THREE.Mesh
           if (meshChild?.isMesh) {
-            meshChild.castShadow = true
+            meshChild.castShadow = !surfaceImageMetadata
             meshChild.receiveShadow = true
           }
         })
         container.add(runtimeObject)
         containerData.usesRuntimeObject = true
+      } else if (surfaceImageMetadata) {
+        containerData.usesRuntimeObject = false
+        console.warn('Surface image geometry is unavailable for node', node.id)
       } else {
         const fallbackMaterial = node.isPlaceholder
           ? createUvDebugMaterial({ tint: 0xa8e6ff, transparent: true, opacity: 0.75, side: THREE.DoubleSide, metalness: 0, roughness: 1 })
@@ -28239,6 +28632,13 @@ defineExpose({
       @drop="handleViewportDrop"
     >
       <div ref="overlayContainerRef" class="placeholder-overlay-layer">
+        <div v-if="surfaceImageDropHint" class="surface-image-drop-hint">
+          <span class="surface-image-drop-hint__marker">Shift</span>
+          <span>{{ surfaceImageDropHint.replace(/^Shift：/, '') }}</span>
+        </div>
+        <div v-if="surfaceImagePlacementNotice" class="surface-image-placement-notice">
+          {{ surfaceImagePlacementNotice }}
+        </div>
         <PlaceholderOverlayList
           :overlays="placeholderOverlayList"
           @retry="handlePlaceholderRetry"
@@ -28653,6 +29053,48 @@ defineExpose({
   pointer-events: none;
   border-radius: 8px;
   z-index: 3;
+}
+
+.surface-image-drop-hint,
+.surface-image-placement-notice {
+  position: absolute;
+  left: 50%;
+  z-index: 18;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(460px, calc(100% - 32px));
+  padding: 7px 11px;
+  border: 1px solid rgba(129, 212, 250, 0.34);
+  border-radius: 8px;
+  background: rgba(12, 18, 27, 0.88);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
+  color: rgba(239, 247, 255, 0.96);
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+.surface-image-drop-hint {
+  top: 14px;
+}
+
+.surface-image-drop-hint__marker {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #b3e5fc;
+  font-weight: 700;
+}
+
+.surface-image-placement-notice {
+  bottom: 18px;
+  border-color: rgba(255, 202, 105, 0.42);
+  color: #fff3d6;
 }
 
 .placeholder-overlay-layer {

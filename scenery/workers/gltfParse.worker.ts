@@ -1,4 +1,5 @@
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import {
   collectDescriptorBuffers,
   serializeParsedGltfScene,
@@ -20,7 +21,7 @@ scope.addEventListener('message', (event) => {
   const requestId = message.requestId
   void (async () => {
     try {
-      const loader = new GLTFLoader()
+      const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
       const gltf = await loader.parseAsync(message.buffer, '')
       if (!gltf.scene) {
         scope.postMessage({ type: 'error', requestId, message: 'GLB parse produced no scene' })

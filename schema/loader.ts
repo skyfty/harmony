@@ -4,6 +4,7 @@ import * as THREE from 'three';
 // import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 
 export type LoaderProgressPayload = {
   loaded: number;
@@ -305,6 +306,7 @@ export interface ParsedGltfResult {
 // const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
   const loader = new GLTFLoader(options.manager);
+  loader.setMeshoptDecoder(MeshoptDecoder);
 
   // const dracoLoader = new DRACOLoader();
   // dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
