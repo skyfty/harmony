@@ -14149,6 +14149,16 @@ let surfaceImagePreviewRequestToken = 0
 let surfaceImagePreviewPendingAssetId: string | null = null
 let surfaceImagePreviewPendingPromise: Promise<boolean> | null = null
 let surfaceImagePreviewDimensions = new THREE.Vector2(1, 1)
+let surfaceImageDragFrameHandle: number | null = null
+let surfaceImagePendingDragPointer: { clientX: number; clientY: number } | null = null
+let surfaceImagePendingDragAsset: ProjectAsset | null = null
+let surfaceImageTargetMeshCache = new WeakMap<THREE.Object3D, ReturnType<typeof collectSurfaceImageTargetMeshes>>()
+let surfaceImageLastHighlightedNodeId: string | null = null
+let surfaceImageLastPreviewProcessedAt = 0
+let surfaceImageDragActive = false
+let surfaceImageActiveAssetId: string | null = null
+const SURFACE_IMAGE_DRAG_OVER_INTERVAL_MS = 24
+const surfaceImageCameraRight = new THREE.Vector3(1, 0, 0)
 type SurfaceImagePreviewPlacement = {
   center: THREE.Vector3
   normal: THREE.Vector3
@@ -17328,6 +17338,7 @@ function disposeScene() {
   dragPreview.dispose()
   dragPreviewGroup.removeFromParent()
   clearSurfaceImagePreview(true)
+  resetSurfaceImageDragWork()
   surfaceImagePreviewGroup.removeFromParent()
   surfaceImagePreviewGeometry.dispose()
   surfaceImagePreviewMaterial.dispose()
@@ -22759,6 +22770,9 @@ function handleBuildToolChange(tool: BuildTool | null) {
 
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {
   if (event.dataTransfer) {
+    if (sceneStore.draggingAssetId) {
+      return { assetId: sceneStore.draggingAssetId }
+    }
     const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
     if (raw) {
       try {
@@ -22769,9 +22783,6 @@ function extractAssetPayload(event: DragEvent): { assetId: string } | null {
       } catch (error) {
         console.warn('Failed to parse drag payload', error)
       }
-    }
-    if (sceneStore.draggingAssetId) {
-      return { assetId: sceneStore.draggingAssetId }
     }
   }
   return null
@@ -23591,6 +23602,7 @@ function applyTextureAssetToNode(
 }
 
 type DragAssetInfo = { assetId: string; asset: ProjectAsset | null }
+let cachedDragAssetInfo: DragAssetInfo | null = null
 
 function resolveDragAsset(event: DragEvent): DragAssetInfo | null {
   const payload = extractAssetPayload(event)
@@ -23598,10 +23610,14 @@ function resolveDragAsset(event: DragEvent): DragAssetInfo | null {
     return null
   }
   const assetId = payload.assetId.startsWith('asset://') ? payload.assetId.slice('asset://'.length) : payload.assetId
-  return {
+  if (cachedDragAssetInfo?.assetId === assetId) {
+    return cachedDragAssetInfo
+  }
+  cachedDragAssetInfo = {
     assetId,
     asset: sceneStore.getAsset(assetId),
   }
+  return cachedDragAssetInfo
 }
 
 function isTextureAsset(asset: ProjectAsset | null | undefined): boolean {
@@ -23650,11 +23666,11 @@ function updateDragRaycaster(event: Pick<DragEvent, 'clientX' | 'clientY'>): boo
   return true
 }
 
-function resolveSurfaceImageDropTarget(event: DragEvent): SurfaceImageDropTarget | null {
+function resolveSurfaceImageDropTarget(event: Pick<DragEvent, 'clientX' | 'clientY'>): SurfaceImageDropTarget | null {
   if (!updateDragRaycaster(event)) {
     return null
   }
-  const hit = computeNearestPlacementSurfaceHit()
+  const hit = computePlacementSurfaceHit()
   if (!hit?.object || hit.nodeId === GROUND_NODE_ID) {
     return null
   }
@@ -23677,7 +23693,16 @@ function resolveSurfaceImageDropTarget(event: DragEvent): SurfaceImageDropTarget
   if (!targetObject) {
     return null
   }
-  const meshes = collectSurfaceImageTargetMeshes(targetObject, hit.object, hit.instanceId)
+  const isInstancedHit = (hit.object as THREE.Mesh & { isInstancedMesh?: boolean }).isInstancedMesh === true
+  let meshes = isInstancedHit
+    ? collectSurfaceImageTargetMeshes(targetObject, hit.object, hit.instanceId)
+    : surfaceImageTargetMeshCache.get(targetObject) ?? null
+  if (!meshes) {
+    meshes = collectSurfaceImageTargetMeshes(targetObject, hit.object, hit.instanceId)
+    if (!isInstancedHit) {
+      surfaceImageTargetMeshCache.set(targetObject, meshes)
+    }
+  }
   if (!meshes.length) {
     return null
   }
@@ -23694,12 +23719,12 @@ function resolveSurfaceImageProjector(
   widthMeters = SURFACE_IMAGE_DEFAULT_WIDTH_METERS,
 ): { center: THREE.Vector3; normal: THREE.Vector3; quaternion: THREE.Quaternion; width: number; height: number } {
   const activeCamera = camera as THREE.Camera | null
-  const cameraRight = new THREE.Vector3(1, 0, 0)
   if (activeCamera) {
-    activeCamera.updateMatrixWorld()
-    cameraRight.setFromMatrixColumn(activeCamera.matrixWorld, 0)
+    surfaceImageCameraRight.setFromMatrixColumn(activeCamera.matrixWorld, 0)
+  } else {
+    surfaceImageCameraRight.set(1, 0, 0)
   }
-  const basis = resolveSurfaceImageBasis(target.hit.normal, cameraRight)
+  const basis = resolveSurfaceImageBasis(target.hit.normal, surfaceImageCameraRight)
   const sourceWidth = Math.max(1, surfaceImagePreviewDimensions.x)
   const sourceHeight = Math.max(1, surfaceImagePreviewDimensions.y)
   return {
@@ -23827,11 +23852,81 @@ function updateSurfaceImagePreview(target: SurfaceImageDropTarget): void {
   }
   refreshSurfaceImagePreviewTransform()
   surfaceImageDropHint.value = '松开鼠标创建贴合图像 · 宽度 1 m'
-  updateGridHighlightFromObject(target.targetObject)
+}
+
+function updateSurfaceImageTargetHighlight(target: SurfaceImageDropTarget | null): void {
+  const nextNodeId = target?.sceneNode.id ?? null
+  if (surfaceImageLastHighlightedNodeId === nextNodeId) {
+    return
+  }
+  surfaceImageLastHighlightedNodeId = nextNodeId
+  if (target) {
+    updateGridHighlightFromObject(target.targetObject)
+  } else {
+    updateGridHighlight(null)
+  }
+}
+
+function cancelScheduledSurfaceImageDrag(): void {
+  if (surfaceImageDragFrameHandle !== null) {
+    window.cancelAnimationFrame(surfaceImageDragFrameHandle)
+    surfaceImageDragFrameHandle = null
+  }
+  surfaceImagePendingDragPointer = null
+  surfaceImagePendingDragAsset = null
+}
+
+function resetSurfaceImageDragWork(): void {
+  cancelScheduledSurfaceImageDrag()
+  surfaceImageTargetMeshCache = new WeakMap()
+  surfaceImageLastHighlightedNodeId = null
+  surfaceImageLastPreviewProcessedAt = 0
+  surfaceImageDragActive = false
+  surfaceImageActiveAssetId = null
+}
+
+function processScheduledSurfaceImageDrag(): void {
+  surfaceImageDragFrameHandle = null
+  const now = performance.now()
+  if (now - surfaceImageLastPreviewProcessedAt < SURFACE_IMAGE_DRAG_OVER_INTERVAL_MS) {
+    if (surfaceImagePendingDragPointer) {
+      surfaceImageDragFrameHandle = window.requestAnimationFrame(processScheduledSurfaceImageDrag)
+    }
+    return
+  }
+  const pendingPointer = surfaceImagePendingDragPointer
+  const pendingAsset = surfaceImagePendingDragAsset
+  surfaceImagePendingDragPointer = null
+  surfaceImagePendingDragAsset = null
+  if (!pendingPointer || !pendingAsset) {
+    return
+  }
+  surfaceImageLastPreviewProcessedAt = now
+  const target = resolveSurfaceImageDropTarget(pendingPointer)
+  if (target) {
+    updateSurfaceImagePreview(target)
+    updateSurfaceImageTargetHighlight(target)
+  } else {
+    clearSurfaceImagePreview()
+    surfaceImageDropHint.value = 'Shift：移动到可见模型或建筑表面'
+    updateSurfaceImageTargetHighlight(null)
+  }
+}
+
+function scheduleSurfaceImageDrag(event: DragEvent, asset: ProjectAsset): void {
+  surfaceImagePendingDragPointer = {
+    clientX: event.clientX,
+    clientY: event.clientY,
+  }
+  surfaceImagePendingDragAsset = asset
+  if (surfaceImageDragFrameHandle === null) {
+    surfaceImageDragFrameHandle = window.requestAnimationFrame(processScheduledSurfaceImageDrag)
+  }
 }
 
 function handleViewportDragEnter(event: DragEvent) {
   if (!isAssetDrag(event)) return
+  cachedDragAssetInfo = null
   event.preventDefault()
   isDragHovering.value = true
 }
@@ -23856,20 +23951,27 @@ function handleViewportDragOver(event: DragEvent) {
   if (asset && isSurfaceImageAsset(asset) && event.shiftKey) {
     event.preventDefault()
     isDragHovering.value = true
-    const target = resolveSurfaceImageDropTarget(event)
     if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = target ? 'copy' : 'none'
+      event.dataTransfer.dropEffect = 'copy'
     }
-    clearAssetPlacementPreviewSnapshot()
-    dragPreview.dispose()
-    if (target) {
-      updateSurfaceImagePreview(target)
+    if (!surfaceImageDragActive || surfaceImageActiveAssetId !== asset.id) {
+      if (surfaceImageDragActive) {
+        cancelScheduledSurfaceImageDrag()
+        clearSurfaceImagePreview(true)
+        updateSurfaceImageTargetHighlight(null)
+      }
+      surfaceImageDragActive = true
+      surfaceImageActiveAssetId = asset.id
+      clearAssetPlacementPreviewSnapshot()
+      dragPreview.dispose()
+    }
+    if (
+      (surfaceImagePreviewAssetId !== asset.id || !surfaceImagePreviewTexture)
+      && surfaceImagePreviewPendingAssetId !== asset.id
+    ) {
       void prepareSurfaceImagePreview(asset)
-    } else {
-      clearSurfaceImagePreview()
-      surfaceImageDropHint.value = 'Shift：移动到可见模型或建筑表面'
-      updateGridHighlight(null)
     }
+    scheduleSurfaceImageDrag(event, asset)
     return
   }
   if (asset?.type === 'material') {
@@ -23923,6 +24025,11 @@ function handleViewportDragOver(event: DragEvent) {
 
   if (asset && isTextureAsset(asset)) {
     if (isSurfaceImageAsset(asset)) {
+      if (surfaceImageDragActive || surfaceImagePendingDragAsset || surfaceImagePreviewAssetId || surfaceImagePreviewTexture) {
+        cancelScheduledSurfaceImageDrag()
+        clearSurfaceImagePreview(true)
+        updateSurfaceImageTargetHighlight(null)
+      }
       surfaceImageDropHint.value = '按住 Shift 可放置为贴合表面的图像'
     }
     event.preventDefault()
@@ -24030,6 +24137,7 @@ function handleViewportDragLeave(event: DragEvent) {
     return
   }
   deactivateVOverride()
+  cancelScheduledSurfaceImageDrag()
   isDragHovering.value = false
   updateGridHighlight(null)
   snapController.resetPlacementSideSnap()
@@ -24037,6 +24145,7 @@ function handleViewportDragLeave(event: DragEvent) {
   clearAssetPlacementPreviewSnapshot()
   dragPreview.dispose()
   clearSurfaceImagePreview(true)
+  resetSurfaceImageDragWork()
   restoreGridHighlightForSelection()
 }
 
@@ -24115,6 +24224,7 @@ async function handleViewportDrop(event: DragEvent) {
   deactivateVOverride()
   clearPlacementSideSnapMarkers()
   isDragHovering.value = false
+  cancelScheduledSurfaceImageDrag()
   if (!info) {
     clearAssetPlacementPreviewSnapshot()
     dragPreview.dispose()
@@ -24122,6 +24232,7 @@ async function handleViewportDrop(event: DragEvent) {
     updateGridHighlight(null)
     restoreGridHighlightForSelection()
     snapController.resetPlacementSideSnap()
+    resetSurfaceImageDragWork()
     return
   }
 
@@ -24139,11 +24250,13 @@ async function handleViewportDrop(event: DragEvent) {
       updateGridHighlight(null)
       restoreGridHighlightForSelection()
       snapController.resetPlacementSideSnap()
+      resetSurfaceImageDragWork()
     }
     return
   }
 
   clearSurfaceImagePreview(true)
+  resetSurfaceImageDragWork()
 
   if (asset && isTerrainDemPackAsset(asset)) {
     const placement = computeDropPlacement(event)
