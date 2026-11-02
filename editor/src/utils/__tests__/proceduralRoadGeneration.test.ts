@@ -35,6 +35,11 @@ import {
   buildTerrainHeightGrid,
   type TerrainHeightGrid,
 } from '@schema/proceduralLandscape/terrainSampler'
+import {
+  buildCompiledRoadProfileSourceSignature,
+  compiledRoadProfileMatches,
+  resolveCompiledRoadProfileWorldPoints,
+} from '@schema/proceduralLandscape/compiledRoadProfile'
 
 function makeGrid(height: (x: number, z: number) => number = () => 0): TerrainHeightGrid {
   const size = 900
@@ -630,6 +635,10 @@ describe('unified waypoint road configuration', () => {
         algorithmVersion: 2,
         authoringSampleStep: 1.4,
         authoringCellSize: 10,
+        compiledProfile: {
+          sourceSignature: 'profile-a',
+          pointsLocalXYZ: [1, 10, 2, 3, 11, 4, 5, 12, 6],
+        },
       },
     }
     const clamped = clampProceduralLandscapeProps(props, 'terrain-a')
@@ -638,12 +647,22 @@ describe('unified waypoint road configuration', () => {
       algorithmVersion: 2,
       authoringSampleStep: 1,
       authoringCellSize: 10,
+      compiledProfile: {
+        sourceSignature: 'profile-a',
+        pointsLocalXYZ: [1, 10, 2, 3, 11, 4, 5, 12, 6],
+      },
     })
 
     const clone = cloneProceduralLandscapeProps(clamped)
     expect(clone.road.generatedRoute?.centerline?.pointsXZ).toEqual([1, 2, 3, 4, 5, 6])
     expect(clone.road.generatedRoute?.centerline?.pointsXZ).not.toBe(
       clamped.road.generatedRoute?.centerline?.pointsXZ,
+    )
+    expect(clone.road.generatedRoute?.centerline?.compiledProfile?.pointsLocalXYZ).toEqual(
+      [1, 10, 2, 3, 11, 4, 5, 12, 6],
+    )
+    expect(clone.road.generatedRoute?.centerline?.compiledProfile?.pointsLocalXYZ).not.toBe(
+      clamped.road.generatedRoute?.centerline?.compiledProfile?.pointsLocalXYZ,
     )
 
     const invalid = clampProceduralLandscapeProps({
@@ -662,6 +681,27 @@ describe('unified waypoint road configuration', () => {
       },
     }, 'terrain-a')
     expect(invalid.road.generatedRoute?.centerline).toBeNull()
+
+    const invalidProfile = clampProceduralLandscapeProps({
+      ...props,
+      road: {
+        ...props.road,
+        generatedRoute: {
+          ...props.road.generatedRoute,
+          centerline: {
+            pointsXZ: [1, 2, 3, 4],
+            algorithmVersion: 2,
+            authoringSampleStep: 1,
+            authoringCellSize: 10,
+            compiledProfile: {
+              sourceSignature: 'profile-a',
+              pointsLocalXYZ: [1, 2, 3],
+            },
+          },
+        },
+      },
+    }, 'terrain-a')
+    expect(invalidProfile.road.generatedRoute?.centerline).toBeNull()
   })
 
   it('rejects missing or incompatible centerline algorithm versions', () => {
@@ -793,6 +833,117 @@ describe('unified waypoint road planning', () => {
     expect(cachedCoarse?.nodes.map(({ x, z }) => ({ x, z }))).toEqual(
       cachedFine?.nodes.map(({ x, z }) => ({ x, z })),
     )
+
+    const bakedCenterline = finePlan.nodes.map(({ x, y, z }) => ({ x, y, z }))
+    const bakedFine = createCachedCenterlineRoadRoute(fineGrid, {
+      centerline: bakedCenterline,
+      termination: 'boundary',
+      feelDistance: baseOptions.feelDistance,
+      feelAngleRad: baseOptions.feelAngleRad,
+      maxSlope: baseOptions.maxSlope,
+      waypointCount: waypoints.length,
+    })
+    const bakedCoarse = createCachedCenterlineRoadRoute(coarseGrid, {
+      centerline: bakedCenterline,
+      termination: 'boundary',
+      feelDistance: baseOptions.feelDistance,
+      feelAngleRad: baseOptions.feelAngleRad,
+      maxSlope: baseOptions.maxSlope,
+      waypointCount: waypoints.length,
+    })
+    expect(bakedFine?.nodes.map(({ x, y, z }) => ({ x, y, z }))).toEqual(
+      bakedCenterline,
+    )
+    expect(bakedCoarse?.nodes.map(({ x, y, z }) => ({ x, y, z }))).toEqual(
+      bakedCenterline,
+    )
+
+    const hostMatrix = new THREE.Matrix4().compose(
+      new THREE.Vector3(120, 45, -80),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(0.2, 0.6, -0.1)),
+      new THREE.Vector3(2, 1.5, 3),
+    )
+    const profileCenterline = {
+      pointsXZ: bakedCenterline.flatMap(({ x, z }) => [x, z]),
+      algorithmVersion: 2,
+      authoringSampleStep: 1,
+      authoringCellSize: 10,
+      compiledProfile: {
+        sourceSignature: 'profile-a',
+        pointsLocalXYZ: bakedCenterline.flatMap(({ x, y, z }) => [x, y, z]),
+      },
+    }
+    const transformed = resolveCompiledRoadProfileWorldPoints(profileCenterline, hostMatrix)
+    expect(transformed).not.toBeNull()
+    const transformedGrid = makeSyntheticGrid(100_000, 500, height)
+    const transformedHeight = createCachedCenterlineRoadRoute(transformedGrid, {
+      centerline: transformed!,
+      termination: 'boundary',
+      feelDistance: baseOptions.feelDistance,
+      feelAngleRad: baseOptions.feelAngleRad,
+      maxSlope: baseOptions.maxSlope,
+      waypointCount: waypoints.length,
+    })
+    expect(transformedHeight?.nodes.map(({ x, y, z }) => ({ x, y, z }))).toEqual(
+      transformed,
+    )
+  })
+
+  it('invalidates a compiled road profile when road, terrain, or exclusion inputs change', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'terrain-a' })
+    props.road.generatedRoute = {
+      waypoints: [{ x: 1, z: 2 }],
+      strategy: 'seeded',
+      termination: 'boundary',
+      style: 'normal',
+      seed: 1,
+      waypointTolerance: 4,
+      pathDeviation: 60,
+      revision: 3,
+      centerline: {
+        pointsXZ: [0, 0, 10, 0],
+        algorithmVersion: 2,
+        authoringSampleStep: 1,
+        authoringCellSize: 10,
+        exclusionSignature: 'exclusion-a',
+      },
+    }
+    const source = {
+      groundSurfaceRevision: 4,
+      authoringSampleStep: 1,
+      authoringCellSize: 10,
+      exclusionSignature: 'exclusion-a',
+    }
+    const signature = buildCompiledRoadProfileSourceSignature(props, source)
+    props.road.generatedRoute.centerline!.compiledProfile = {
+      sourceSignature: signature,
+      pointsLocalXYZ: [0, 20, 0, 10, 20, 0],
+    }
+    expect(compiledRoadProfileMatches(
+      props.road.generatedRoute.centerline,
+      buildCompiledRoadProfileSourceSignature(props, source),
+    )).toBe(true)
+    expect(compiledRoadProfileMatches(
+      props.road.generatedRoute.centerline,
+      buildCompiledRoadProfileSourceSignature(props, {
+        ...source,
+        groundSurfaceRevision: 5,
+      }),
+    )).toBe(false)
+    expect(compiledRoadProfileMatches(
+      props.road.generatedRoute.centerline,
+      buildCompiledRoadProfileSourceSignature({
+        ...props,
+        road: { ...props.road, width: props.road.width + 1 },
+      }, source),
+    )).toBe(false)
+    expect(compiledRoadProfileMatches(
+      props.road.generatedRoute.centerline,
+      buildCompiledRoadProfileSourceSignature(props, {
+        ...source,
+        exclusionSignature: 'exclusion-b',
+      }),
+    )).toBe(false)
   })
 
   it('fills a 30km DEM with one deterministic natural spiral', () => {

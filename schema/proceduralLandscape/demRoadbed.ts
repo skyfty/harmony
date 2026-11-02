@@ -146,6 +146,9 @@ export interface DemRoadbedTargetGeometryResult extends DemRoadbedGeometryResult
   maxOuterGap: number
   /** Kept for callers that report whether the roadbed protrudes above raw terrain. */
   outerError: number
+  lateralStep: number
+  rowSpacing: number
+  maxVerticalError: number
 }
 
 /**
@@ -172,13 +175,15 @@ export function createDemRoadbedTargetGeometry(
     burialDepth?: number
     /** Extra downward wall at the outer edge to hide the mesh from below. */
     edgeSkirtDepth?: number
+    /** Maximum vertical interpolation error allowed while reducing roadbed detail. */
+    maxVerticalError?: number
     hostInverse: THREE.Matrix4
   },
 ): DemRoadbedTargetGeometryResult | null {
   if (rows.length < 2) {
     return null
   }
-  const lateralStep = Math.max(1, options.lateralStep ?? 3)
+  const requestedLateralStep = Math.max(1, options.lateralStep ?? 3)
   const lift = options.lift ?? 0.01
   const burialDepth = Math.max(0, options.burialDepth ?? 0.3)
   const edgeSkirtDepth = Math.max(0, options.edgeSkirtDepth ?? 0.5)
@@ -186,16 +191,6 @@ export function createDemRoadbedTargetGeometry(
     rows[1]!.x - rows[0]!.x,
     rows[1]!.z - rows[0]!.z,
   ))
-  const rowStride = options.rowSpacing
-    ? Math.max(1, Math.round(options.rowSpacing / baseRowSpacing))
-    : 1
-  const selectedRows: RoadBandRow[] = []
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += rowStride) {
-    selectedRows.push(rows[rowIndex]!)
-  }
-  if (selectedRows[selectedRows.length - 1] !== rows[rows.length - 1]) {
-    selectedRows.push(rows[rows.length - 1]!)
-  }
   const halfWidth = target.meshHalfWidth
   const asphaltOverlap = Math.max(0, options.asphaltOverlap ?? 0.5)
   const asphaltHalfWidth = Math.max(
@@ -203,6 +198,115 @@ export function createDemRoadbedTargetGeometry(
     Math.min(halfWidth, target.halfWidth - asphaltOverlap),
   )
   const sideSpan = Math.max(0.001, halfWidth - asphaltHalfWidth)
+  let rowStride = options.rowSpacing
+    ? Math.max(1, Math.round(options.rowSpacing / baseRowSpacing))
+    : 1
+  let lateralStep = requestedLateralStep
+  let resolvedMaxVerticalError = 0
+  const maxVerticalError = Math.max(0, options.maxVerticalError ?? 0)
+  if (maxVerticalError > 0 && rows.length > 2) {
+    const heightAt = (row: RoadBandRow, lateral: number): number => {
+      const normalX = -Math.sin(row.heading)
+      const normalZ = Math.cos(row.heading)
+      const x = row.x + normalX * lateral
+      const z = row.z + normalZ * lateral
+      const rawY = target.rawHeightAt(x, z)
+      const distance = Math.abs(lateral)
+      const coarseY = options.coarseSurfaceHeightAt?.(x, z) ?? rawY
+      let surfaceY = target.heightAt(x, z)
+      if (distance > target.outerHalfWidth) {
+        const buriedY = Math.min(rawY, coarseY - burialDepth)
+        const trough = smoothstep(target.outerHalfWidth, halfWidth, distance)
+        surfaceY = rawY + (buriedY - rawY) * trough
+      }
+      return surfaceY + lift
+    }
+    const lateralCandidates = [requestedLateralStep, 4, 5, 6, 8, 10, 12]
+      .filter((value, index, all) => value >= requestedLateralStep
+        && value <= Math.max(requestedLateralStep, sideSpan)
+        && all.indexOf(value) === index)
+    let selectedLateralStep = requestedLateralStep
+    let selectedLateralError = 0
+    for (const candidateStep of lateralCandidates) {
+      let maxError = 0
+      const rowStep = Math.max(1, Math.floor(rows.length / 256))
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex += rowStep) {
+        const row = rows[rowIndex]!
+        for (const side of [-1, 1]) {
+          let distance = asphaltHalfWidth
+          while (distance < halfWidth - 1e-6) {
+            const nextDistance = Math.min(halfWidth, distance + candidateStep)
+            const middle = (distance + nextDistance) * 0.5
+            const startY = heightAt(row, side * distance)
+            const endY = heightAt(row, side * nextDistance)
+            const middleY = heightAt(row, side * middle)
+            maxError = Math.max(maxError, Math.abs(middleY - (startY + endY) * 0.5))
+            distance = nextDistance
+          }
+        }
+      }
+      if (maxError > maxVerticalError) {
+        break
+      }
+      selectedLateralStep = candidateStep
+      selectedLateralError = maxError
+    }
+    lateralStep = selectedLateralStep
+
+    const maxRowSpacing = Math.max(baseRowSpacing, baseRowSpacing * 6)
+    const rowCandidates = [baseRowSpacing, baseRowSpacing * 2, baseRowSpacing * 3, baseRowSpacing * 4, maxRowSpacing]
+    let selectedRowStride = 1
+    let selectedRowError = 0
+    for (const candidateSpacing of rowCandidates) {
+      const candidateStride = Math.max(1, Math.round(candidateSpacing / baseRowSpacing))
+      let maxError = 0
+      for (let rowIndex = 0; rowIndex + candidateStride < rows.length; rowIndex += candidateStride) {
+        const start = rows[rowIndex]!
+        const end = rows[rowIndex + candidateStride]!
+        for (let lateral = -halfWidth; lateral <= halfWidth + 1e-6; lateral += requestedLateralStep) {
+          const startNormalX = -Math.sin(start.heading)
+          const startNormalZ = Math.cos(start.heading)
+          const endNormalX = -Math.sin(end.heading)
+          const endNormalZ = Math.cos(end.heading)
+          const middleX = (
+            start.x + startNormalX * lateral
+            + end.x + endNormalX * lateral
+          ) * 0.5
+          const middleZ = (
+            start.z + startNormalZ * lateral
+            + end.z + endNormalZ * lateral
+          ) * 0.5
+          const middleRow: RoadBandRow = {
+            ...start,
+            x: middleX,
+            z: middleZ,
+            heading: start.heading + Math.atan2(
+              Math.sin(end.heading - start.heading),
+              Math.cos(end.heading - start.heading),
+            ) * 0.5,
+          }
+          const startY = heightAt(start, lateral)
+          const endY = heightAt(end, lateral)
+          const middleY = heightAt(middleRow, lateral)
+          maxError = Math.max(maxError, Math.abs(middleY - (startY + endY) * 0.5))
+        }
+      }
+      if (maxError > maxVerticalError) {
+        break
+      }
+      selectedRowStride = candidateStride
+      selectedRowError = maxError
+    }
+    rowStride = selectedRowStride
+    resolvedMaxVerticalError = Math.max(selectedLateralError, selectedRowError)
+  }
+  const selectedRows: RoadBandRow[] = []
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += rowStride) {
+    selectedRows.push(rows[rowIndex]!)
+  }
+  if (selectedRows[selectedRows.length - 1] !== rows[rows.length - 1]) {
+    selectedRows.push(rows[rows.length - 1]!)
+  }
   const surfaceColumns = Math.max(2, Math.ceil(sideSpan / lateralStep) + 1)
   const columns = surfaceColumns + (edgeSkirtDepth > 0 ? 1 : 0)
   const stripCount = 2
@@ -341,6 +445,9 @@ export function createDemRoadbedTargetGeometry(
     maxCutFill,
     maxOuterGap,
     outerError,
+    lateralStep,
+    rowSpacing: rowStride * baseRowSpacing,
+    maxVerticalError: resolvedMaxVerticalError,
   }
 }
 

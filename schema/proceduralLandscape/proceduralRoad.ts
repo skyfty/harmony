@@ -102,8 +102,8 @@ export interface WaypointRoadPlanResult extends RoadTraceResult {
 type Vec2 = { x: number; z: number }
 
 export interface CachedCenterlineRoadOptions {
-  /** World-space centerline sampled by the editor when the route was generated. */
-  centerline: ReadonlyArray<RoadWaypoint>
+  /** World-space centerline; y is mandatory for compiled DEM profiles. */
+  centerline: ReadonlyArray<RoadWaypoint & { y?: number }>
   termination: 'loop' | 'boundary' | 'dead-end'
   feelDistance: number
   feelAngleRad: number
@@ -1610,8 +1610,8 @@ function makeNode(
  * Rehydrates an editor-authored road centerline on another runtime grid.
  *
  * XZ comes exclusively from the saved snapshot so DEM sample-step changes
- * cannot move the road. Heights and slope metadata are re-sampled locally
- * because preview/viewer intentionally use coarser terrain meshes.
+ * cannot move the road. Compiled DEM profiles also provide Y; non-DEM callers
+ * may omit it and fall back to resampling the active terrain grid.
  */
 export function createCachedCenterlineRoadRoute(
   grid: TerrainHeightGrid,
@@ -1620,6 +1620,7 @@ export function createCachedCenterlineRoadRoute(
   if (options.centerline.length < 2) {
     return null
   }
+  const usesBakedHeights = options.centerline.some((point) => Number.isFinite(point.y))
   const nodes: RoadTraceNode[] = []
   for (let index = 0; index < options.centerline.length; index += 1) {
     const point = options.centerline[index]!
@@ -1630,7 +1631,9 @@ export function createCachedCenterlineRoadRoute(
     ) {
       continue
     }
-    const y = grid.sampleHeight(point.x, point.z)
+    const y = Number.isFinite(point.y)
+      ? point.y
+      : grid.sampleHeight(point.x, point.z)
     if (y == null) {
       continue
     }
@@ -1644,7 +1647,7 @@ export function createCachedCenterlineRoadRoute(
   if (nodes.length < 2) {
     return null
   }
-  if (nodes.length > 2) {
+  if (!usesBakedHeights && nodes.length > 2) {
     const original = nodes.map((node) => node.y)
     for (let index = 1; index < nodes.length - 1; index += 1) {
       const smoothed = (original[index - 1]! + original[index]! * 2 + original[index + 1]!) / 4

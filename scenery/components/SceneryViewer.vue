@@ -862,6 +862,9 @@ import {
   decodeScenePackageSceneDocument,
 } from '@harmony/schema/scenePackageSceneCodec';
 import {
+  stripRetiredSceneComponents,
+} from '@harmony/schema/sceneComponentCompatibility';
+import {
   unzipScenePackage,
   buildAssetOverridesFromScenePackage,
   readBinaryFileFromScenePackage,
@@ -890,6 +893,16 @@ import {
   resolveAutoTourManualTakeoverKind,
   type AutoTourManualTakeoverKind,
 } from '../common/utils/autoTourManualTakeover';
+import { resolveMonotonicNowMs } from '../common/utils/monotonicClock';
+import {
+  resolveCharacterCameraPositionLerpSpeed,
+  resolveCharacterCameraTargetLerpSpeed,
+} from '../common/utils/characterCameraFollowTuning';
+import {
+  createMotionDiagnosticsProbe,
+  type MotionProbeCameraSample,
+  type MotionProbeInputSnapshot,
+} from '../common/utils/motionDiagnostics';
 import { createGltfParseWorkerFactory } from '../common/utils/gltfParseWorkerHost';
 import {
   createGroundRuntimeMeshFromSidecar,
@@ -1855,6 +1868,16 @@ function resolveWeChatMiniProgramRuntime(): boolean {
 }
 
 const isWeChatMiniProgram = resolveWeChatMiniProgramRuntime();
+const motionProbe = createMotionDiagnosticsProbe({
+  intervalMs: 1000,
+  now: resolveMonotonicNowMs,
+  onReport: (report) => {
+    // Keep the payload in one JSON line so it is easy to copy from the
+    // WeChat real-device console without expanding nested objects.
+    console.info('[SceneViewer][MotionProbe]', JSON.stringify(report));
+  },
+});
+motionProbe.setPlatform(isWeChatMiniProgram ? 'mp-weixin' : 'h5');
 const wechatWaypointThumbnailRuntime = isWeChatMiniProgram
   ? resolveWechatWaypointThumbnailRuntime()
   : null;
@@ -3158,6 +3181,12 @@ const characterPhysicsBridgeVisualStateByNodeId = new Map<string, CharacterPhysi
 const physicsBridgeSyncPositionHelper = new THREE.Vector3();
 const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion();
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion();
+const physicsBridgeCharacterProbePositionBefore = new THREE.Vector3();
+const characterPhysicsProbeSample = {
+  targetErrorM: 0,
+  correctionM: 0,
+  deltaSeconds: 0,
+};
 const physicsBridgeHeightfieldAdjustment = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
 const physicsBridgeHeightfieldAdjustmentInverse = physicsBridgeHeightfieldAdjustment.clone().invert();
 let physicsBridgeFrameUpdatedParents = new WeakSet<THREE.Object3D>();
@@ -3495,6 +3524,31 @@ const characterCameraFollowAnchorScratch = new THREE.Vector3();
 const characterCameraFollowForwardScratch = new THREE.Vector3();
 const characterCameraFollowGroundNormalScratch = new THREE.Vector3(0, 1, 0);
 const characterCameraFollowOffsetScratch = new THREE.Vector3();
+const characterCameraProbeInput: MotionProbeInputSnapshot = {
+  source: 'idle',
+  touchActive: false,
+  rawX: 0,
+  rawY: 0,
+  moveX: 0,
+  moveZ: 0,
+  turn: 0,
+  desiredYaw: null,
+  resolvedYaw: null,
+};
+const characterCameraProbeSample = {
+  anchor: new THREE.Vector3(),
+  camera: new THREE.Vector3(),
+  controlsTarget: new THREE.Vector3(),
+  desiredCamera: new THREE.Vector3(),
+  desiredTarget: new THREE.Vector3(),
+  cameraUp: new THREE.Vector3(),
+  desiredForward: new THREE.Vector3(),
+  groundNormal: new THREE.Vector3(),
+  positionLerpSpeed: 0,
+  targetLerpSpeed: 0,
+  deltaSeconds: 0,
+  input: characterCameraProbeInput,
+} satisfies MotionProbeCameraSample;
 const characterControlYawForwardScratch = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
@@ -11525,7 +11579,7 @@ function releaseSceneryMeshCollisionRuntime(): void {
 }
 
 function hasSceneryLandscapeCollisionRevisionChanged(): boolean {
-  const now = performance.now();
+  const now = resolveMonotonicNowMs();
   if (now - lastSceneryLandscapeCollisionRevisionCheckAt < 250) {
     return false;
   }
@@ -12362,7 +12416,9 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
       : undefined;
 
     let existing = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+    let characterTargetStepM: number | null = null;
     if (existing) {
+      characterTargetStepM = existing.position.distanceTo(nextPosition);
       // Motion bookkeeping for the idle step throttle: any real movement (or rotation)
       // keeps the bridge stepping every frame.
       if (
@@ -12385,6 +12441,15 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
         existing.linearVelocity = nextLinearVelocity;
       }
       physicsBridgeFrameBodiesByNodeId.set(nodeId, existing);
+    }
+    const characterControlNodeId = physicsBridgeCharacterControllerNodeIdByBodyNodeId.get(nodeId)
+      ?? (physicsBridgeCharacterIdByNodeId.has(nodeId) ? nodeId : null);
+    if (
+      characterTargetStepM !== null
+      && characterControlNodeId !== null
+      && characterControlNodeId === characterCameraFollowNodeId
+    ) {
+      motionProbe.recordCharacterTarget(characterTargetStepM);
     }
     const pendingHandoff = manualDrivePoseHandoff;
     if (
@@ -12437,8 +12502,20 @@ function updateCharacterPhysicsBridgeVisuals(deltaSeconds: number): void {
     if (!object) {
       return;
     }
+    const characterControlNodeId = physicsBridgeCharacterControllerNodeIdByBodyNodeId.get(nodeId)
+      ?? (physicsBridgeCharacterIdByNodeId.has(nodeId) ? nodeId : null);
+    const recordProbe = characterControlNodeId === characterCameraFollowNodeId;
     if (!visualState.initialized) {
       visualState.initialized = true;
+      object.updateWorldMatrix(true, false);
+      object.getWorldPosition(physicsBridgeCharacterProbePositionBefore);
+      if (recordProbe) {
+        characterPhysicsProbeSample.targetErrorM =
+          physicsBridgeCharacterProbePositionBefore.distanceTo(visualState.targetPosition);
+        characterPhysicsProbeSample.correctionM = 0;
+        characterPhysicsProbeSample.deltaSeconds = deltaSeconds;
+        motionProbe.recordCharacterVisual(characterPhysicsProbeSample);
+      }
       applySceneryPhysicsBridgeTransformToObject(
         object,
         visualState.targetPosition,
@@ -12449,9 +12526,18 @@ function updateCharacterPhysicsBridgeVisuals(deltaSeconds: number): void {
     }
     object.updateWorldMatrix(true, false);
     object.getWorldPosition(physicsBridgeSyncPositionHelper);
+    physicsBridgeCharacterProbePositionBefore.copy(physicsBridgeSyncPositionHelper);
     object.getWorldQuaternion(physicsBridgeSyncQuaternionHelper).normalize();
     physicsBridgeSyncPositionHelper.lerp(visualState.targetPosition, interpolationAlpha);
     physicsBridgeSyncQuaternionHelper.slerp(visualState.targetQuaternion, interpolationAlpha).normalize();
+    if (recordProbe) {
+      characterPhysicsProbeSample.targetErrorM =
+        physicsBridgeCharacterProbePositionBefore.distanceTo(visualState.targetPosition);
+      characterPhysicsProbeSample.correctionM =
+        physicsBridgeCharacterProbePositionBefore.distanceTo(physicsBridgeSyncPositionHelper);
+      characterPhysicsProbeSample.deltaSeconds = deltaSeconds;
+      motionProbe.recordCharacterVisual(characterPhysicsProbeSample);
+    }
     applySceneryPhysicsBridgeTransformToObject(
       object,
       physicsBridgeSyncPositionHelper,
@@ -12700,8 +12786,17 @@ function stepSceneryPhysicsBridge(delta: number): void {
     PHYSICS_BRIDGE_FIXED_STEP_DELTA_SECONDS,
     PHYSICS_BRIDGE_MAX_STEP_DELTA_SECONDS,
   );
+  const stepIssuedAtMs = resolveMonotonicNowMs();
+  motionProbe.recordPhysicsStepRequest();
   physicsBridgeStepPromise = bridge.step(stepDeltaSeconds * 1000)
     .then((frame) => {
+      motionProbe.recordPhysicsStepReply(
+        resolveMonotonicNowMs() - stepIssuedAtMs,
+        {
+          bodyCount: frame.bodyCount,
+          characterMotorCount: frame.characterMotorStates?.length ?? 0,
+        },
+      );
       if (bridge !== physicsBridge) {
         return;
       }
@@ -12709,6 +12804,7 @@ function stepSceneryPhysicsBridge(delta: number): void {
       updateBehaviorCollisions();
     })
     .catch((error) => {
+      motionProbe.recordPhysicsStepFailure();
       console.warn('[SceneViewer] Failed to step physics bridge', error);
     })
     .finally(() => {
@@ -13116,6 +13212,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
   }
   if (physicsBridgeCharacterInputSyncPromise) {
     physicsBridgeCharacterInputSyncPending = true;
+    motionProbe.recordPhysicsInputDeferred();
     return;
   }
   const bridge = physicsBridge;
@@ -13198,6 +13295,8 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
   if (!pending.length) {
     return;
   }
+  const inputSyncStartedAtMs = resolveMonotonicNowMs();
+  motionProbe.recordPhysicsInputRequest(pending.length);
   physicsBridgeCharacterInputSyncPromise = Promise.allSettled(pending)
     .then((results) => {
       results.forEach((result) => {
@@ -13207,6 +13306,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
       });
     })
     .finally(() => {
+      motionProbe.recordPhysicsInputReply(resolveMonotonicNowMs() - inputSyncStartedAtMs);
       physicsBridgeCharacterInputSyncPromise = null;
       if (physicsBridgeCharacterInputSyncPending) {
         physicsBridgeCharacterInputSyncPending = false;
@@ -22270,10 +22370,17 @@ function updateCharacterFollowCamera(
         headingLerpSpeed: characterSteeringActive
           ? Math.max(characterCameraChaseHeadingSpeed, 1e-4)
           : 0.4,
-        targetLerpSpeed: 8,
-        // Smooth the camera position slightly so the physics/visual anchor's
-        // tiny per-frame steps are absorbed instead of being reproduced 1:1.
-        positionLerpSpeed: 10,
+        targetLerpSpeed: resolveCharacterCameraTargetLerpSpeed({
+          platform: isWeChatMiniProgram ? 'mp-weixin' : 'h5',
+          steeringActive: characterSteeringActive,
+        }),
+        // Character visuals are already smoothed before this camera samples
+        // them. On 60 FPS WeChat devices a second position filter leaves a
+        // persistent trailing error, so only smooth once the movement stops.
+        positionLerpSpeed: resolveCharacterCameraPositionLerpSpeed({
+          platform: isWeChatMiniProgram ? 'mp-weixin' : 'h5',
+          steeringActive: characterSteeringActive,
+        }),
       };
 
   const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? controlledNodeId);
@@ -22281,7 +22388,7 @@ function updateCharacterFollowCamera(
     ? motionTelemetry.worldLinearVelocity
     : null;
 
-  return runWithProgrammaticCameraMutationAndAnchor(() => updateBackFollowCamera({
+  const followUpdated = runWithProgrammaticCameraMutationAndAnchor(() => updateBackFollowCamera({
     controller: characterCameraFollowController,
     motion: characterCameraFollowMotionState,
     follow: characterCameraFollowState,
@@ -22308,6 +22415,34 @@ function updateCharacterFollowCamera(
     smoothTargetForProgrammaticFollow: false,
     followForwardPitch: true,
   }));
+  if (followUpdated) {
+    characterCameraProbeSample.anchor.copy(characterCameraFollowAnchorScratch);
+    characterCameraProbeSample.camera.copy(context.camera.position);
+    characterCameraProbeSample.controlsTarget.copy(context.controls.target);
+    characterCameraProbeSample.desiredCamera.copy(characterCameraFollowState.desiredPosition);
+    characterCameraProbeSample.desiredTarget.copy(characterCameraFollowState.desiredTarget);
+    characterCameraProbeSample.cameraUp.copy(context.camera.up);
+    characterCameraProbeSample.desiredForward.copy(characterCameraFollowForwardScratch);
+    characterCameraProbeSample.groundNormal.copy(characterCameraFollowGroundNormalScratch);
+    characterCameraProbeSample.positionLerpSpeed =
+      characterFollowTuning.positionLerpSpeed ?? 0;
+    characterCameraProbeSample.targetLerpSpeed =
+      characterFollowTuning.targetLerpSpeed ?? 0;
+    characterCameraProbeSample.deltaSeconds = deltaSeconds;
+    characterCameraProbeSample.input.source = characterPadInput.active
+      ? 'touch'
+      : (characterDesiredInputYaw !== null ? 'keyboard-or-external' : 'idle');
+    characterCameraProbeSample.input.touchActive = characterPadInput.active;
+    characterCameraProbeSample.input.rawX = characterPadInput.rawX;
+    characterCameraProbeSample.input.rawY = characterPadInput.rawY;
+    characterCameraProbeSample.input.moveX = characterAuthorityInput.moveX;
+    characterCameraProbeSample.input.moveZ = characterAuthorityInput.moveZ;
+    characterCameraProbeSample.input.turn = characterAuthorityInput.turn;
+    characterCameraProbeSample.input.desiredYaw = characterDesiredInputYaw;
+    characterCameraProbeSample.input.resolvedYaw = characterResolvedInputYaw;
+    motionProbe.recordCamera(characterCameraProbeSample);
+  }
+  return followUpdated;
 }
 
 function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?: boolean } = {}): void {
@@ -24634,6 +24769,7 @@ async function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compile
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
+    stripRetiredSceneComponents(document);
     attachScenePackageTerrainRuntime(pkg, sceneEntry, document);
     const compiledGroundManifest = readCompiledGroundManifestFromScenePackage(pkg, sceneEntry);
     const attachedCompiledGroundManifest = attachScenePackageCompiledGroundRuntime(compiledGroundManifest, document);
@@ -26097,6 +26233,7 @@ function startRenderLoop(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
 ): void {
+  motionProbe.reset();
   if (!renderScope) {
     renderScope = effectScope();
   }
@@ -26105,7 +26242,9 @@ function startRenderLoop(
   renderScope.run(() => {
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta: number) => {
+        const frameProbeStartedAtMs = resolveMonotonicNowMs();
         const deltaSecondsRaw = normalizeFrameDelta(delta);
+        motionProbe.recordFrame(delta, deltaSecondsRaw, frameProbeStartedAtMs);
         accumulatedDelta += deltaSecondsRaw;
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
@@ -26324,8 +26463,8 @@ function startRenderLoop(
         } catch (caughtError) {
           const message = caughtError instanceof Error
             ? caughtError.message
-            : 'compiled ground 渲染失败';
-          console.error('[SceneViewer] Compiled ground runtime failed', caughtError);
+            : '地面运行时刷新失败';
+          console.error('[SceneViewer] Scene ground runtime failed', caughtError);
           error.value = message;
           cancel();
           return;
@@ -26350,6 +26489,13 @@ function startRenderLoop(
         updateAttachedTerrainTextureStreams(scene, camera);
         tickSignboardBillboardMotion(instancingNow / 1000);
         renderer.render(scene, camera);
+        motionProbe.setPhysicsRuntimeState({
+          accumulatedDeltaSeconds: physicsBridgeAccumulatedDeltaSeconds,
+          stepPendingSeconds: physicsBridgeStepPendingDeltaSeconds,
+          stepInFlight: Boolean(physicsBridgeStepPromise),
+          inputSyncPending: Boolean(physicsBridgeCharacterInputSyncPromise),
+        });
+        motionProbe.recordFrameWork(resolveMonotonicNowMs() - frameProbeStartedAtMs);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {
           syncRendererDebug(renderer, scene, canvasResult?.canvas ?? null);

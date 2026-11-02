@@ -8134,6 +8134,10 @@ export function createGroundMesh(
   group.name = 'Ground'
   group.userData.dynamicMeshType = 'Ground'
   group.userData.groundChunked = true
+  group.userData.groundSurfaceRevision = Math.max(
+    0,
+    Math.trunc(Number(runtimeDefinition.surfaceRevision) || 0),
+  )
   ensureGroundRuntimeState(group, runtimeDefinition)
   const seedHiddenChunkKeys = options?.hiddenChunkKeys ? Array.from(options.hiddenChunkKeys) : []
   if (seedHiddenChunkKeys.length > 0) {
@@ -8786,8 +8790,14 @@ export function hasPendingGroundChunkWork(target: THREE.Object3D): boolean {
 
 export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynamicMesh) {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const groundSurfaceRevision = Math.max(
+    0,
+    Math.trunc(Number(runtimeDefinition.surfaceRevision) || 0),
+  )
   if ((target as any)?.isMesh) {
     const mesh = target as THREE.Mesh
+    mesh.userData ??= {}
+    mesh.userData.groundSurfaceRevision = groundSurfaceRevision
     if (!(mesh.geometry instanceof THREE.BufferGeometry)) {
       mesh.geometry = buildGroundGeometry(runtimeDefinition)
     }
@@ -8806,6 +8816,8 @@ export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynam
     return
   }
   ensureGroundRuntimeState(group, runtimeDefinition)
+  group.userData ??= {}
+  group.userData.groundSurfaceRevision = groundSurfaceRevision
   updateGroundChunks(group, runtimeDefinition, null)
   applyGroundTextureToObject(group, runtimeDefinition)
 }

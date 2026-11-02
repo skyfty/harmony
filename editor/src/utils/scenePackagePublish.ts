@@ -72,6 +72,7 @@ import {
 } from '@/utils/sceneCompiledGroundCache'
 import type { SceneAssetReferenceSummary } from './sceneAssetDiagnostics'
 import { buildSceneAssetReferenceSummaryMap } from './sceneAssetDiagnostics'
+import { stripRetiredSceneComponents } from '@schema/sceneComponentCompatibility'
 
 interface ScenePackagePublishProjectConfig {
   id: string
@@ -1538,6 +1539,7 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
       message: `开始编译场景 ${sceneName}`,
     })
     const preparedDocument = cloneSceneDocumentForPublishPackageExport(scene.document)
+    stripRetiredSceneComponents(preparedDocument)
     stripLandformNodes(preparedDocument.nodes ?? [])
     assertNoLandformNodes(preparedDocument.nodes ?? [])
     if ('assetCatalog' in preparedDocument) {

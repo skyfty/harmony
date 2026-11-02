@@ -376,6 +376,7 @@ const roadFailureText = computed(() => {
     'official-generator-restart': '官方选线连续触发回退，无法从当前 P1 稳定生成道路',
     'road-forward-grade-limit': `路线未满足 ${scenicMaxGradePercent}% 纵坡上限`,
     'road-cross-slope-limit': `路线未满足 ${scenicMaxCrossPercent}% 局部横坡上限`,
+    'road-compiled-profile-generation-failed': '未能生成道路高度剖面，请重新生成道路',
     'blocked-by-forward-grade': `道路前方没有满足 ${scenicMaxGradePercent}% 纵坡上限的方向`,
     'blocked-by-cross-slope': `道路前方没有满足 ${scenicMaxCrossPercent}% 局部横坡上限的方向`,
     'blocked-by-guide-corridor': '道路无法在自然弯曲范围内继续跟随可行骨架',
@@ -523,6 +524,7 @@ function generateRoadWithGuideRoutePolicy(
       'official-generator-restart': '官方选线连续回退，无法稳定生成；已保留上一版公路。',
       'road-forward-grade-limit': `新路线超过 ${scenicMaxGradePercent}% 纵坡上限，已保留上一版公路。`,
       'road-cross-slope-limit': `新路线超过 ${scenicMaxCrossPercent}% 局部横坡上限，已保留上一版公路。`,
+      'road-compiled-profile-generation-failed': '道路高度剖面生成失败，已保留上一版公路。',
       'blocked-by-forward-grade': `周边地形均超过 ${scenicMaxGradePercent}% 纵坡上限，已保留上一版公路。`,
       'blocked-by-cross-slope': `周边地形均超过 ${scenicMaxCrossPercent}% 局部横坡上限，已保留上一版公路。`,
       'waypoint-unreachable': unreachablePoint

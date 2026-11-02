@@ -3,6 +3,10 @@ import {
   DEVICE_ADAPTATION_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
 } from '@schema/components'
+import { PROCEDURAL_LANDSCAPE_COMPONENT_TYPE } from '@schema/components/definitions/proceduralLandscapeComponent'
+import { LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE } from '@schema/components/definitions/landscapeExclusionZoneComponent'
+import { createDefaultProceduralLandscapeProps } from '@schema/proceduralLandscape/config'
+import { buildCompiledRoadProfileSourceSignature } from '@schema/proceduralLandscape/compiledRoadProfile'
 import {
   buildSceneAssetReferenceSummaryMap,
   collectSceneAssetReferenceRecords,
@@ -32,6 +36,106 @@ function createNode(overrides: Record<string, unknown> = {}) {
 }
 
 describe('scene asset diagnostics', () => {
+  it('blocks export when a DEM road centerline has no compiled height profile', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'ground-1' })
+    props.dem.assetId = 'dem-asset'
+    props.dem.runtimeGridUrl = 'https://example.test/dem-grid.bin'
+    props.road.generatedRoute = {
+      waypoints: [{ x: 0, z: 0 }],
+      strategy: 'seeded',
+      termination: 'boundary',
+      style: 'normal',
+      seed: 1,
+      waypointTolerance: 4,
+      pathDeviation: 60,
+      revision: 1,
+      centerline: {
+        pointsXZ: [0, 0, 10, 0],
+        algorithmVersion: 2,
+        authoringSampleStep: 1,
+        authoringCellSize: 30,
+      },
+    }
+    const report = validateSceneAssetReferences(createScene([
+      createNode({
+        id: 'ground-1',
+        dynamicMesh: { type: 'Ground', surfaceRevision: 0 },
+        components: {
+          [PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]: {
+            id: 'landscape-component',
+            type: PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
+            enabled: true,
+            props,
+          },
+        },
+      }),
+    ]), {})
+
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      severity: 'error',
+      code: 'procedural-landscape-road-profile',
+    }))
+  })
+
+  it('invalidates the compiled road profile when an exclusion zone changes', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'ground-1' })
+    props.dem.assetId = 'dem-asset'
+    props.dem.runtimeGridUrl = 'https://example.test/dem-grid.bin'
+    props.road.generatedRoute = {
+      waypoints: [{ x: 0, z: 0 }],
+      strategy: 'seeded',
+      termination: 'boundary',
+      style: 'normal',
+      seed: 1,
+      waypointTolerance: 4,
+      pathDeviation: 60,
+      revision: 1,
+      centerline: {
+        pointsXZ: [0, 0, 10, 0],
+        algorithmVersion: 2,
+        authoringSampleStep: 1,
+        authoringCellSize: 30,
+        exclusionSignature: '',
+        compiledProfile: {
+          sourceSignature: buildCompiledRoadProfileSourceSignature(props, {
+            groundSurfaceRevision: 0,
+            authoringSampleStep: 1,
+            authoringCellSize: 30,
+            exclusionSignature: '',
+          }),
+          pointsLocalXYZ: [0, 20, 0, 10, 20, 0],
+        },
+      },
+    }
+    const scene = createScene([
+      createNode({
+        id: 'ground-1',
+        name: '青龙山',
+        dynamicMesh: { type: 'Ground', surfaceRevision: 0 },
+        components: {
+          [PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]: {
+            id: 'landscape-component',
+            type: PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
+            enabled: true,
+            props,
+          },
+          [LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE]: {
+            id: 'exclusion-component',
+            type: LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE,
+            enabled: true,
+            props: { radius: 20 },
+          },
+        },
+      }),
+    ])
+
+    const report = validateSceneAssetReferences(scene, {})
+    expect(report.issues).toContainEqual(expect.objectContaining({
+      severity: 'error',
+      code: 'procedural-landscape-road-profile',
+    }))
+  })
+
   it('does not treat a device-adaptation profile ID as an asset reference', () => {
     const scene = createScene([createNode({
       components: {

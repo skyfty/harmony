@@ -95,6 +95,12 @@ export interface ProceduralLandscapeRoadRoutingProps {
 /** Fixed editor-authored path rehydrated by preview/viewer. */
 export const PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION = 2
 
+export interface ProceduralLandscapeCompiledRoadProfile {
+  sourceSignature: string
+  /** Host-local route positions encoded as [x, y, z, ...]. */
+  pointsLocalXYZ: number[]
+}
+
 export interface ProceduralLandscapeGeneratedRouteCenterline {
   /** Host-local centerline XZ pairs: [x0, z0, x1, z1, ...]. */
   pointsXZ: number[]
@@ -106,6 +112,8 @@ export interface ProceduralLandscapeGeneratedRouteCenterline {
   authoringCellSize: number
   /** Landscape exclusion signature used when this path was generated. */
   exclusionSignature?: string
+  /** DEM road heights baked by the editor for all runtime environments. */
+  compiledProfile?: ProceduralLandscapeCompiledRoadProfile
 }
 
 /** Immutable snapshot used by the runtime until the user regenerates the road. */
@@ -455,6 +463,36 @@ export function clampGeneratedRouteCenterline(
     }
     pointsXZ[index] = coordinate
   }
+  let compiledProfile: ProceduralLandscapeCompiledRoadProfile | undefined
+  if (raw.compiledProfile !== undefined) {
+    const profile = raw.compiledProfile as Partial<ProceduralLandscapeCompiledRoadProfile> | null
+    const expectedXYZLength = pointsXZ.length / 2 * 3
+    if (
+      !profile
+      || typeof profile.sourceSignature !== 'string'
+      || !profile.sourceSignature.trim()
+      || !Array.isArray(profile.pointsLocalXYZ)
+      || profile.pointsLocalXYZ.length !== expectedXYZLength
+    ) {
+      return null
+    }
+    const pointsLocalXYZ: number[] = []
+    pointsLocalXYZ.length = profile.pointsLocalXYZ.length
+    for (let index = 0; index < profile.pointsLocalXYZ.length; index += 1) {
+      const coordinate = Number(profile.pointsLocalXYZ[index])
+      if (
+        !Number.isFinite(coordinate)
+        || Math.abs(coordinate) > GENERATED_ROUTE_CENTERLINE_MAX_COORDINATE
+      ) {
+        return null
+      }
+      pointsLocalXYZ[index] = coordinate
+    }
+    compiledProfile = {
+      sourceSignature: profile.sourceSignature.trim().slice(0, 65_536),
+      pointsLocalXYZ,
+    }
+  }
   return {
     pointsXZ,
     algorithmVersion: PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
@@ -463,6 +501,7 @@ export function clampGeneratedRouteCenterline(
     ...(typeof raw.exclusionSignature === 'string'
       ? { exclusionSignature: raw.exclusionSignature.slice(0, 65_536) }
       : {}),
+    ...(compiledProfile ? { compiledProfile } : {}),
   }
 }
 
@@ -479,6 +518,14 @@ export function cloneGeneratedRouteCenterline(
     authoringCellSize: value.authoringCellSize,
     ...(value.exclusionSignature !== undefined
       ? { exclusionSignature: value.exclusionSignature }
+      : {}),
+    ...(value.compiledProfile
+      ? {
+          compiledProfile: {
+            sourceSignature: value.compiledProfile.sourceSignature,
+            pointsLocalXYZ: [...value.compiledProfile.pointsLocalXYZ],
+          },
+        }
       : {}),
   }
 }

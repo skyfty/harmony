@@ -8980,7 +8980,7 @@ function backfillProceduralLandscapeRouteCenterlines(): void {
     if (!generatedRoute) {
       continue
     }
-    if (!generatedRoute.centerline?.pointsXZ.length) {
+    if (!generatedRoute.centerline?.pointsXZ.length || !generatedRoute.centerline.compiledProfile) {
       const attemptKey = `${node.id}:${generatedRoute.revision}`
       if (!proceduralLandscapeCenterlineBackfillAttempts.has(attemptKey)) {
         const centerline = getProceduralLandscapeRoadCenterlineLocal(node.id)

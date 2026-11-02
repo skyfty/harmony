@@ -17,6 +17,7 @@ import {
 import {
   createDemRoadbedGeometry,
   createDemRoadbedTarget,
+  createDemRoadbedTargetGeometry,
 } from '@schema/proceduralLandscape/demRoadbed'
 import { buildRoadProximityIndex } from '@schema/proceduralLandscape/roadProximity'
 import { densifyRoadRows } from '@schema/proceduralLandscape/roadBandRows'
@@ -387,6 +388,44 @@ describe('DEM roadbed', () => {
       const z = position.getZ(col)
       expect(position.getY(col)).toBeCloseTo(rawHeightAt(x, z) - 0.06, 5)
     }
+  })
+
+  it('limits shared roadbed simplification to one centimeter of vertical error', () => {
+    const nodes: RoadTraceNode[] = [
+      { x: -100, z: 0, y: 30, heading: 0, index: 0, lateral: 0, longitudinal: 0, turn: 0, headingDelta: 0 },
+      { x: 100, z: 0, y: 31, heading: 0, index: 1, lateral: 0, longitudinal: 0, turn: 0, headingDelta: 0 },
+    ]
+    const rows = densifyRoadRows(nodes, 2)
+    const roadField = buildRoadProximityIndex(nodes, { maxDistance: 80 })
+    expect(roadField).not.toBeNull()
+    const target = createDemRoadbedTarget({
+      roadField: roadField!,
+      rawHeightAt: (x, z) => (
+        30.5
+        + x * 0.005
+        + Math.sin(x / 45) * 0.35
+        + Math.abs(z) * 0.03
+      ),
+      halfWidth: 3.5,
+      shoulderWidth: 2.5,
+      demCellSize: 30,
+      sideWidth: 20,
+      coverageWidth: 8,
+      coarseClearance: 0.2,
+    })
+    const full = createDemRoadbedTargetGeometry(rows, target, {
+      lateralStep: 3,
+      hostInverse: new THREE.Matrix4(),
+    })
+    const simplified = createDemRoadbedTargetGeometry(rows, target, {
+      lateralStep: 3,
+      maxVerticalError: 0.01,
+      hostInverse: new THREE.Matrix4(),
+    })
+    expect(full).not.toBeNull()
+    expect(simplified).not.toBeNull()
+    expect(simplified!.maxVerticalError).toBeLessThanOrEqual(0.010001)
+    expect(simplified!.triangleCount).toBeLessThanOrEqual(full!.triangleCount)
   })
 })
 

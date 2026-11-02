@@ -17559,7 +17559,9 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 		})
 		.catch((error) => {
 			console.error('[ScenePreview] Failed to apply snapshot', error)
-			statusMessage.value = 'Failed to load scene. Please try again later.'
+			statusMessage.value = error instanceof Error && error.message.trim()
+				? error.message
+				: 'Failed to load scene. Please try again later.'
 		})
 		.finally(() => {
 			isApplyingSnapshot = false

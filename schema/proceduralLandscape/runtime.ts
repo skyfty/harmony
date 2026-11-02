@@ -198,6 +198,11 @@ import {
   type ProceduralLandscapeWaterLevelMode,
   type ResolvedProceduralLandscapeQuality,
 } from './config'
+import {
+  buildCompiledRoadProfileSourceSignature,
+  compiledRoadProfileMatches,
+  resolveCompiledRoadProfileWorldPoints,
+} from './compiledRoadProfile'
 import { transformRoadWaypointsToWorld, type RoadWaypoint } from './roadWaypoints'
 import {
   createCachedCenterlineRoadRoute,
@@ -750,6 +755,28 @@ function jsonKey(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+function resolveHostGroundSurfaceRevision(host: THREE.Object3D | null | undefined): number {
+  if (!host) {
+    return 0
+  }
+  let revision = Math.max(0, Math.trunc(Number(host.userData?.groundSurfaceRevision) || 0))
+  if (revision > 0) {
+    return revision
+  }
+  const nestedGround = host.userData?.groundMesh as THREE.Object3D | undefined
+  revision = Math.max(0, Math.trunc(Number(nestedGround?.userData?.groundSurfaceRevision) || 0))
+  if (revision > 0) {
+    return revision
+  }
+  host.traverse((object: THREE.Object3D) => {
+    if (revision > 0) {
+      return
+    }
+    revision = Math.max(0, Math.trunc(Number(object.userData?.groundSurfaceRevision) || 0))
+  })
+  return revision
 }
 
 export interface DemRoadbedSignatureOptions {
@@ -2450,6 +2477,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     nodes: ReadonlyArray<RoadTraceNode>,
     authoringSampleStep: number,
     authoringCellSize: number,
+    generatedRoute: ProceduralLandscapeGeneratedRouteProps | null = props.road.generatedRoute,
   ): ProceduralLandscapeGeneratedRouteCenterline | null {
     if (nodes.length < 2) {
       return null
@@ -2458,19 +2486,38 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const inverse = new THREE.Matrix4().copy(host.matrixWorld).invert()
     const point = new THREE.Vector3()
     const pointsXZ: number[] = []
+    const pointsLocalXYZ: number[] = []
     for (const node of nodes) {
       point.set(node.x, node.y, node.z).applyMatrix4(inverse)
       if (!Number.isFinite(point.x) || !Number.isFinite(point.z)) {
         return null
       }
       pointsXZ.push(point.x, point.z)
+      pointsLocalXYZ.push(point.x, point.y, point.z)
+    }
+    const exclusionSignature = landscapeExclusionSignature(appliedExclusionCircles)
+    const signatureProps: ProceduralLandscapeComponentProps = {
+      ...props,
+      road: {
+        ...props.road,
+        generatedRoute,
+      },
     }
     return {
       pointsXZ,
       algorithmVersion: PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
       authoringSampleStep,
       authoringCellSize,
-      exclusionSignature: landscapeExclusionSignature(appliedExclusionCircles),
+      exclusionSignature,
+      compiledProfile: {
+        sourceSignature: buildCompiledRoadProfileSourceSignature(signatureProps, {
+          groundSurfaceRevision: resolveHostGroundSurfaceRevision(host),
+          authoringSampleStep,
+          authoringCellSize,
+          exclusionSignature,
+        }),
+        pointsLocalXYZ,
+      },
     }
   }
 
@@ -2486,16 +2533,50 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     host.updateMatrixWorld(true)
     const currentExclusionSignature = landscapeExclusionSignature(appliedExclusionCircles)
     const exclusionMargin = resolveRoadExclusionMargin()
-    const cachedPointsXZ = route.centerline?.pointsXZ
+    const cachedCenterline = route.centerline
+    const cachedPointsXZ = cachedCenterline?.pointsXZ
+    const expectedProfileSignature = buildCompiledRoadProfileSourceSignature(
+      {
+        ...props,
+        road: {
+          ...props.road,
+          generatedRoute: route,
+        },
+      },
+      {
+        groundSurfaceRevision: resolveHostGroundSurfaceRevision(host),
+        authoringSampleStep: cachedCenterline?.authoringSampleStep ?? demGridSampleStep,
+        authoringCellSize: cachedCenterline?.authoringCellSize ?? activeGrid.cellSize,
+        exclusionSignature: currentExclusionSignature,
+      },
+    )
+    const hasMatchingProfile = compiledRoadProfileMatches(cachedCenterline, expectedProfileSignature)
+    if (usesDemTerrain() && currentEnvironment !== 'editor' && !hasMatchingProfile) {
+      warn('road-compiled-profile-missing-or-stale')
+      return null
+    }
     let cachedFallback: WaypointRoadPlanResult | null = null
     if (cachedPointsXZ?.length) {
-      const centerlineWorld: RoadWaypoint[] = []
+      const compiledPoints = hasMatchingProfile
+        ? resolveCompiledRoadProfileWorldPoints(cachedCenterline, host.matrixWorld)
+        : null
+      const centerlineWorld: Array<RoadWaypoint & { y?: number }> = []
       const point = new THREE.Vector3()
       for (let index = 0; index + 1 < cachedPointsXZ.length; index += 2) {
-        point
-          .set(cachedPointsXZ[index]!, 0, cachedPointsXZ[index + 1]!)
-          .applyMatrix4(host.matrixWorld)
-        centerlineWorld.push({ x: point.x, z: point.z })
+        const pointIndex = index / 2
+        if (compiledPoints) {
+          const compiledPoint = compiledPoints[pointIndex]!
+          centerlineWorld.push({
+            x: compiledPoint.x,
+            y: compiledPoint.y,
+            z: compiledPoint.z,
+          })
+        } else {
+          point
+            .set(cachedPointsXZ[index]!, 0, cachedPointsXZ[index + 1]!)
+            .applyMatrix4(host.matrixWorld)
+          centerlineWorld.push({ x: point.x, z: point.z })
+        }
       }
       const cached = createCachedCenterlineRoadRoute(activeGrid, {
         centerline: centerlineWorld,
@@ -2792,14 +2873,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         const sampledSurfaceHeightAt = (x: number, z: number): number | null => (
           roadSurfaceSampler?.heightAt(x, z) ?? activeGrid.sampleHeight(x, z)
         )
-        roadEdgeHeights = computeRoadEdgeHeights(
-          roadResult.nodes,
-          sampledSurfaceHeightAt,
-          halfWidth,
-          maxLateralDrop,
-        )
+        roadEdgeHeights = usesDemTerrain()
+          ? null
+          : computeRoadEdgeHeights(
+              roadResult.nodes,
+              sampledSurfaceHeightAt,
+              halfWidth,
+              maxLateralDrop,
+            )
         roadCenterHeights = roadResult.nodes.map((node) => (
-          sampleRoadRowColumns(node, sampledSurfaceHeightAt, halfWidth, 1, maxLateralDrop)[0]!
+          usesDemTerrain()
+            ? node.y
+            : sampleRoadRowColumns(node, sampledSurfaceHeightAt, halfWidth, 1, maxLateralDrop)[0]!
         ))
         roadBandRows = densifyRoadRows(roadResult.nodes, ROAD_BAND_ROW_SPACING)
         // DEM roads use one design height per row (no lateral bank). The
@@ -2883,14 +2968,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           // terrain holes. Coarse side-slope triangles are already graded
           // below the high-res roadbed, so they must not be cut by distance.
           demRoadbedCutProx = Math.max(0, props.road.shoulderWidth + 0.25)
-          // Embedded viewers keep the same apron silhouette but do not need
-          // editor-grade tessellation on a 100m-wide cut/fill slope. At 3m
-          // lateral and 2m along-road spacing this single mesh reached
-          // ~280k triangles for the 5.3km sample route.
-          const viewerRoadbedDetail = currentEnvironment === 'viewer'
           const roadbed = createDemRoadbedTargetGeometry(roadBandRows, demRoadbedTarget, {
-            lateralStep: viewerRoadbedDetail ? 6 : 3,
-            ...(viewerRoadbedDetail ? { rowSpacing: 6 } : {}),
+            lateralStep: 3,
+            maxVerticalError: 0.01,
             lift: 0.01,
             asphaltOverlap: 0.5,
             coarseSurfaceHeightAt,
@@ -5569,24 +5649,56 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
               result.nodes,
               Math.max(1, demGridSampleStep),
               grid.cellSize,
+              route,
             )
           : null,
       }
     },
     getGeneratedRoadCenterlineLocal(): ProceduralLandscapeGeneratedRouteCenterline | null {
-      const saved = props.road.generatedRoute?.centerline
+      const generatedRoute = props.road.generatedRoute
+      const saved = generatedRoute?.centerline
       const currentExclusionSignature = landscapeExclusionSignature(appliedExclusionCircles)
       if (
         saved?.pointsXZ.length
         && (saved.exclusionSignature ?? '') === currentExclusionSignature
       ) {
-        return {
-          pointsXZ: [...saved.pointsXZ],
-          algorithmVersion: saved.algorithmVersion,
+        const sourceSignature = buildCompiledRoadProfileSourceSignature(props, {
+          groundSurfaceRevision: resolveHostGroundSurfaceRevision(hostObject),
           authoringSampleStep: saved.authoringSampleStep,
           authoringCellSize: saved.authoringCellSize,
-          exclusionSignature: saved.exclusionSignature ?? '',
+          exclusionSignature: currentExclusionSignature,
+        })
+        if (compiledRoadProfileMatches(saved, sourceSignature)) {
+          return {
+            pointsXZ: [...saved.pointsXZ],
+            algorithmVersion: saved.algorithmVersion,
+            authoringSampleStep: saved.authoringSampleStep,
+            authoringCellSize: saved.authoringCellSize,
+            exclusionSignature: saved.exclusionSignature ?? '',
+            compiledProfile: {
+              sourceSignature,
+              pointsLocalXYZ: [...saved.compiledProfile!.pointsLocalXYZ],
+            },
+          }
         }
+      }
+      if (
+        currentEnvironment === 'editor'
+        && grid
+        && hostObject
+        && roadResult
+        && roadResult.nodes.length >= 2
+      ) {
+        return buildCenterlineLocalSnapshot(
+          hostObject,
+          roadResult.nodes,
+          Math.max(1, demGridSampleStep),
+          grid.cellSize,
+          generatedRoute,
+        )
+      }
+      if (saved?.pointsXZ.length) {
+        return null
       }
       if (!grid || !hostObject || !roadResult || roadResult.nodes.length < 2) {
         return null
@@ -5596,6 +5708,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         roadResult.nodes,
         Math.max(1, demGridSampleStep),
         grid.cellSize,
+        generatedRoute,
       )
     },
     resolveRoadLanePose(

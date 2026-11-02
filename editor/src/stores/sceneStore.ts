@@ -87,6 +87,7 @@ import type {
 } from '@schema/core'
 import type { LandformBuildShape } from '@/types/landform-build-shape'
 import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
+import { stripRetiredSceneComponents } from '@schema/sceneComponentCompatibility'
 import { stableSerialize } from '@schema/stableSerialize'
 import { normalizeLightNodeType } from '@/types/light'
 import lightUtils from './lightUtils'
@@ -10696,6 +10697,7 @@ export const useSceneStore = defineStore('scene', {
       applySceneAssetState(this, scene)
       this.environment = resolveSceneDocumentEnvironment(scene)
       const clonedNodes = cloneSceneNodes(scene.nodes)
+      stripRetiredSceneComponents({ nodes: clonedNodes })
       hydrateLightweightImportNodeTransforms(clonedNodes)
       const effectiveGroundSettings = resolveGroundSettingsFromNodes(clonedNodes, cloneGroundSettings(scene.groundSettings))
       const normalizedNodes = ensureEnvironmentNode(
@@ -20153,6 +20155,12 @@ export const useSceneStore = defineStore('scene', {
           unreachableWaypointIndex: validation?.unreachableWaypointIndex ?? null,
         }
       }
+      if (!validation.centerline?.compiledProfile) {
+        return {
+          accepted: false,
+          failureReason: 'road-compiled-profile-generation-failed',
+        }
+      }
       const committedGeneratedRoute: ProceduralLandscapeGeneratedRouteProps = {
         ...generatedRoute,
         centerline: validation.centerline,
@@ -20201,6 +20209,8 @@ export const useSceneStore = defineStore('scene', {
         currentCenterline?.pointsXZ.length
         && (currentCenterline.exclusionSignature ?? '')
           === (centerline.exclusionSignature ?? '')
+        && currentCenterline.compiledProfile?.sourceSignature
+          === centerline.compiledProfile?.sourceSignature
       ) {
         return false
       }
@@ -20218,6 +20228,14 @@ export const useSceneStore = defineStore('scene', {
                 authoringSampleStep: centerline.authoringSampleStep,
                 authoringCellSize: centerline.authoringCellSize,
                 exclusionSignature: centerline.exclusionSignature ?? '',
+                ...(centerline.compiledProfile
+                  ? {
+                      compiledProfile: {
+                        sourceSignature: centerline.compiledProfile.sourceSignature,
+                        pointsLocalXYZ: [...centerline.compiledProfile.pointsLocalXYZ],
+                      },
+                    }
+                  : {}),
               },
             },
           },

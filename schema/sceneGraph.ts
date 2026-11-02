@@ -77,6 +77,14 @@ import {
 } from './compiledStaticMesh';
 import { compileRoadStaticMeshMetadata } from './roadMesh'
 import { GENERAL_MESH_COMPONENT_TYPE } from './components/definitions/generalMeshComponent'
+import {
+  PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
+  type ProceduralLandscapeComponentProps,
+} from './components/definitions/proceduralLandscapeComponent'
+import {
+  buildCompiledRoadProfileSourceSignature,
+  compiledRoadProfileMatches,
+} from './proceduralLandscape/compiledRoadProfile'
 
 
 export interface SceneGraphBuildResult {
@@ -135,6 +143,39 @@ async function loadAssetImportModule(): Promise<typeof import('./assetImport')> 
 function hasEnabledGeneralMeshComponent(node: Pick<SceneNode, 'components'>): boolean {
   const component = node.components?.[GENERAL_MESH_COMPONENT_TYPE]
   return Boolean(component && component.enabled !== false)
+}
+
+function validateCompiledRoadProfile(node: SceneNode): void {
+  const component = node.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ProceduralLandscapeComponentProps>
+    | undefined
+  if (!component || component.enabled === false) {
+    return
+  }
+  const props = component.props
+  const generatedRoute = props.road.generatedRoute
+  if (!generatedRoute) {
+    return
+  }
+  if (!props.road.enabled) {
+    return
+  }
+  if (!props.dem.assetId || !props.dem.runtimeGridUrl) {
+    return
+  }
+  const centerline = generatedRoute.centerline
+  if (!centerline) {
+    throw new Error(`DEM road on node "${node.name ?? node.id}" has no generated centerline. Regenerate the road.`)
+  }
+  const sourceSignature = buildCompiledRoadProfileSourceSignature(props, {
+    groundSurfaceRevision: node.dynamicMesh?.type === 'Ground' ? node.dynamicMesh.surfaceRevision ?? 0 : 0,
+    authoringSampleStep: centerline.authoringSampleStep,
+    authoringCellSize: centerline.authoringCellSize,
+    exclusionSignature: centerline.exclusionSignature ?? '',
+  })
+  if (!compiledRoadProfileMatches(centerline, sourceSignature)) {
+    throw new Error(`DEM road on node "${node.name ?? node.id}" has a missing or stale compiled profile. Regenerate the road and save the scene.`)
+  }
 }
 
 /**
@@ -1162,6 +1203,7 @@ class SceneGraphBuilder {
       if (!node) {
         continue;
       }
+      validateCompiledRoadProfile(node)
       // The material surface of an imported model root acts as the default
       // override for its expanded lightweight descendants; a lightweight node
       // with its own material config overrides it for its own subtree.
