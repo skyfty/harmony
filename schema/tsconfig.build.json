@@ -20,8 +20,8 @@
     "paths": {
       "@harmony/schema": ["./index.ts"],
       "@harmony/schema/*": ["./*"],
-      "@harmony/physics-core": ["../physics-core/index.ts"],
-      "@harmony/physics-bridge": ["../physics-bridge/index.ts"]
+      "@harmony/physics-core": ["../physics-core/dist/index.d.ts"],
+      "@harmony/physics-bridge": ["../physics-bridge/dist/index.d.ts"]
     }
   },
   "include": [
