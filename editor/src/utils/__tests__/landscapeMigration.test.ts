@@ -266,6 +266,67 @@ describe('DEM roadbed target', () => {
     }
   }
 
+  function pointInTriangleXZ(
+    px: number,
+    pz: number,
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number,
+    cx: number,
+    cz: number,
+  ): boolean {
+    const denominator = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz)
+    if (Math.abs(denominator) <= 1e-9) {
+      return false
+    }
+    const a = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / denominator
+    const b = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / denominator
+    const c = 1 - a - b
+    return a >= -1e-6 && b >= -1e-6 && c >= -1e-6
+  }
+
+  function cappedRoadbedFixture(rawHeightAt: (x: number, z: number) => number) {
+    const nodes = [
+      node(0, 0, rawHeightAt(0, 100) - 4),
+      node(1, 200, rawHeightAt(200, 100) + 4),
+    ].map((entry) => ({ ...entry, z: 100 }))
+    const roadField = buildRoadProximityIndex(nodes, { maxDistance: 120 })
+    expect(roadField).not.toBeNull()
+    if (!roadField) {
+      throw new Error('test road field could not be built')
+    }
+    const target = createDemRoadbedTarget({
+      roadField,
+      rawHeightAt,
+      halfWidth: 3.5,
+      shoulderWidth: 2.5,
+      demCellSize: 30,
+      sideWidth: 16,
+      coverageWidth: 4,
+      coarseClearance: 2,
+    })
+    const rows = densifyRoadRows(nodes, 2)
+    const matrix = new THREE.Matrix4()
+    const options = {
+      lateralStep: 3,
+      lift: 0.01,
+      asphaltOverlap: 0.5,
+      coarseSurfaceHeightAt: rawHeightAt,
+      burialDepth: 0.3,
+      edgeSkirtDepth: 0.5,
+      hostInverse: matrix,
+    }
+    const uncapped = createDemRoadbedTargetGeometry(rows, target, options)
+    const capped = createDemRoadbedTargetGeometry(rows, target, {
+      ...options,
+      capEnds: true,
+    })
+    expect(uncapped).not.toBeNull()
+    expect(capped).not.toBeNull()
+    return { nodes, target, uncapped: uncapped!, capped: capped! }
+  }
+
   it('keeps one design height across the carriageway and meets raw terrain outside', () => {
     const roadField = buildRoadProximityIndex([
       node(0, 0, 0),
@@ -317,6 +378,262 @@ describe('DEM roadbed target', () => {
     const c = new THREE.Vector3().fromBufferAttribute(position, index.getX(2))
     const normal = b.sub(a).cross(c.sub(a)).normalize()
     expect(normal.y).toBeGreaterThan(0.9)
+  })
+
+  it('caps both open road ends without changing the existing ribbon vertices', () => {
+    const { target, uncapped, capped } = cappedRoadbedFixture((x, z) => (
+      50 + x * 0.015 + z * 0.02
+    ))
+    expect(uncapped.endCapCount).toBe(0)
+    expect(capped.endCapCount).toBe(2)
+    expect(capped.endCapVertexCount).toBeGreaterThan(0)
+    expect(capped.endCapTriangleCount).toBeGreaterThan(0)
+    expect(capped.maxEndCapSeamGap).toBeLessThanOrEqual(1e-6)
+    expect(capped.vertexCount).toBe(
+      uncapped.vertexCount + capped.endCapVertexCount,
+    )
+    expect(capped.triangleCount).toBe(
+      uncapped.triangleCount + capped.endCapTriangleCount,
+    )
+
+    const cappedPosition = capped.geometry.getAttribute('position')
+    const uncappedPosition = uncapped.geometry.getAttribute('position')
+    expect(cappedPosition.count).toBe(capped.vertexCount)
+    for (let vertex = 0; vertex < uncapped.vertexCount; vertex += 1) {
+      expect(cappedPosition.getX(vertex)).toBe(uncappedPosition.getX(vertex))
+      expect(cappedPosition.getY(vertex)).toBe(uncappedPosition.getY(vertex))
+      expect(cappedPosition.getZ(vertex)).toBe(uncappedPosition.getZ(vertex))
+    }
+
+    const position = capped.geometry.getAttribute('position')
+    const normal = capped.geometry.getAttribute('normal')
+    const index = capped.geometry.getIndex()!
+    const degenerateTriangles: Array<{
+      triangle: number
+      indices: [number, number, number]
+      positions: Array<[number, number, number]>
+    }> = []
+    expect(index.count).toBe(capped.triangleCount * 3)
+    for (let vertex = 0; vertex < position.count; vertex += 1) {
+      expect(Number.isFinite(position.getX(vertex))).toBe(true)
+      expect(Number.isFinite(position.getY(vertex))).toBe(true)
+      expect(Number.isFinite(position.getZ(vertex))).toBe(true)
+      expect(Math.hypot(
+        normal.getX(vertex),
+        normal.getY(vertex),
+        normal.getZ(vertex),
+      )).toBeCloseTo(1, 5)
+    }
+
+    const triangles: Array<[number, number, number]> = []
+    for (
+      let triangle = uncapped.triangleCount * 3;
+      triangle < index.count;
+      triangle += 3
+    ) {
+      const a = index.getX(triangle)
+      const b = index.getX(triangle + 1)
+      const c = index.getX(triangle + 2)
+      const aPosition = new THREE.Vector3().fromBufferAttribute(position, a)
+      const ab = new THREE.Vector3().fromBufferAttribute(position, b).sub(aPosition)
+      const ac = new THREE.Vector3().fromBufferAttribute(position, c).sub(aPosition)
+      const geometricNormal = ab.cross(ac)
+      const areaTwice = geometricNormal.length()
+      if (areaTwice <= 1e-7) {
+        degenerateTriangles.push({
+          triangle,
+          indices: [a, b, c],
+          positions: [a, b, c].map((vertex) => [
+            position.getX(vertex),
+            position.getY(vertex),
+            position.getZ(vertex),
+          ]),
+        })
+      }
+      expect(geometricNormal.y).toBeGreaterThan(-1e-6)
+      triangles.push([a, b, c])
+    }
+    expect(degenerateTriangles).toEqual([])
+
+    const cutRadius = target.innerHalfWidth + 0.25
+    for (const [endpointX, outwardX] of [[0, -1], [200, 1]] as const) {
+      for (let angleIndex = 1; angleIndex < 8; angleIndex += 1) {
+        const angle = (angleIndex / 8) * Math.PI
+        for (const radius of [
+          0.75,
+          2,
+          4,
+          cutRadius - 0.05,
+          target.outerHalfWidth - 0.05,
+          target.meshHalfWidth - 0.05,
+        ]) {
+          const x = endpointX + outwardX * Math.sin(angle) * radius
+          const z = 100 + Math.cos(angle) * radius
+          const covered = triangles.some(([a, b, c]) => pointInTriangleXZ(
+            x,
+            z,
+            position.getX(a),
+            position.getZ(a),
+            position.getX(b),
+            position.getZ(b),
+            position.getX(c),
+            position.getZ(c),
+          ))
+          expect(
+            covered,
+            `endpoint ${endpointX}, angle ${angle}, radius ${radius}`,
+          ).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('buries the rounded outer arc and emits its skirt for cut and fill roads', () => {
+    for (const roadOffset of [-6, 0, 6]) {
+      const rawHeightAt = (x: number, z: number): number => (
+        50 + x * 0.015 + z * 0.02
+      )
+      const nodes = [
+        { ...node(0, 0, rawHeightAt(0, 100) + roadOffset), z: 100 },
+        { ...node(1, 200, rawHeightAt(200, 100) + roadOffset), z: 100 },
+      ]
+      const roadField = buildRoadProximityIndex(nodes, { maxDistance: 120 })!
+      const target = createDemRoadbedTarget({
+        roadField,
+        rawHeightAt,
+        halfWidth: 3.5,
+        shoulderWidth: 2.5,
+        demCellSize: 30,
+        sideWidth: 16,
+        coverageWidth: 4,
+      })
+      const result = createDemRoadbedTargetGeometry(
+        densifyRoadRows(nodes, 2),
+        target,
+        {
+          lateralStep: 3,
+          lift: 0.01,
+          capEnds: true,
+          coarseSurfaceHeightAt: rawHeightAt,
+          burialDepth: 0.3,
+          edgeSkirtDepth: 0.5,
+          hostInverse: new THREE.Matrix4(),
+        },
+      )
+      expect(result).not.toBeNull()
+      expect(result!.maxEndCapSeamGap).toBeLessThanOrEqual(1e-6)
+      expect(result!.maxOuterGap).toBeLessThanOrEqual(1e-6)
+      const position = result!.geometry.getAttribute('position')
+      const edgeRadius = target.meshHalfWidth
+      for (const [endpointX, outwardX] of [[0, -1], [200, 1]] as const) {
+        const capVertexStart = result!.vertexCount - result!.endCapVertexCount
+        const heightsByPosition = new Map<string, number[]>()
+        let centerArcPoint: { x: number; z: number } | null = null
+        let centerArcOutward = -Infinity
+        for (let vertex = capVertexStart; vertex < position.count; vertex += 1) {
+          const x = position.getX(vertex)
+          const z = position.getZ(vertex)
+          const dx = x - endpointX
+          const dz = z - 100
+          if (Math.abs(Math.hypot(dx, dz) - edgeRadius) > 1e-5) {
+            continue
+          }
+          const outwardOffset = dx * outwardX
+          const lateralOffset = Math.abs(dz)
+          if (outwardOffset < -1e-6 || lateralOffset > 2) {
+            continue
+          }
+          if (outwardOffset > centerArcOutward) {
+            centerArcOutward = outwardOffset
+            centerArcPoint = { x, z }
+          }
+          const key = `${x.toFixed(5)}:${z.toFixed(5)}`
+          const heights = heightsByPosition.get(key) ?? []
+          heights.push(position.getY(vertex))
+          heightsByPosition.set(key, heights)
+        }
+        expect(centerArcPoint).not.toBeNull()
+        const edgeX = centerArcPoint!.x
+        const edgeZ = centerArcPoint!.z
+        const heights = heightsByPosition.get(
+          `${edgeX.toFixed(5)}:${edgeZ.toFixed(5)}`,
+        ) ?? []
+        expect(heights.length).toBeGreaterThanOrEqual(2)
+        const surfaceY = Math.max(...heights)
+        const skirtY = Math.min(...heights)
+        expect(surfaceY).toBeLessThanOrEqual(
+          rawHeightAt(edgeX, edgeZ) - 0.3 + 0.01 + 1e-5,
+        )
+        expect(surfaceY - skirtY).toBeCloseTo(0.5, 5)
+      }
+    }
+  })
+
+  it('keeps both caps connected on a curved road centerline', () => {
+    const rawHeightAt = (x: number, z: number): number => 40 + x * 0.02 + z * 0.01
+    const nodes: RoadTraceNode[] = [
+      { ...node(0, 0, rawHeightAt(0, 100)), z: 100, heading: 0 },
+      {
+        ...node(1, 80, rawHeightAt(80, 100)),
+        z: 100,
+        heading: Math.PI / 4,
+      },
+      {
+        ...node(2, 160, rawHeightAt(160, 160)),
+        z: 160,
+        heading: Math.PI / 2,
+      },
+    ]
+    const roadField = buildRoadProximityIndex(nodes, { maxDistance: 100 })
+    expect(roadField).not.toBeNull()
+    if (!roadField) return
+    const target = createDemRoadbedTarget({
+      roadField,
+      rawHeightAt,
+      halfWidth: 3.5,
+      shoulderWidth: 2.5,
+      demCellSize: 30,
+      sideWidth: 16,
+      coverageWidth: 4,
+    })
+    const result = createDemRoadbedTargetGeometry(
+      densifyRoadRows(nodes, 2),
+      target,
+      {
+        lateralStep: 3,
+        lift: 0.01,
+        capEnds: true,
+        coarseSurfaceHeightAt: rawHeightAt,
+        burialDepth: 0.3,
+        edgeSkirtDepth: 0.5,
+        hostInverse: new THREE.Matrix4(),
+      },
+    )
+    expect(result).not.toBeNull()
+    expect(result!.maxEndCapSeamGap).toBeLessThanOrEqual(1e-6)
+    const geometry = result!.geometry
+    const position = geometry.getAttribute('position')
+    const index = geometry.getIndex()!
+    const capVertexStart = result!.vertexCount - result!.endCapVertexCount
+    for (let vertex = capVertexStart; vertex < position.count; vertex += 1) {
+      const minimumDistance = Math.min(
+        Math.hypot(position.getX(vertex) - nodes[0]!.x, position.getZ(vertex) - nodes[0]!.z),
+        Math.hypot(
+          position.getX(vertex) - nodes[nodes.length - 1]!.x,
+          position.getZ(vertex) - nodes[nodes.length - 1]!.z,
+        ),
+      )
+      expect(minimumDistance).toBeLessThanOrEqual(target.meshHalfWidth + 1e-5)
+    }
+    const capIndexStart = (result!.triangleCount - result!.endCapTriangleCount) * 3
+    for (let triangle = capIndexStart; triangle < index.count; triangle += 3) {
+      const a = new THREE.Vector3().fromBufferAttribute(position, index.getX(triangle))
+      const b = new THREE.Vector3().fromBufferAttribute(position, index.getX(triangle + 1))
+      const c = new THREE.Vector3().fromBufferAttribute(position, index.getX(triangle + 2))
+      const geometricNormal = b.sub(a).cross(c.sub(a))
+      expect(geometricNormal.length()).toBeGreaterThan(1e-7)
+      expect(geometricNormal.y).toBeGreaterThan(-1e-6)
+    }
   })
 
   it('samples the same coarse triangles that the DEM builder renders', () => {

@@ -433,6 +433,10 @@ export interface ProceduralLandscapeRuntimeStats {
   roadbedOcclusionCount: number
   roadbedAuditSamples: number
   roadbedTriangleCount: number
+  /** Rounded cut/fill caps emitted at the two ends of an open DEM road. */
+  roadbedEndCapCount: number
+  /** Maximum vertical mismatch where the rounded caps meet the side ribbons. */
+  roadbedEndCapSeamGap: number
   /** 水面是否启用。 */
   waterEnabled: boolean
   /** 当前实际水线（世界 Y，已包含自动或手动模式）。 */
@@ -1166,6 +1170,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let demRoadbedOcclusionCount = 0
   let demRoadbedAuditSamples = 0
   let demRoadbedTriangleCount = 0
+  let demRoadbedEndCapCount = 0
+  let demRoadbedEndCapSeamGap = 0
   let nearCardLayers: { broadleaf: THREE.InstancedMesh; conifer: THREE.InstancedMesh } | null = null
   const nearCardCamera = new THREE.Vector2(Number.NaN, Number.NaN)
   const nearMeshCamera = new THREE.Vector2(Number.NaN, Number.NaN)
@@ -1343,6 +1349,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadbedOcclusionCount: 0,
     roadbedAuditSamples: 0,
     roadbedTriangleCount: 0,
+    roadbedEndCapCount: 0,
+    roadbedEndCapSeamGap: 0,
     waterEnabled: false,
     waterLevel: 0,
     waterLevelMode: props.water.levelMode,
@@ -2031,6 +2039,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demRoadbedOcclusionCount = 0
     demRoadbedAuditSamples = 0
     demRoadbedTriangleCount = 0
+    demRoadbedEndCapCount = 0
+    demRoadbedEndCapSeamGap = 0
     stats.roadbedOuterError = 0
     roadBucketTable = []
   }
@@ -2754,6 +2764,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demRoadbedOcclusionCount = 0
     demRoadbedAuditSamples = 0
     demRoadbedTriangleCount = 0
+    demRoadbedEndCapCount = 0
+    demRoadbedEndCapSeamGap = 0
     stats.roadbedOuterError = 0
     const activeGrid = grid
     const bounds = { minX: grid.minX, minZ: grid.minZ, sizeX: grid.maxX - grid.minX, sizeZ: grid.maxZ - grid.minZ }
@@ -2974,6 +2986,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             maxVerticalError: 0.01,
             lift: 0.01,
             asphaltOverlap: 0.5,
+            capEnds: !roadResult.closed,
             coarseSurfaceHeightAt,
             burialDepth: 0.3,
             edgeSkirtDepth: 0.5,
@@ -2997,6 +3010,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
               rowSpacing: 8,
               lift: 0.01,
               asphaltOverlap: 0.5,
+              capEnds: !roadResult.closed,
               coarseSurfaceHeightAt,
               burialDepth: 0.3,
               edgeSkirtDepth: 0.5,
@@ -3015,6 +3029,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             demRoadbedMaxCutFill = roadbed.maxCutFill
             demRoadbedMaxOuterGap = roadbed.maxOuterGap
             demRoadbedTriangleCount = roadbed.triangleCount
+            demRoadbedEndCapCount = roadbed.endCapCount
+            demRoadbedEndCapSeamGap = roadbed.maxEndCapSeamGap
             stats.roadbedOuterError = roadbed.outerError
             const auditStride = Math.max(1, Math.floor(roadBandRows.length / 4096))
             for (let rowIndex = 0; rowIndex < roadBandRows.length; rowIndex += auditStride) {
@@ -4788,6 +4804,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.roadbedMaxOuterGap = demRoadbedMaxOuterGap
     stats.roadbedAuditSamples = demRoadbedAuditSamples
     stats.roadbedTriangleCount = demRoadbedTriangleCount
+    stats.roadbedEndCapCount = demRoadbedEndCapCount
+    stats.roadbedEndCapSeamGap = demRoadbedEndCapSeamGap
     stats.waterEnabled = Boolean(waterPlane && waterPlane.mesh.visible)
     stats.waterLevel = grid ? resolveWaterLevel() : 0
     stats.waterLevelMode = props.water.levelMode

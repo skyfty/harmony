@@ -25,6 +25,7 @@ export interface DemRoadbedTarget {
   readonly halfWidth: number
   readonly shoulderWidth: number
   readonly sideWidth: number
+  readonly innerHalfWidth: number
   readonly outerHalfWidth: number
   readonly meshHalfWidth: number
   readonly influenceHalfWidth: number
@@ -85,6 +86,7 @@ export function createDemRoadbedTarget(options: DemRoadbedTargetOptions): DemRoa
     halfWidth,
     shoulderWidth,
     sideWidth,
+    innerHalfWidth,
     outerHalfWidth,
     meshHalfWidth,
     influenceHalfWidth: meshHalfWidth,
@@ -149,6 +151,31 @@ export interface DemRoadbedTargetGeometryResult extends DemRoadbedGeometryResult
   lateralStep: number
   rowSpacing: number
   maxVerticalError: number
+  /** Number of rounded roadbed caps emitted for open road ends. */
+  endCapCount: number
+  endCapVertexCount: number
+  endCapTriangleCount: number
+  /** Maximum height mismatch between an end cap and the adjacent ribbon edge. */
+  maxEndCapSeamGap: number
+}
+
+export interface DemRoadbedTargetGeometryOptions {
+  lateralStep?: number
+  rowSpacing?: number
+  lift?: number
+  /** Extend the apron inward under the asphalt to seal the edge seam. */
+  asphaltOverlap?: number
+  /** Exact visible coarse DEM surface height in world space. */
+  coarseSurfaceHeightAt?: ((x: number, z: number) => number | null) | null
+  /** Minimum distance below the coarse DEM at the coverage ring's outer edge. */
+  burialDepth?: number
+  /** Extra downward wall at the outer edge to hide the mesh from below. */
+  edgeSkirtDepth?: number
+  /** Maximum vertical interpolation error allowed while reducing roadbed detail. */
+  maxVerticalError?: number
+  /** Emit a rounded cut/fill cap at each open road end. */
+  capEnds?: boolean
+  hostInverse: THREE.Matrix4
 }
 
 /**
@@ -163,22 +190,7 @@ export interface DemRoadbedTargetGeometryResult extends DemRoadbedGeometryResult
 export function createDemRoadbedTargetGeometry(
   rows: ReadonlyArray<RoadBandRow>,
   target: DemRoadbedTarget,
-  options: {
-    lateralStep?: number
-    rowSpacing?: number
-    lift?: number
-    /** Extend the apron inward under the asphalt to seal the edge seam. */
-    asphaltOverlap?: number
-    /** Exact visible coarse DEM surface height in world space. */
-    coarseSurfaceHeightAt?: ((x: number, z: number) => number | null) | null
-    /** Minimum distance below the coarse DEM at the coverage ring's outer edge. */
-    burialDepth?: number
-    /** Extra downward wall at the outer edge to hide the mesh from below. */
-    edgeSkirtDepth?: number
-    /** Maximum vertical interpolation error allowed while reducing roadbed detail. */
-    maxVerticalError?: number
-    hostInverse: THREE.Matrix4
-  },
+  options: DemRoadbedTargetGeometryOptions,
 ): DemRoadbedTargetGeometryResult | null {
   if (rows.length < 2) {
     return null
@@ -309,10 +321,61 @@ export function createDemRoadbedTargetGeometry(
   }
   const surfaceColumns = Math.max(2, Math.ceil(sideSpan / lateralStep) + 1)
   const columns = surfaceColumns + (edgeSkirtDepth > 0 ? 1 : 0)
+  const endCapCount = options.capEnds === true ? 2 : 0
+  const endCapRadius = endCapCount > 0 ? target.meshHalfWidth : 0
+  const requestedAngularSegments = Math.ceil(
+    (Math.PI * endCapRadius)
+      / Math.max(1.5, requestedLateralStep * 0.5),
+  )
+  const endCapAngularSegments = endCapCount > 0
+    ? Math.max(
+        24,
+        Math.min(64, Math.ceil(requestedAngularSegments / 2) * 2),
+      )
+    : 0
+  const endCapColumns = endCapAngularSegments + 1
+  const endCapRadialStep = Math.min(requestedLateralStep, 2)
+  const endCapRingRadii: number[] = []
+  if (endCapCount > 0) {
+    for (
+      let radius = endCapRadialStep;
+      radius < endCapRadius - 1e-6;
+      radius += endCapRadialStep
+    ) {
+      endCapRingRadii.push(radius)
+    }
+    endCapRingRadii.push(
+      asphaltHalfWidth,
+      target.halfWidth,
+      target.innerHalfWidth,
+      target.outerHalfWidth,
+      endCapRadius,
+    )
+    endCapRingRadii.sort((a, b) => a - b)
+    for (let index = endCapRingRadii.length - 1; index > 0; index -= 1) {
+      if (Math.abs(endCapRingRadii[index]! - endCapRingRadii[index - 1]!) < 1e-6) {
+        endCapRingRadii.splice(index, 1)
+      }
+    }
+  }
+  const endCapSurfaceVertexCount = endCapCount > 0
+    ? 1 + endCapRingRadii.length * endCapColumns
+    : 0
+  const endCapSkirtVertexCount = endCapCount > 0 && edgeSkirtDepth > 0
+    ? endCapColumns
+    : 0
+  const endCapVertexCountPerEnd = endCapSurfaceVertexCount + endCapSkirtVertexCount
+  const endCapTriangleCountPerEnd = endCapCount > 0
+    ? endCapAngularSegments
+      + Math.max(0, endCapRingRadii.length - 1) * endCapAngularSegments * 2
+      + (endCapSkirtVertexCount > 0 ? endCapAngularSegments * 2 : 0)
+    : 0
   const stripCount = 2
   const verticesPerStrip = selectedRows.length * columns
-  const vertexCount = verticesPerStrip * stripCount
+  const ribbonVertexCount = verticesPerStrip * stripCount
+  const vertexCount = ribbonVertexCount + endCapCount * endCapVertexCountPerEnd
   const triangleCount = (selectedRows.length - 1) * (columns - 1) * 2 * stripCount
+    + endCapCount * endCapTriangleCountPerEnd
   const positions = new Float32Array(vertexCount * 3)
   const normals = new Float32Array(vertexCount * 3)
   const baseHeights = new Float32Array(vertexCount)
@@ -322,6 +385,7 @@ export function createDemRoadbedTargetGeometry(
   let maxCutFill = 0
   let maxOuterGap = 0
   let outerError = 0
+  let maxEndCapSeamGap = 0
 
   const crossSpacing = sideSpan / (surfaceColumns - 1)
   const rowSpan = Math.max(0.5, Math.hypot(
@@ -329,6 +393,71 @@ export function createDemRoadbedTargetGeometry(
     selectedRows[1]!.z - selectedRows[0]!.z,
   ))
   let cursor = 0
+
+  const ribbonSurfaceHeightAt = (
+    x: number,
+    z: number,
+    distance: number,
+  ): number => {
+    const surfaceY = target.heightAt(x, z)
+    if (distance <= target.outerHalfWidth) {
+      return surfaceY
+    }
+    const rawY = target.rawHeightAt(x, z)
+    const coarseY = options.coarseSurfaceHeightAt?.(x, z) ?? rawY
+    const buriedY = Math.min(rawY, coarseY - burialDepth)
+    const trough = smoothstep(target.outerHalfWidth, halfWidth, distance)
+    return rawY + (buriedY - rawY) * trough
+  }
+
+  /**
+   * Height of the already-triangulated side ribbon at its terminal cross
+   * section. The cap boundary uses this piecewise-linear profile so its extra
+   * radial vertices lie exactly on the ribbon edge instead of opening a
+   * T-junction when the two subdivisions differ.
+   */
+  const terminalRibbonHeightAt = (
+    endpoint: RoadBandRow,
+    side: -1 | 1,
+    distance: number,
+  ): number => {
+    const resolvedDistance = Math.max(
+      asphaltHalfWidth,
+      Math.min(halfWidth, distance),
+    )
+    const scaledColumn = Math.max(
+      0,
+      Math.min(
+        surfaceColumns - 1,
+        (resolvedDistance - asphaltHalfWidth) / crossSpacing,
+      ),
+    )
+    const lowerColumn = Math.max(
+      0,
+      Math.min(surfaceColumns - 2, Math.floor(scaledColumn)),
+    )
+    const upperColumn = Math.min(surfaceColumns - 1, lowerColumn + 1)
+    const fraction = scaledColumn - lowerColumn
+    const normalX = -Math.sin(endpoint.heading)
+    const normalZ = Math.cos(endpoint.heading)
+    const lowerDistance = asphaltHalfWidth + lowerColumn * crossSpacing
+    const upperDistance = asphaltHalfWidth + upperColumn * crossSpacing
+    const lowerX = endpoint.x + normalX * side * lowerDistance
+    const lowerZ = endpoint.z + normalZ * side * lowerDistance
+    const upperX = endpoint.x + normalX * side * upperDistance
+    const upperZ = endpoint.z + normalZ * side * upperDistance
+    const lowerY = ribbonSurfaceHeightAt(
+      lowerX,
+      lowerZ,
+      lowerDistance,
+    )
+    const upperY = ribbonSurfaceHeightAt(
+      upperX,
+      upperZ,
+      upperDistance,
+    )
+    return lowerY + (upperY - lowerY) * fraction
+  }
 
   for (let strip = 0; strip < stripCount; strip += 1) {
     const side = strip === 0 ? -1 : 1
@@ -348,12 +477,7 @@ export function createDemRoadbedTargetGeometry(
         const rawY = target.rawHeightAt(x, z)
         const distance = Math.abs(lateral)
         const coarseY = options.coarseSurfaceHeightAt?.(x, z) ?? rawY
-        let surfaceY = target.heightAt(x, z)
-        if (distance > target.outerHalfWidth) {
-          const buriedY = Math.min(rawY, coarseY - burialDepth)
-          const trough = smoothstep(target.outerHalfWidth, halfWidth, distance)
-          surfaceY = rawY + (buriedY - rawY) * trough
-        }
+        const surfaceY = ribbonSurfaceHeightAt(x, z, distance)
         const y = isSkirt ? surfaceY - edgeSkirtDepth : surfaceY
         if (!isSkirt) {
           maxCutFill = Math.max(maxCutFill, Math.abs(surfaceY - rawY))
@@ -427,6 +551,300 @@ export function createDemRoadbedTargetGeometry(
     }
   }
 
+  if (endCapCount > 0) {
+    const capNormalStep = Math.max(0.1, endCapRadialStep * 0.5)
+    const leftSample = new THREE.Vector3()
+    const rightSample = new THREE.Vector3()
+    const backSample = new THREE.Vector3()
+    const frontSample = new THREE.Vector3()
+    const tangentSample = new THREE.Vector3()
+    const acrossSample = new THREE.Vector3()
+    const capNormal = new THREE.Vector3()
+
+    const endCapSurfaceHeightAt = (
+      x: number,
+      z: number,
+      endpointX: number,
+      endpointZ: number,
+    ): number => ribbonSurfaceHeightAt(
+      x,
+      z,
+      Math.hypot(x - endpointX, z - endpointZ),
+    ) + lift
+
+    const sampleCapLocalPoint = (
+      x: number,
+      z: number,
+      endpointX: number,
+      endpointZ: number,
+    ): THREE.Vector3 => new THREE.Vector3(
+      x,
+      endCapSurfaceHeightAt(x, z, endpointX, endpointZ),
+      z,
+    ).applyMatrix4(options.hostInverse)
+
+    const sampleCapNormal = (
+      x: number,
+      z: number,
+      endpointX: number,
+      endpointZ: number,
+    ): THREE.Vector3 => {
+      leftSample.copy(sampleCapLocalPoint(
+        x - capNormalStep,
+        z,
+        endpointX,
+        endpointZ,
+      ))
+      rightSample.copy(sampleCapLocalPoint(
+        x + capNormalStep,
+        z,
+        endpointX,
+        endpointZ,
+      ))
+      backSample.copy(sampleCapLocalPoint(
+        x,
+        z - capNormalStep,
+        endpointX,
+        endpointZ,
+      ))
+      frontSample.copy(sampleCapLocalPoint(
+        x,
+        z + capNormalStep,
+        endpointX,
+        endpointZ,
+      ))
+      tangentSample.subVectors(rightSample, leftSample)
+      acrossSample.subVectors(frontSample, backSample)
+      capNormal.crossVectors(tangentSample, acrossSample)
+      if (!Number.isFinite(capNormal.x) || capNormal.lengthSq() <= 1e-12) {
+        return new THREE.Vector3(0, 1, 0)
+      }
+      capNormal.normalize()
+      if (capNormal.y < 0) {
+        capNormal.negate()
+      }
+      return capNormal.clone()
+    }
+
+    const writeCapVertex = (
+      index: number,
+      x: number,
+      surfaceY: number,
+      z: number,
+      normal: THREE.Vector3,
+    ): void => {
+      const rawY = target.rawHeightAt(x, z)
+      const baseNormal = target.rawNormalAt(x, z)
+      baseHeights[index] = rawY
+      baseNormals[index * 3] = baseNormal.x
+      baseNormals[index * 3 + 1] = baseNormal.y
+      baseNormals[index * 3 + 2] = baseNormal.z
+      normals[index * 3] = normal.x
+      normals[index * 3 + 1] = normal.y
+      normals[index * 3 + 2] = normal.z
+      point.set(x, surfaceY, z).applyMatrix4(options.hostInverse)
+      positions[index * 3] = point.x
+      positions[index * 3 + 1] = point.y
+      positions[index * 3 + 2] = point.z
+    }
+
+    for (let endIndex = 0; endIndex < endCapCount; endIndex += 1) {
+      const startsAtFirstRow = endIndex === 0
+      const endpoint = startsAtFirstRow
+        ? selectedRows[0]!
+        : selectedRows[selectedRows.length - 1]!
+      const headingX = Math.cos(endpoint.heading)
+      const headingZ = Math.sin(endpoint.heading)
+      const outwardX = startsAtFirstRow ? -headingX : headingX
+      const outwardZ = startsAtFirstRow ? -headingZ : headingZ
+      const normalX = -Math.sin(endpoint.heading)
+      const normalZ = Math.cos(endpoint.heading)
+      const capBase = ribbonVertexCount + endIndex * endCapVertexCountPerEnd
+      const centerIndex = capBase
+      const ringBase = centerIndex + 1
+      const skirtBase = ringBase + endCapRingRadii.length * endCapColumns
+
+      const centerY = endCapSurfaceHeightAt(
+        endpoint.x,
+        endpoint.z,
+        endpoint.x,
+        endpoint.z,
+      )
+      writeCapVertex(
+        centerIndex,
+        endpoint.x,
+        centerY,
+        endpoint.z,
+        sampleCapNormal(endpoint.x, endpoint.z, endpoint.x, endpoint.z),
+      )
+
+      for (let ringIndex = 0; ringIndex < endCapRingRadii.length; ringIndex += 1) {
+        const radius = endCapRingRadii[ringIndex]!
+        for (let angleIndex = 0; angleIndex < endCapColumns; angleIndex += 1) {
+          const angle = (angleIndex / endCapAngularSegments) * Math.PI
+          const lateralOffset = Math.cos(angle) * radius
+          const outwardOffset = Math.sin(angle) * radius
+          const x = endpoint.x
+            + normalX * lateralOffset
+            + outwardX * outwardOffset
+          const z = endpoint.z
+            + normalZ * lateralOffset
+            + outwardZ * outwardOffset
+          const index = ringBase + ringIndex * endCapColumns + angleIndex
+          const isTerminalSeam = (
+            radius >= asphaltHalfWidth - 1e-6
+            && (angleIndex === 0 || angleIndex === endCapColumns - 1)
+          )
+          const surfaceY = isTerminalSeam
+            ? terminalRibbonHeightAt(
+                endpoint,
+                angleIndex === 0 ? 1 : -1,
+                radius,
+              ) + lift
+            : endCapSurfaceHeightAt(
+                x,
+                z,
+                endpoint.x,
+                endpoint.z,
+              )
+          writeCapVertex(
+            index,
+            x,
+            surfaceY,
+            z,
+            sampleCapNormal(x, z, endpoint.x, endpoint.z),
+          )
+          const rawY = target.rawHeightAt(x, z)
+          maxCutFill = Math.max(maxCutFill, Math.abs(surfaceY - lift - rawY))
+          if (isTerminalSeam) {
+            maxEndCapSeamGap = Math.max(
+              maxEndCapSeamGap,
+              Math.abs(
+                surfaceY
+                - (
+                  terminalRibbonHeightAt(
+                    endpoint,
+                    angleIndex === 0 ? 1 : -1,
+                    radius,
+                  ) + lift
+                ),
+              ),
+            )
+          }
+          if (ringIndex === endCapRingRadii.length - 1) {
+            const coarseY = options.coarseSurfaceHeightAt?.(x, z)
+              ?? target.rawHeightAt(x, z)
+            maxOuterGap = Math.max(maxOuterGap, surfaceY - lift - coarseY)
+            outerError = Math.max(outerError, surfaceY - lift - rawY)
+          }
+        }
+      }
+
+      if (endCapSkirtVertexCount > 0) {
+        const outerRadius = endCapRingRadii[endCapRingRadii.length - 1]!
+        for (let angleIndex = 0; angleIndex < endCapColumns; angleIndex += 1) {
+          const angle = (angleIndex / endCapAngularSegments) * Math.PI
+          const lateralOffset = Math.cos(angle) * outerRadius
+          const outwardOffset = Math.sin(angle) * outerRadius
+          const x = endpoint.x
+            + normalX * lateralOffset
+            + outwardX * outwardOffset
+          const z = endpoint.z
+            + normalZ * lateralOffset
+            + outwardZ * outwardOffset
+          const outerSurfaceY = endCapSurfaceHeightAt(
+            x,
+            z,
+            endpoint.x,
+            endpoint.z,
+          )
+          const radialX = (
+            normalX * Math.cos(angle)
+            + outwardX * Math.sin(angle)
+          )
+          const radialZ = (
+            normalZ * Math.cos(angle)
+            + outwardZ * Math.sin(angle)
+          )
+          writeCapVertex(
+            skirtBase + angleIndex,
+            x,
+            outerSurfaceY - edgeSkirtDepth,
+            z,
+            new THREE.Vector3(radialX, 0, radialZ).normalize(),
+          )
+        }
+      }
+
+      const firstRingBase = ringBase
+      for (let angleIndex = 0; angleIndex < endCapAngularSegments; angleIndex += 1) {
+        const first = firstRingBase + angleIndex
+        const next = first + 1
+        if (startsAtFirstRow) {
+          indices[cursor++] = centerIndex
+          indices[cursor++] = next
+          indices[cursor++] = first
+        } else {
+          indices[cursor++] = centerIndex
+          indices[cursor++] = first
+          indices[cursor++] = next
+        }
+      }
+
+      for (let ringIndex = 0; ringIndex < endCapRingRadii.length - 1; ringIndex += 1) {
+        const innerBase = ringBase + ringIndex * endCapColumns
+        const outerBase = innerBase + endCapColumns
+        for (let angleIndex = 0; angleIndex < endCapAngularSegments; angleIndex += 1) {
+          const innerA = innerBase + angleIndex
+          const innerB = innerA + 1
+          const outerA = outerBase + angleIndex
+          const outerB = outerA + 1
+          if (startsAtFirstRow) {
+            indices[cursor++] = innerA
+            indices[cursor++] = innerB
+            indices[cursor++] = outerB
+            indices[cursor++] = innerA
+            indices[cursor++] = outerB
+            indices[cursor++] = outerA
+          } else {
+            indices[cursor++] = innerA
+            indices[cursor++] = outerB
+            indices[cursor++] = innerB
+            indices[cursor++] = innerA
+            indices[cursor++] = outerA
+            indices[cursor++] = outerB
+          }
+        }
+      }
+
+      if (endCapSkirtVertexCount > 0) {
+        const outerBase = ringBase
+          + (endCapRingRadii.length - 1) * endCapColumns
+        for (let angleIndex = 0; angleIndex < endCapAngularSegments; angleIndex += 1) {
+          const surfaceA = outerBase + angleIndex
+          const surfaceB = surfaceA + 1
+          const skirtA = skirtBase + angleIndex
+          const skirtB = skirtA + 1
+          if (startsAtFirstRow) {
+            indices[cursor++] = surfaceA
+            indices[cursor++] = surfaceB
+            indices[cursor++] = skirtA
+            indices[cursor++] = surfaceB
+            indices[cursor++] = skirtB
+            indices[cursor++] = skirtA
+          } else {
+            indices[cursor++] = surfaceA
+            indices[cursor++] = skirtA
+            indices[cursor++] = surfaceB
+            indices[cursor++] = surfaceB
+            indices[cursor++] = skirtA
+            indices[cursor++] = skirtB
+          }
+        }
+      }
+    }
+  }
+
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
@@ -448,6 +866,10 @@ export function createDemRoadbedTargetGeometry(
     lateralStep,
     rowSpacing: rowStride * baseRowSpacing,
     maxVerticalError: resolvedMaxVerticalError,
+    endCapCount,
+    endCapVertexCount: endCapCount * endCapVertexCountPerEnd,
+    endCapTriangleCount: endCapCount * endCapTriangleCountPerEnd,
+    maxEndCapSeamGap,
   }
 }
 
