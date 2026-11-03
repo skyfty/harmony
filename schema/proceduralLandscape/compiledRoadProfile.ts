@@ -18,6 +18,10 @@ export function buildCompiledRoadProfileSourceSignature(
   options: CompiledRoadProfileSignatureOptions,
 ): string {
   const generatedRoute = props.road.generatedRoute
+  // The compiled profile belongs to the committed route snapshot. `props.seed`
+  // remains mutable while users explore landscape variants, so it must not
+  // invalidate heights that were baked from `generatedRoute.seed`.
+  const roadSeed = generatedRoute?.seed ?? props.seed
   return hashString(stableSerialize({
     algorithmVersion: PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
     dem: {
@@ -26,7 +30,7 @@ export function buildCompiledRoadProfileSourceSignature(
       runtimeGridBytes: props.dem.runtimeGridBytes,
     },
     groundSurfaceRevision: Math.max(0, Math.trunc(options.groundSurfaceRevision || 0)),
-    seed: props.seed,
+    seed: roadSeed,
     road: {
       style: props.road.style,
       width: props.road.width,

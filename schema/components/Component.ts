@@ -1,4 +1,5 @@
 import type { Object3D } from 'three'
+import type { SceneNode } from '../core'
 
 export interface ComponentFrameState {
   cameraWorldPosition: { x: number; y: number; z: number } | null
@@ -24,6 +25,8 @@ export interface ComponentFrameState {
 export interface ComponentRuntimeContext<TProps = Record<string, unknown>> {
   readonly nodeId: string
   readonly componentId: string
+  /** Current scene-node snapshot, including dynamic mesh data. */
+  getNode(): SceneNode | null
   getRuntimeObject(): Object3D | null
   getProps(): Readonly<TProps>
   isEnabled(): boolean

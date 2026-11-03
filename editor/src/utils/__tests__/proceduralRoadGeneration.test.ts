@@ -925,6 +925,26 @@ describe('unified waypoint road planning', () => {
     )).toBe(true)
     expect(compiledRoadProfileMatches(
       props.road.generatedRoute.centerline,
+      buildCompiledRoadProfileSourceSignature({
+        ...props,
+        seed: props.seed + 1,
+      }, source),
+    )).toBe(true)
+    expect(compiledRoadProfileMatches(
+      props.road.generatedRoute.centerline,
+      buildCompiledRoadProfileSourceSignature({
+        ...props,
+        road: {
+          ...props.road,
+          generatedRoute: {
+            ...props.road.generatedRoute,
+            seed: props.road.generatedRoute.seed + 1,
+          },
+        },
+      }, source),
+    )).toBe(false)
+    expect(compiledRoadProfileMatches(
+      props.road.generatedRoute.centerline,
       buildCompiledRoadProfileSourceSignature(props, {
         ...source,
         groundSurfaceRevision: 5,

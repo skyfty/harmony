@@ -10,6 +10,11 @@ import {
 } from '../terrainDemRuntimeOrtho'
 import type { TerrainHeightGrid } from './terrainSampler'
 import type { DemRoadbedTarget } from './demRoadbed'
+import {
+  terrainFlatteningTriangleIntersectsCore,
+  selectDemTerrainFlatteningTargetAt,
+  type DemTerrainFlatteningTarget,
+} from './terrainFlattening'
 
 const demGridLoads = new Map<string, Promise<TerrainDemRuntimeGridData>>()
 const demCoverageCache = new WeakMap<TerrainDemRuntimeGridData, Uint8Array>()
@@ -29,6 +34,7 @@ export function sampleVisibleDemSurfaceHeightAt(
   roadbed: DemRoadbedTarget | null | undefined,
   worldX: number,
   worldZ: number,
+  flattenTargets: ReadonlyArray<DemTerrainFlatteningTarget> = [],
 ): number | null {
   if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
     return null
@@ -39,7 +45,16 @@ export function sampleVisibleDemSurfaceHeightAt(
   ) {
     return roadbed.walkableHeightAt(worldX, worldZ)
   }
-  return grid?.sampleHeight(worldX, worldZ) ?? null
+  const rawHeight = grid?.sampleHeight(worldX, worldZ) ?? null
+  const flattenTarget = selectDemTerrainFlatteningTargetAt(flattenTargets, worldX, worldZ)
+  if (flattenTarget) {
+    return flattenTarget.visibleHeightAt(
+      worldX,
+      worldZ,
+      rawHeight ?? flattenTarget.gradeY,
+    )
+  }
+  return rawHeight
 }
 
 /**
@@ -53,12 +68,13 @@ export function sampleVisibleDemSurfaceNormalAt(
   worldX: number,
   worldZ: number,
   delta = 0.5,
+  flattenTargets: ReadonlyArray<DemTerrainFlatteningTarget> = [],
 ): THREE.Vector3 | null {
   const sampleDelta = Number.isFinite(delta)
     ? Math.max(0.01, delta)
     : 0.5
   const sampleHeight = (x: number, z: number): number | null => (
-    sampleVisibleDemSurfaceHeightAt(grid, roadbed, x, z)
+    sampleVisibleDemSurfaceHeightAt(grid, roadbed, x, z, flattenTargets)
   )
   const left = sampleHeight(worldX - sampleDelta, worldZ)
   const right = sampleHeight(worldX + sampleDelta, worldZ)
@@ -249,8 +265,18 @@ export interface DemTerrainMeshChunk {
   triangleCount: number
 }
 
+export interface DemTerrainGeometrySplitOptions {
+  flattenTargets?: ReadonlyArray<DemTerrainFlatteningTarget>
+  worldMatrix?: THREE.Matrix4 | null
+  worldOffset?: {
+    x: number
+    z: number
+  } | null
+}
+
 export interface DemTerrainMeshBuilderOptions {
   roadbed?: DemRoadbedTarget | null
+  flattenTargets?: ReadonlyArray<DemTerrainFlatteningTarget>
   /**
    * World-space translation of the host node. DEM positions and heights stay
    * local, while the roadbed target is defined in world space.
@@ -276,6 +302,7 @@ export function splitDemTerrainGeometry(
   columns: number,
   rows: number,
   chunkCells = 128,
+  options: DemTerrainGeometrySplitOptions = {},
 ): DemTerrainMeshChunk[] {
   const position = geometry.getAttribute('position')
   const normal = geometry.getAttribute('normal')
@@ -295,13 +322,79 @@ export function splitDemTerrainGeometry(
   const chunks: DemTerrainMeshChunk[] = []
   const center = new THREE.Vector3()
   const corner = new THREE.Vector3()
+  const transformedPoint = new THREE.Vector3()
+  const worldOffsetX = options.worldOffset?.x ?? 0
+  const worldOffsetZ = options.worldOffset?.z ?? 0
+  const flattenTargets = options.flattenTargets ?? []
+  const triangleWorld = [
+    { x: 0, z: 0 },
+    { x: 0, z: 0 },
+    { x: 0, z: 0 },
+  ]
+  const resolveWorldVertex = (
+    vertexIndex: number,
+    target: { x: number; z: number },
+  ): void => {
+    if (options.worldMatrix) {
+      transformedPoint.set(
+        position.getX(vertexIndex),
+        position.getY(vertexIndex),
+        position.getZ(vertexIndex),
+      ).applyMatrix4(options.worldMatrix)
+      target.x = transformedPoint.x
+      target.z = transformedPoint.z
+      return
+    }
+    target.x = position.getX(vertexIndex) + worldOffsetX
+    target.z = position.getZ(vertexIndex) + worldOffsetZ
+  }
+  const shouldSkipTriangle = (
+    a: number,
+    b: number,
+    c: number,
+  ): boolean => {
+    if (!flattenTargets.length) {
+      return false
+    }
+    resolveWorldVertex(a, triangleWorld[0]!)
+    resolveWorldVertex(b, triangleWorld[1]!)
+    resolveWorldVertex(c, triangleWorld[2]!)
+    const first = triangleWorld[0]!
+    const second = triangleWorld[1]!
+    const third = triangleWorld[2]!
+    return flattenTargets.some((target) => (
+      terrainFlatteningTriangleIntersectsCore(
+        target,
+        first.x,
+        first.z,
+        second.x,
+        second.z,
+        third.x,
+        third.z,
+      )
+    ))
+  }
+  const pushTriangle = (
+    indices: Uint32Array,
+    cursor: number,
+    a: number,
+    b: number,
+    c: number,
+  ): number => {
+    if (shouldSkipTriangle(a, b, c)) {
+      return cursor
+    }
+    indices[cursor++] = a
+    indices[cursor++] = b
+    indices[cursor++] = c
+    return cursor
+  }
 
   for (let row = 0; row < rows - 1; row += cellsPerChunk) {
     const endRow = Math.min(rows - 1, row + cellsPerChunk)
     for (let column = 0; column < columns - 1; column += cellsPerChunk) {
       const endColumn = Math.min(columns - 1, column + cellsPerChunk)
-      const triangleCount = (endRow - row) * (endColumn - column) * 2
-      const indices = new Uint32Array(triangleCount * 3)
+      const indices = new Uint32Array((endRow - row) * (endColumn - column) * 6)
       let indexCursor = 0
       let minX = Number.POSITIVE_INFINITY
       let minY = Number.POSITIVE_INFINITY
@@ -328,21 +421,20 @@ export function splitDemTerrainGeometry(
             const b = a + 1
             const c = a + columns
             const d = c + 1
-            indices[indexCursor++] = a
-            indices[indexCursor++] = c
-            indices[indexCursor++] = d
-            indices[indexCursor++] = a
-            indices[indexCursor++] = d
-            indices[indexCursor++] = b
+            indexCursor = pushTriangle(indices, indexCursor, a, c, d)
+            indexCursor = pushTriangle(indices, indexCursor, a, d, b)
           }
         }
+      }
+      if (indexCursor === 0) {
+        continue
       }
 
       const chunkGeometry = new THREE.BufferGeometry()
       chunkGeometry.setAttribute('position', position)
       chunkGeometry.setAttribute('normal', normal)
       chunkGeometry.setAttribute('uv', uv)
-      chunkGeometry.setIndex(new THREE.BufferAttribute(indices, 1))
+      chunkGeometry.setIndex(new THREE.BufferAttribute(indices.slice(0, indexCursor), 1))
       chunkGeometry.boundingBox = new THREE.Box3(
         new THREE.Vector3(minX, minY, minZ),
         new THREE.Vector3(maxX, maxY, maxZ),
@@ -364,7 +456,7 @@ export function splitDemTerrainGeometry(
         column,
         rows: endRow - row,
         columns: endColumn - column,
-        triangleCount,
+        triangleCount: indexCursor / 3,
       })
     }
   }
@@ -406,7 +498,16 @@ export function createDemCoarseSurfaceHeightAt(
     }
     const sourceCol = Math.min(data.width - 1, col * sampleStep)
     const sourceRow = Math.min(data.height - 1, row * sampleStep)
-    return data.heights[sourceRow * data.width + sourceCol]!
+    const rawHeight = data.heights[sourceRow * data.width + sourceCol]!
+    const flattenTarget = selectDemTerrainFlatteningTargetAt(
+      options.flattenTargets ?? [],
+      worldX,
+      worldZ,
+    )
+    if (!flattenTarget) {
+      return rawHeight
+    }
+    return flattenTarget.heightAt(worldX, worldZ, rawHeight + offsetY) - offsetY
   }
 
   return (worldX: number, worldZ: number): number | null => {
@@ -467,10 +568,20 @@ export function createDemTerrainMeshBuilder(
   const sampleVisibleHeight = (x: number, z: number, col: number, row: number): number => {
     const worldX = x + (options.worldOffset?.x ?? 0)
     const worldZ = z + (options.worldOffset?.z ?? 0)
+    const rawLocalHeight = sampleGridHeight(col, row)
+    const rawWorldHeight = rawLocalHeight + (options.worldOffset?.y ?? 0)
     if (options.roadbed && options.roadbed.distanceAt(worldX, worldZ) <= options.roadbed.influenceHalfWidth) {
       return options.roadbed.coarseHeightAt(worldX, worldZ) - (options.worldOffset?.y ?? 0)
     }
-    return sampleGridHeight(col, row)
+    const flattenTarget = selectDemTerrainFlatteningTargetAt(
+      options.flattenTargets ?? [],
+      worldX,
+      worldZ,
+    )
+    if (!flattenTarget) {
+      return rawLocalHeight
+    }
+    return flattenTarget.heightAt(worldX, worldZ, rawWorldHeight) - (options.worldOffset?.y ?? 0)
   }
 
   const buildPositions = (row: number): void => {

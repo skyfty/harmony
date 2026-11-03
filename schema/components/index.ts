@@ -37,6 +37,7 @@ import './definitions/generalMeshComponent'
 import './definitions/skinComponent'
 import './definitions/proceduralLandscapeComponent'
 import './definitions/landscapeExclusionZoneComponent'
+import './definitions/terrainFlatteningComponent'
 
 export {
 	componentManager,
@@ -91,3 +92,4 @@ export * from './definitions/generalMeshComponent'
 export * from './definitions/skinComponent'
 export * from './definitions/proceduralLandscapeComponent'
 export * from './definitions/landscapeExclusionZoneComponent'
+export * from './definitions/terrainFlatteningComponent'

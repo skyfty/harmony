@@ -54,6 +54,7 @@ export const COMPONENT_ARTIFACT_COMPONENT_ID_KEY = '__harmonyComponentArtifactCo
 
 class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
   private runtimeObject: Object3D | null
+  private node: SceneNode
   private props: Readonly<TProps>
   private enabled: boolean
   private dirty = false
@@ -62,13 +63,14 @@ class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
   private readonly componentIdValue: string
 
   constructor(
-    nodeId: string,
+    node: SceneNode,
     componentId: string,
     initialProps: TProps,
     isEnabled: boolean,
     frameState: Readonly<ComponentFrameState>,
   ) {
-    this.nodeIdValue = nodeId
+    this.node = node
+    this.nodeIdValue = node.id
     this.componentIdValue = componentId
     this.runtimeObject = null
     this.props = initialProps
@@ -82,6 +84,14 @@ class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
 
   get componentId(): string {
     return this.componentIdValue
+  }
+
+  getNode(): SceneNode | null {
+    return this.node
+  }
+
+  setNode(node: SceneNode) {
+    this.node = node
   }
 
   getRuntimeObject(): Object3D | null {
@@ -263,7 +273,7 @@ export class ComponentManager {
       activeStateIds.add(state.id)
       const existing = bundle.instances.get(state.id) ?? null
       if (!existing) {
-        const context = new ComponentContextImpl(node.id, state.id, state.props, true, this.frameState)
+        const context = new ComponentContextImpl(node, state.id, state.props, true, this.frameState)
         context.setRuntimeObject(bundle.runtimeObject)
         const instance = definition.createInstance(context)
         const propsSignature = stableSerialize(state.props)
@@ -296,6 +306,7 @@ export class ComponentManager {
       const nextPropsSignature = stableSerialize(nextProps)
 
       existing.state = state
+      existing.context.setNode(node)
       existing.context.setProps(nextProps)
       existing.context.setEnabled(nextEnabled)
 
@@ -312,7 +323,7 @@ export class ComponentManager {
         if (existing.definition.recreateOnPropsChange) {
           this.destroyInstance(node.id, state.id)
 
-          const context = new ComponentContextImpl(node.id, state.id, nextProps, true, this.frameState)
+          const context = new ComponentContextImpl(node, state.id, nextProps, true, this.frameState)
           context.setRuntimeObject(bundle.runtimeObject)
           const instance = existing.definition.createInstance(context)
           bundle.instances.set(state.id, {

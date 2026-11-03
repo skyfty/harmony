@@ -22,6 +22,10 @@ import {
   resolveFloorComponentPropsFromMesh,
   cloneFloorComponentProps,
   clampFloorComponentProps,
+  TERRAIN_FLATTENING_COMPONENT_TYPE,
+  clampTerrainFlatteningComponentProps,
+  cloneTerrainFlatteningComponentProps,
+  createTerrainFlatteningComponentState,
   GUIDE_ROUTE_COMPONENT_TYPE,
   cloneGuideRouteComponentProps,
   clampGuideRouteComponentProps,
@@ -255,6 +259,43 @@ export function normalizeNodeComponents(
       enabled: existing?.enabled ?? true,
       props: nextProps,
       metadata: clonedMetadata,
+    }
+
+    const legacyTerrainPlatform = existingProps?.terrainPlatform as {
+      enabled?: boolean
+      edgeMode?: 'slope' | 'wall'
+      edgeBlendWidth?: number
+      autoClearVegetation?: boolean
+    } | undefined
+    if (
+      legacyTerrainPlatform?.enabled === true
+      && !normalized[TERRAIN_FLATTENING_COMPONENT_TYPE]
+    ) {
+      normalized[TERRAIN_FLATTENING_COMPONENT_TYPE] = createTerrainFlatteningComponentState(
+        node,
+        {
+          heightMode: 'owner',
+          edgeMode: legacyTerrainPlatform.edgeMode === 'wall' ? 'wall' : 'slope',
+          edgeBlendWidth: legacyTerrainPlatform.edgeBlendWidth,
+          autoClearVegetation: legacyTerrainPlatform.autoClearVegetation,
+        },
+        { id: generateUuid(), enabled: true },
+      )
+    }
+  }
+
+  const existingTerrainFlattening = normalized[TERRAIN_FLATTENING_COMPONENT_TYPE]
+  if (existingTerrainFlattening) {
+    normalized[TERRAIN_FLATTENING_COMPONENT_TYPE] = {
+      ...existingTerrainFlattening,
+      id: existingTerrainFlattening.id?.trim().length
+        ? existingTerrainFlattening.id
+        : generateUuid(),
+      type: TERRAIN_FLATTENING_COMPONENT_TYPE,
+      enabled: existingTerrainFlattening.enabled ?? true,
+      props: cloneTerrainFlatteningComponentProps(
+        clampTerrainFlatteningComponentProps(existingTerrainFlattening.props),
+      ),
     }
   }
 

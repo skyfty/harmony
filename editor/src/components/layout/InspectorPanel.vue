@@ -46,6 +46,7 @@ import CityGeneratorPanel from '@/components/inspector/CityGeneratorPanel.vue'
 import GeneralMeshPanel from '@/components/inspector/GeneralMeshPanel.vue'
 import ProceduralLandscapePanel from '@/components/inspector/ProceduralLandscapePanel.vue'
 import LandscapeExclusionZonePanel from '@/components/inspector/LandscapeExclusionZonePanel.vue'
+import TerrainFlatteningPanel from '@/components/inspector/TerrainFlatteningPanel.vue'
 import { useSceneStore, getRuntimeObject, GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { findSceneNodeById } from '@/utils/animationClipCatalog'
@@ -98,6 +99,7 @@ import {
   GENERAL_MESH_COMPONENT_TYPE,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE,
+  TERRAIN_FLATTENING_COMPONENT_TYPE,
 } from '@schema/components'
 
 type BehaviorDetailsPayload = {
@@ -765,6 +767,9 @@ watch(
               <ProceduralLandscapePanel v-else-if="component.type === PROCEDURAL_LANDSCAPE_COMPONENT_TYPE" />
               <LandscapeExclusionZonePanel
                 v-else-if="component.type === LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE"
+              />
+              <TerrainFlatteningPanel
+                v-else-if="component.type === TERRAIN_FLATTENING_COMPONENT_TYPE"
               />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"

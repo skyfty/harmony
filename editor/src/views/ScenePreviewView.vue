@@ -302,6 +302,7 @@ import {
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
 	floorComponentDefinition,
+	terrainFlatteningComponentDefinition,
 	proceduralCityComponentDefinition,
 	cityGeneratorComponentDefinition,
 	syncProceduralCityHostSnapshot,
@@ -1898,6 +1899,7 @@ function refreshResourceAssetInfo(document: SceneJsonExportDocument | null | und
 
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(floorComponentDefinition)
+previewComponentManager.registerDefinition(terrainFlatteningComponentDefinition)
 previewComponentManager.registerDefinition(proceduralCityComponentDefinition)
 previewComponentManager.registerDefinition(cityGeneratorComponentDefinition)
 previewComponentManager.registerDefinition(wallComponentDefinition)

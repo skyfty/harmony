@@ -1016,6 +1016,9 @@ import {
   floorComponentDefinition,
 } from '@harmony/schema/components/definitions/floorComponent';
 import {
+  terrainFlatteningComponentDefinition,
+} from '@harmony/schema/components/definitions/terrainFlatteningComponent';
+import {
   proceduralCityComponentDefinition,
   syncProceduralCityHostSnapshot,
 } from '@harmony/schema/components/definitions/proceduralCityComponent';
@@ -2618,6 +2621,7 @@ function disposeMaterialTextureCache(): void {
 
 const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(floorComponentDefinition);
+previewComponentManager.registerDefinition(terrainFlatteningComponentDefinition);
 previewComponentManager.registerDefinition(proceduralCityComponentDefinition);
 previewComponentManager.registerDefinition(cityGeneratorComponentDefinition);
 previewComponentManager.registerDefinition(animationComponentDefinition);

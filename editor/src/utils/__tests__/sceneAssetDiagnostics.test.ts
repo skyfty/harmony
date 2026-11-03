@@ -77,6 +77,59 @@ describe('scene asset diagnostics', () => {
     }))
   })
 
+  it('keeps a committed DEM road valid after the landscape draft seed changes', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'ground-1' })
+    props.dem.assetId = 'dem-asset'
+    props.dem.runtimeGridUrl = 'https://example.test/dem-grid.bin'
+    props.seed = 11
+    props.road.generatedRoute = {
+      waypoints: [{ x: 0, z: 0 }],
+      strategy: 'seeded',
+      termination: 'boundary',
+      style: 'normal',
+      seed: 11,
+      waypointTolerance: 4,
+      pathDeviation: 60,
+      revision: 1,
+      centerline: {
+        pointsXZ: [0, 0, 10, 0],
+        algorithmVersion: 2,
+        authoringSampleStep: 1,
+        authoringCellSize: 30,
+        exclusionSignature: '',
+      },
+    }
+    props.road.generatedRoute.centerline!.compiledProfile = {
+      sourceSignature: buildCompiledRoadProfileSourceSignature(props, {
+        groundSurfaceRevision: 0,
+        authoringSampleStep: 1,
+        authoringCellSize: 30,
+        exclusionSignature: '',
+      }),
+      pointsLocalXYZ: [0, 20, 0, 10, 20, 0],
+    }
+    props.seed = 99
+
+    const report = validateSceneAssetReferences(createScene([
+      createNode({
+        id: 'ground-1',
+        name: '青龙山',
+        components: {
+          [PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]: {
+            id: 'landscape-component',
+            type: PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
+            enabled: true,
+            props,
+          },
+        },
+      }),
+    ]), {})
+
+    expect(report.issues).not.toContainEqual(expect.objectContaining({
+      code: 'procedural-landscape-road-profile',
+    }))
+  })
+
   it('invalidates the compiled road profile when an exclusion zone changes', () => {
     const props = createDefaultProceduralLandscapeProps({ id: 'ground-1' })
     props.dem.assetId = 'dem-asset'

@@ -226,6 +226,16 @@ import {
   polylineIntersectsExclusion,
   type LandscapeExclusionCircle,
 } from './exclusion'
+import {
+  createDemTerrainFlatteningGeometry,
+  createDemTerrainFlatteningTarget,
+  clipRoadbedGeometryInsideFloorFlattening,
+  findNearestTerrainFlatteningRoadConnection,
+  getLandscapeTerrainFlatteningSnapshot,
+  isTerrainFlatteningPointCleared,
+  type DemTerrainFlatteningTarget,
+  type LandscapeTerrainFlatteningWarning,
+} from './terrainFlattening'
 
 const TREE_BATCH_RELEASE_PADDING = 48
 const ROAD_BUCKET_LENGTH = 16
@@ -251,6 +261,7 @@ const ROAD_COLLISION_COLUMN_COUNT_DEM = 3
 const ROAD_COLLISION_COLUMN_COUNT_GENERIC = 5
 const DEBUG_ROAD_HEIGHT_OFFSET = 0.6
 const SOURCE_CHECK_INTERVAL_MS = 500
+const TERRAIN_FLATTENING_SIGNATURE_INTERVAL_MS = 250
 const TREE_UNIT_SIZE = 8
 const GRASS_UNIT_SIZE = 1.6
 const BUSH_UNIT_SIZE = 2
@@ -325,6 +336,11 @@ export interface ProceduralLandscapeRuntimeStats {
   quality: ResolvedProceduralLandscapeQuality
   exclusionZoneCount: number
   exclusionSignature: string
+  terrainFlatteningCount: number
+  terrainFlatteningSignature: string
+  terrainFlatteningWarningCount: number
+  terrainFlatteningMeshCount: number
+  terrainFlatteningTriangleCount: number
   treeInstances: number
   grassInstances: number
   bushInstances: number
@@ -544,6 +560,8 @@ export interface ProceduralLandscapeRuntime {
     worldZ: number,
     facingYawRad: number,
   ): RoadLanePose | null
+  /** Nearest sampled road connection for matching a plaza edge to its roadway. */
+  resolveNearestRoadConnection(worldX: number, worldZ: number): ProceduralLandscapeRoadConnection | null
   /** Terrain XZ center in host-node local coordinates, when the grid is ready. */
   getTerrainCenterLocal(): RoadWaypoint | null
   /** Low, gentle automatic start near the terrain centre, in local XZ. */
@@ -568,6 +586,15 @@ export interface ProceduralLandscapeRuntime {
     worldZ: number,
     facingYawRad?: number,
   ): GuideRouteSurfaceSample | null
+}
+
+export interface ProceduralLandscapeRoadConnection {
+  x: number
+  z: number
+  /** Visible road-band height, including the runtime surface lift. */
+  y: number
+  /** Horizontal distance from the query point to the road centerline. */
+  distance: number
 }
 
 export interface ProceduralLandscapeRoadValidation {
@@ -699,6 +726,15 @@ export function resolveProceduralLandscapeRoadLanePose(
 ): RoadLanePose | null {
   const runtime = runtimeRegistry.get(nodeId)
   return runtime?.resolveRoadLanePose(worldX, worldZ, facingYawRad) ?? null
+}
+
+export function resolveProceduralLandscapeNearestRoadConnection(
+  nodeId: string,
+  worldX: number,
+  worldZ: number,
+): ProceduralLandscapeRoadConnection | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.resolveNearestRoadConnection(worldX, worldZ) ?? null
 }
 
 export function resolveProceduralLandscapeScenicWaypointLocal(
@@ -1071,6 +1107,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
   let appliedExclusionCircles: LandscapeExclusionCircle[] = []
   let exclusionCapturePending = true
+  let appliedTerrainFlatteningTargets: DemTerrainFlatteningTarget[] = []
+  let appliedTerrainFlatteningWarnings: LandscapeTerrainFlatteningWarning[] = []
+  let terrainFlatteningWarningKeys = new Set<string>()
+  let terrainFlatteningSignature = ''
+  let lastTerrainFlatteningCheckAt = Number.NEGATIVE_INFINITY
+  let demMeshTerrainFlatteningSignature = ''
+  let demMeshBuildTerrainFlatteningSignature = ''
   let landscapeWorldBuilt = false
   let forceStream = true
   let deferredCameraInteractionWork = false
@@ -1249,6 +1292,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     quality: resolveProceduralLandscapeQuality(props.quality, currentEnvironment),
     exclusionZoneCount: 0,
     exclusionSignature: '',
+    terrainFlatteningCount: 0,
+    terrainFlatteningSignature: '',
+    terrainFlatteningWarningCount: 0,
+    terrainFlatteningMeshCount: 0,
+    terrainFlatteningTriangleCount: 0,
     treeInstances: 0,
     grassInstances: 0,
     bushInstances: 0,
@@ -1607,6 +1655,60 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     exclusionCapturePending = false
   }
 
+  /**
+   * Floor components register live world-space grading targets outside the
+   * landscape runtime. Capture them by stable signature so floor drawing,
+   * transforms and edits rebuild only the DEM-owned layers.
+   */
+  function captureAppliedTerrainFlatteningIfNeeded(): boolean {
+    if (!usesDemTerrain()) {
+      return false
+    }
+    const snapshot = getLandscapeTerrainFlatteningSnapshot()
+    const allTargets = snapshot.targets.map(createDemTerrainFlatteningTarget)
+    const targets = grid
+      ? allTargets.filter((target) => (
+          target.maxX + target.influenceWidth >= grid!.minX
+          && target.minX - target.influenceWidth <= grid!.maxX
+          && target.maxZ + target.influenceWidth >= grid!.minZ
+          && target.minZ - target.influenceWidth <= grid!.maxZ
+        ))
+      : allTargets
+    const targetSignature = targets
+      .map((target) => target.snapshot.signature)
+      .sort()
+      .join('||')
+    const warningSignature = snapshot.warnings
+      .map((warning) => `${warning.id}:${warning.code}`)
+      .sort()
+      .join('||')
+    const terrainFrameSignature = grid
+      ? `${grid.minX.toFixed(3)}:${grid.minY.toFixed(3)}:${grid.minZ.toFixed(3)}:${grid.maxX.toFixed(3)}:${grid.maxZ.toFixed(3)}`
+      : ''
+    const nextSignature = `${terrainFrameSignature}|${targetSignature}::${warningSignature}`
+    const changed = nextSignature !== terrainFlatteningSignature
+    appliedTerrainFlatteningTargets = targets
+    appliedTerrainFlatteningWarnings = snapshot.warnings
+    terrainFlatteningSignature = nextSignature
+    stats.terrainFlatteningCount = appliedTerrainFlatteningTargets.length
+    stats.terrainFlatteningSignature = terrainFlatteningSignature
+    stats.terrainFlatteningWarningCount = appliedTerrainFlatteningWarnings.length
+
+    const nextWarningKeys = new Set(
+      appliedTerrainFlatteningWarnings.map((warning) => (
+        `terrain-flattening-${warning.code}:${warning.ownerNodeId}`
+      )),
+    )
+    terrainFlatteningWarningKeys.forEach((key) => {
+      if (!nextWarningKeys.has(key)) {
+        unwarn(key)
+      }
+    })
+    nextWarningKeys.forEach((key) => warn(key))
+    terrainFlatteningWarningKeys = nextWarningKeys
+    return changed
+  }
+
   function resolveRoadExclusionMargin(): number {
     return roadHalfWidth(props)
       + props.road.shoulderWidth
@@ -1627,11 +1729,47 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function filterExcludedTrees(placements: TreePlacement[]): TreePlacement[] {
-    return filterLandscapeExclusionPlacements(
+    const circleFiltered = filterLandscapeExclusionPlacements(
       placements,
       appliedExclusionCircles,
       treeExclusionMargin,
     )
+    return filterTerrainFlatteningPlacements(circleFiltered, treeExclusionMargin)
+  }
+
+  function filterTerrainFlatteningPlacements<T extends { x: number; z: number }>(
+    placements: T[],
+    marginAt?: (placement: T) => number,
+  ): T[] {
+    if (!appliedTerrainFlatteningTargets.length) {
+      return placements
+    }
+    return placements.filter((placement) => (
+      !isTerrainFlatteningPointCleared(
+        appliedTerrainFlatteningTargets,
+        placement.x,
+        placement.z,
+        marginAt ? marginAt(placement) : 0,
+      )
+    ))
+  }
+
+  function filterExcludedGrass(placements: GrassPlacement[]): GrassPlacement[] {
+    const circleFiltered = filterLandscapeExclusionPlacements(
+      placements,
+      appliedExclusionCircles,
+      grassExclusionMargin,
+    )
+    return filterTerrainFlatteningPlacements(circleFiltered, grassExclusionMargin)
+  }
+
+  function filterExcludedBushes(placements: GrassPlacement[]): GrassPlacement[] {
+    const circleFiltered = filterLandscapeExclusionPlacements(
+      placements,
+      appliedExclusionCircles,
+      bushExclusionMargin,
+    )
+    return filterTerrainFlatteningPlacements(circleFiltered, bushExclusionMargin)
   }
 
   function disposeDemMesh(): void {
@@ -1648,6 +1786,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       demMeshes = []
     }
     demMeshBuilder = null
+    demMeshTerrainFlatteningSignature = ''
+    demMeshBuildTerrainFlatteningSignature = ''
+    stats.terrainFlatteningMeshCount = 0
+    stats.terrainFlatteningTriangleCount = 0
   }
 
   function disposeDemOrthoTexture(): void {
@@ -1796,6 +1938,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demRoadbedSignature = ''
     demMeshRoadbedSignature = ''
     demMeshBuildRoadbedSignature = ''
+    demMeshTerrainFlatteningSignature = ''
+    demMeshBuildTerrainFlatteningSignature = ''
     dirty.demMesh = false
     demWorldBuilt = false
     demSourceKey = ''
@@ -1864,6 +2008,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       )
       currentTerrainSourceSignature = `dem-raw:${demSourceKey}`
       gridFailed = false
+      captureAppliedTerrainFlatteningIfNeeded()
       buildWorld()
       dirty.world = false
       dirty.instances = false
@@ -1873,8 +2018,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!demMeshBuilder) {
       const hostWorld = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
       demMeshBuildRoadbedSignature = demRoadbedSignature
+      demMeshBuildTerrainFlatteningSignature = terrainFlatteningSignature
       demMeshBuilder = createDemTerrainMeshBuilder(demGridData, demGridSampleStep, {
         roadbed: demRoadbedTarget,
+        flattenTargets: appliedTerrainFlatteningTargets,
         worldOffset: {
           x: hostWorld.x,
           y: hostWorld.y,
@@ -1904,16 +2051,23 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const demColumns = demMeshBuilder.columns
     const demRows = demMeshBuilder.rows
     const completedRoadbedSignature = demMeshBuildRoadbedSignature
+    const completedTerrainFlatteningSignature = demMeshBuildTerrainFlatteningSignature
     disposeDemMesh()
     demMeshBuildRoadbedSignature = ''
     const positionBytes = demGeometry.getAttribute('position')?.array?.byteLength ?? 0
     const normalBytes = demGeometry.getAttribute('normal')?.array?.byteLength ?? 0
     const indexBytes = demGeometry.getIndex()?.array?.byteLength ?? 0
     stats.demMeshBytes = positionBytes + normalBytes + indexBytes
+    hostObject.updateMatrixWorld(true)
     const chunks = splitDemTerrainGeometry(
       demGeometry,
       demColumns,
       demRows,
+      128,
+      {
+        flattenTargets: appliedTerrainFlatteningTargets,
+        worldMatrix: hostObject.matrixWorld,
+      },
     )
     if (!chunks.length) {
       demGeometry.dispose()
@@ -1923,6 +2077,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       dirty.demMesh = false
       return false
     }
+    if (!grid) {
+      demGeometry.dispose()
+      stats.demStatus = 'error'
+      stats.demError = 'DEM terrain height grid is unavailable'
+      gridFailed = true
+      dirty.demMesh = false
+      return false
+    }
+    const activeGrid = grid
     const demMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff })
     const root = new THREE.Group()
     root.name = `slowroads-dem-terrain-${hooks.nodeId}`
@@ -1932,15 +2095,73 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       markProceduralLandscapeDemTerrain(mesh, {
         cellSize: Math.max(1, (demGridData?.cellSizeX ?? 1) * demGridSampleStep),
         sampleHeightAt: (worldX, worldZ) => (
-          sampleVisibleDemSurfaceHeightAt(grid, demRoadbedTarget, worldX, worldZ)
+          sampleVisibleDemSurfaceHeightAt(
+            activeGrid,
+            demRoadbedTarget,
+            worldX,
+            worldZ,
+            appliedTerrainFlatteningTargets,
+          )
         ),
       })
       root.add(mesh)
       return mesh
     })
+    hostObject.updateMatrixWorld(true)
+    hostInverse.copy(hostObject.matrixWorld).invert()
+    let flatteningMeshCount = 0
+    let flatteningTriangleCount = 0
+    for (const flattenTarget of appliedTerrainFlatteningTargets) {
+      if (
+        flattenTarget.maxX < activeGrid.minX
+        || flattenTarget.minX > activeGrid.maxX
+        || flattenTarget.maxZ < activeGrid.minZ
+        || flattenTarget.minZ > activeGrid.maxZ
+      ) {
+        continue
+      }
+      const flatteningGeometry = createDemTerrainFlatteningGeometry(flattenTarget, {
+        rawHeightAt: (worldX, worldZ) => activeGrid.sampleHeight(worldX, worldZ),
+        hostInverse,
+        roadbed: demRoadbedTarget,
+        coarseCellSize: activeGrid.cellSize,
+      })
+      if (!flatteningGeometry) {
+        continue
+      }
+      const flatteningMesh = new THREE.Mesh(flatteningGeometry.geometry, demMaterial)
+      flatteningMesh.name = `slowroads-dem-flattening-${hooks.nodeId}-${flattenTarget.id}`
+      flatteningMesh.userData.proceduralLandscapeDemFlattening = true
+      markProceduralLandscapeDemTerrain(flatteningMesh, {
+        cellSize: Math.max(1, activeGrid.cellSize),
+        sampleHeightAt: (worldX, worldZ) => (
+          sampleVisibleDemSurfaceHeightAt(
+            activeGrid,
+            demRoadbedTarget,
+            worldX,
+            worldZ,
+            appliedTerrainFlatteningTargets,
+          )
+        ),
+      })
+      root.add(flatteningMesh)
+      demMeshes.push(flatteningMesh)
+      flatteningMeshCount += 1
+      flatteningTriangleCount += flatteningGeometry.triangleCount
+      stats.demMeshBytes += (
+        flatteningGeometry.geometry.getAttribute('position')?.array?.byteLength ?? 0
+      ) + (
+        flatteningGeometry.geometry.getAttribute('normal')?.array?.byteLength ?? 0
+      ) + (
+        flatteningGeometry.geometry.getIndex()?.array?.byteLength ?? 0
+      )
+    }
+    stats.terrainFlatteningMeshCount = flatteningMeshCount
+    stats.terrainFlatteningTriangleCount = flatteningTriangleCount
     hostObject.add(root)
     demMeshRoot = root
     demMeshRoadbedSignature = completedRoadbedSignature
+    demMeshTerrainFlatteningSignature = completedTerrainFlatteningSignature
     currentTerrainSourceSignature = `dem:${demSourceKey}`
     stats.demStatus = 'ready'
     guideRouteSurfaceRevision += 1
@@ -2968,6 +3189,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           const coarseSurfaceHeightAt = demGridData
             ? createDemCoarseSurfaceHeightAt(demGridData, demGridSampleStep, {
                 roadbed: demRoadbedTarget,
+                flattenTargets: appliedTerrainFlatteningTargets,
                 worldOffset: {
                   x: roadbedWorldOffset.x,
                   y: roadbedWorldOffset.y,
@@ -2993,6 +3215,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             hostInverse,
           })
           if (roadbed) {
+            const clippedRoadbed = clipRoadbedGeometryInsideFloorFlattening(
+              roadbed.geometry,
+              hostObject.matrixWorld,
+              appliedTerrainFlatteningTargets,
+            )
+            if (clippedRoadbed.removedTriangleCount > 0) {
+              roadbed.geometry = clippedRoadbed.geometry
+              roadbed.triangleCount = clippedRoadbed.remainingTriangleCount
+            }
             const mesh = new THREE.Mesh(
               roadbed.geometry,
               new THREE.MeshLambertMaterial({
@@ -3017,6 +3248,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
               hostInverse,
             })
             if (collisionRoadbed) {
+              const clippedCollisionRoadbed = clipRoadbedGeometryInsideFloorFlattening(
+                collisionRoadbed.geometry,
+                hostObject.matrixWorld,
+                appliedTerrainFlatteningTargets,
+              )
+              if (clippedCollisionRoadbed.removedTriangleCount > 0) {
+                collisionRoadbed.geometry = clippedCollisionRoadbed.geometry
+                collisionRoadbed.triangleCount = clippedCollisionRoadbed.remainingTriangleCount
+              }
               const collisionMaterial = new THREE.MeshBasicMaterial()
               collisionMaterial.visible = false
               const collisionMesh = new THREE.Mesh(collisionRoadbed.geometry, collisionMaterial)
@@ -3064,13 +3304,26 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       routeNodeCount: roadResult?.nodes.length ?? 0,
       routeLength: roadResult?.length ?? 0,
     })
-    if (demMeshBuilder && demMeshBuildRoadbedSignature !== demRoadbedSignature) {
+    if (
+      demMeshBuilder
+      && (
+        demMeshBuildRoadbedSignature !== demRoadbedSignature
+        || demMeshBuildTerrainFlatteningSignature !== terrainFlatteningSignature
+      )
+    ) {
       // A newer roadbed was committed while the previous mesh was still being
       // generated. Restart from the new target; keep any completed mesh visible.
       demMeshBuilder = null
       demMeshBuildRoadbedSignature = ''
+      demMeshBuildTerrainFlatteningSignature = ''
     }
-    if (demMeshes.length && demMeshRoadbedSignature !== demRoadbedSignature) {
+    if (
+      demMeshes.length
+      && (
+        demMeshRoadbedSignature !== demRoadbedSignature
+        || demMeshTerrainFlatteningSignature !== terrainFlatteningSignature
+      )
+    ) {
       dirty.demMesh = true
     }
     if (roadResult && (roadResult.nodes.length <= 1 || !roadFieldData)) {
@@ -4149,18 +4402,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       },
     )
     const grass = grassEnabled
-      ? filterLandscapeExclusionPlacements(
-          takeDensityPrefix(result.grass, tier.densityMultiplier),
-          appliedExclusionCircles,
-          grassExclusionMargin,
-        )
+      ? filterExcludedGrass(takeDensityPrefix(result.grass, tier.densityMultiplier))
       : []
     const bushes = bushesEnabled
-      ? filterLandscapeExclusionPlacements(
-          takeDensityPrefix(result.bushes, tier.densityMultiplier),
-          appliedExclusionCircles,
-          bushExclusionMargin,
-        )
+      ? filterExcludedBushes(takeDensityPrefix(result.bushes, tier.densityMultiplier))
       : []
     const key = `r:${entry.index}`
     if (!grass.length && !bushes.length) {
@@ -4232,11 +4477,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         ))
       }
     }
-    const kept = filterLandscapeExclusionPlacements(
-      takeDensityPrefix(placements, tier.densityMultiplier),
-      appliedExclusionCircles,
-      grassExclusionMargin,
-    )
+    const kept = filterExcludedGrass(takeDensityPrefix(placements, tier.densityMultiplier))
     const key = `g:${batchX}:${batchZ}`
     if (!kept.length) {
       // 记录空分块（相机在网格外/全是陡坡等），避免流式每帧重试。
@@ -5222,6 +5463,30 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       lastSourceCheckAt = elapsedMs
       checkTerrainSourceChanges()
     }
+    if (
+      usesDemTerrain()
+      && elapsedMs - lastTerrainFlatteningCheckAt >= TERRAIN_FLATTENING_SIGNATURE_INTERVAL_MS
+    ) {
+      lastTerrainFlatteningCheckAt = elapsedMs
+      if (captureAppliedTerrainFlatteningIfNeeded()) {
+        if (demMeshBuilder) {
+          demMeshBuilder = null
+          demMeshBuildRoadbedSignature = ''
+          demMeshBuildTerrainFlatteningSignature = ''
+        }
+        if (grid) {
+          dirty.world = true
+          dirty.demMesh = true
+          dirty.instances = true
+          forceStream = true
+          releaseAllBatches()
+          if (!props.forest.enabled || densityField) {
+            startWorldForest()
+          }
+        }
+        guideRouteSurfaceRevision += 1
+      }
+    }
     syncSeasonFromFrameState()
 
     if (props.dem.assetId && !props.dem.runtimeGridUrl) {
@@ -5751,6 +6016,28 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         surfaceLift: ROAD_BAND_LIFT,
       })
     },
+    resolveNearestRoadConnection(
+      worldX: number,
+      worldZ: number,
+    ): ProceduralLandscapeRoadConnection | null {
+      if (
+        !props.road.enabled
+        || !Number.isFinite(worldX)
+        || !Number.isFinite(worldZ)
+      ) {
+        return null
+      }
+      const rows = roadBandRows ?? roadResult?.nodes ?? null
+      if (!rows || rows.length < 2) {
+        return null
+      }
+      return findNearestTerrainFlatteningRoadConnection(
+        rows,
+        worldX,
+        worldZ,
+        ROAD_BAND_LIFT,
+      )
+    },
     getTerrainCenterLocal(): RoadWaypoint | null {
       if (!grid || !hostObject) {
         return null
@@ -5846,7 +6133,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         },
         sampleHeightAt: (worldX: number, worldZ: number) => (
           usesDemTerrain()
-            ? sampleVisibleDemSurfaceHeightAt(activeGrid, demRoadbedTarget, worldX, worldZ)
+            ? sampleVisibleDemSurfaceHeightAt(
+                activeGrid,
+                demRoadbedTarget,
+                worldX,
+                worldZ,
+                appliedTerrainFlatteningTargets,
+              )
             : activeGrid.sampleHeight(worldX, worldZ)
         ),
       }
@@ -5901,7 +6194,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
 
       const terrainY = usesDemTerrain()
-        ? sampleVisibleDemSurfaceHeightAt(grid, demRoadbedTarget, worldX, worldZ)
+        ? sampleVisibleDemSurfaceHeightAt(
+            grid,
+            demRoadbedTarget,
+            worldX,
+            worldZ,
+            appliedTerrainFlatteningTargets,
+          )
         : grid.sampleHeight(worldX, worldZ)
       if (terrainY == null) {
         return null
@@ -5939,6 +6238,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           worldX,
           worldZ,
           delta,
+          appliedTerrainFlatteningTargets,
         )
         if (visibleNormal) {
           normal.copy(visibleNormal)

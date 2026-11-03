@@ -369,6 +369,7 @@ import type {
   WallComponentProps,
   RoadComponentProps,
   FloorComponentProps,
+  TerrainFlatteningComponentProps,
   LandformComponentProps,
   PlanningImagesComponentProps,
   ParticleSystemComponentProps,
@@ -435,6 +436,9 @@ import {
   FLOOR_DEFAULT_SIDE_UV_SCALE,
   FLOOR_MAX_THICKNESS,
   FLOOR_MIN_THICKNESS,
+  TERRAIN_FLATTENING_COMPONENT_TYPE,
+  clampTerrainFlatteningComponentProps,
+  cloneTerrainFlatteningComponentProps,
   LANDFORM_COMPONENT_TYPE,
   clampLandformComponentProps,
   cloneLandformComponentProps,
@@ -510,6 +514,7 @@ type NodeComponentPropsByType = {
   [WALL_COMPONENT_TYPE]: WallComponentProps
   [ROAD_COMPONENT_TYPE]: RoadComponentProps
   [FLOOR_COMPONENT_TYPE]: FloorComponentProps
+  [TERRAIN_FLATTENING_COMPONENT_TYPE]: TerrainFlatteningComponentProps
   [LANDFORM_COMPONENT_TYPE]: LandformComponentProps
   [WATER_COMPONENT_TYPE]: WaterComponentProps
   [GUIDE_ROUTE_COMPONENT_TYPE]: GuideRouteComponentProps
@@ -20808,6 +20813,7 @@ export const useSceneStore = defineStore('scene', {
         | DisplayBoardComponentProps
         | PlanningImagesComponentProps
         | FloorComponentProps
+        | TerrainFlatteningComponentProps
         | LandformComponentProps
         | RigidbodyComponentProps
         | VehicleComponentProps
@@ -21311,7 +21317,6 @@ export const useSceneStore = defineStore('scene', {
         const currentThickness = Number.isFinite(currentProps.thickness) ? currentProps.thickness : FLOOR_DEFAULT_THICKNESS
         const currentSideU = Number.isFinite(currentProps.sideUvScale?.x) ? Number(currentProps.sideUvScale.x) : FLOOR_DEFAULT_SIDE_UV_SCALE.x
         const currentSideV = Number.isFinite(currentProps.sideUvScale?.y) ? Number(currentProps.sideUvScale.y) : FLOOR_DEFAULT_SIDE_UV_SCALE.y
-
         const unchanged =
           Math.abs(currentSmooth - merged.smooth) <= 1e-6 &&
           Math.abs(currentThickness - merged.thickness) <= 1e-6 &&
@@ -21437,6 +21442,18 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneNominateComponentProps(merged)
+      } else if (type === TERRAIN_FLATTENING_COMPONENT_TYPE) {
+        const currentProps = clampTerrainFlatteningComponentProps(
+          component.props as TerrainFlatteningComponentProps,
+        )
+        const merged = clampTerrainFlatteningComponentProps({
+          ...currentProps,
+          ...(patch as Partial<TerrainFlatteningComponentProps>),
+        })
+        if (JSON.stringify(currentProps) === JSON.stringify(merged)) {
+          return false
+        }
+        nextProps = cloneTerrainFlatteningComponentProps(merged)
       } else {
         const currentProps = component.props as Record<string, unknown>
         const merged = { ...currentProps, ...patch }
