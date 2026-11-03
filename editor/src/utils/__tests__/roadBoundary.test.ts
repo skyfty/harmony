@@ -3,6 +3,7 @@ import * as THREE from 'three'
 
 import type { RoadBandRow } from '@schema/proceduralLandscape/roadBandRows'
 import { createCapsuleCollisionWorld } from '@schema/capsuleCollision'
+import type { LandscapeExclusionCircle } from '@schema/proceduralLandscape/exclusion'
 import {
   createRoadBoundaryCollisionGeometry,
   createRoadBoundaryWallSegments,
@@ -23,6 +24,19 @@ function makeRows(count = 11): RoadBandRow[] {
     headingDelta: 0,
     sourceIndex: index,
   }))
+}
+
+function makeCircle(
+  centerX: number,
+  centerZ: number,
+  radius: number,
+): LandscapeExclusionCircle {
+  return {
+    id: `opening-${centerX}-${centerZ}`,
+    centerX,
+    centerZ,
+    radius,
+  }
 }
 
 describe('road boundary geometry', () => {
@@ -182,5 +196,107 @@ describe('road boundary geometry', () => {
     expect(endCapHits.some((hit) => Math.abs(hit.normal.x) > 0.5)).toBe(true)
 
     mesh.geometry.dispose()
+  })
+
+  it('cuts a sub-sampling-width opening from one roadside wall', () => {
+    const rows = makeRows()
+    const exclusionCircles = [makeCircle(10, 4, 0.5)]
+    const clipped = createRoadBoundaryCollisionGeometry({
+      rows,
+      halfWidth: 4,
+      closed: false,
+      rowSpacing: 4,
+      exclusionCircles,
+    })
+    expect(clipped).not.toBeNull()
+
+    const mesh = new THREE.Mesh(
+      clipped!.geometry,
+      new THREE.MeshBasicMaterial({ visible: false }),
+    )
+    const world = createCapsuleCollisionWorld()
+    world.addMesh(mesh)
+    const character = new THREE.Group()
+    const gapHits = world.resolveCapsule(character, {
+      segment: new THREE.Line3(
+        new THREE.Vector3(10, 15.5, 4),
+        new THREE.Vector3(10, 17, 4),
+      ),
+      radius: 0.15,
+    })
+    expect(gapHits).toHaveLength(0)
+
+    const wallHits = world.resolveCapsule(character, {
+      segment: new THREE.Line3(
+        new THREE.Vector3(2, 12.5, 4),
+        new THREE.Vector3(2, 14, 4),
+      ),
+      radius: 0.15,
+    })
+    expect(wallHits.length).toBeGreaterThan(0)
+
+    const segments = createRoadBoundaryWallSegments({
+      rows,
+      halfWidth: 4,
+      closed: false,
+      rowSpacing: 4,
+      exclusionCircles,
+    })
+    const rightSide = segments.filter((segment) => (
+      segment.side === 1 && segment.distance > 0
+    ))
+    expect(rightSide).toHaveLength(2)
+    expect(rightSide[0]!.points[rightSide[0]!.points.length - 1]!.x).toBeLessThan(10)
+    expect(rightSide[1]!.points[0]!.x).toBeGreaterThan(10)
+
+    mesh.geometry.dispose()
+  })
+
+  it('merges overlapping exclusion ranges and opens both road sides', () => {
+    const rows = makeRows()
+    const segments = createRoadBoundaryWallSegments({
+      rows,
+      halfWidth: 4,
+      closed: true,
+      rowSpacing: 4,
+      exclusionCircles: [
+        makeCircle(9, 0, 4.8),
+        makeCircle(11, 0, 4.8),
+      ],
+    })
+    expect(segments).toHaveLength(4)
+    expect(segments.filter((segment) => segment.distance < 0)).toHaveLength(2)
+    expect(segments.filter((segment) => segment.distance > 0)).toHaveLength(2)
+  })
+
+  it('opens both the side and end cap without closing the gap', () => {
+    const rows = makeRows()
+    const exclusionCircles = [makeCircle(0, 0, 1.5)]
+    const segments = createRoadBoundaryWallSegments({
+      rows,
+      halfWidth: 4,
+      closed: false,
+      rowSpacing: 4,
+      exclusionCircles,
+    })
+    expect(segments.filter((segment) => segment.distance === 0)).toHaveLength(3)
+    expect(segments.some((segment) => (
+      segment.distance === 0
+      && segment.points[0]!.x === 0
+      && segment.points[0]!.z === 0
+    ))).toBe(false)
+  })
+
+  it('returns no boundary geometry when exclusions cover the entire road end', () => {
+    const rows = makeRows()
+    const options = {
+      rows,
+      halfWidth: 4,
+      closed: false,
+      rowSpacing: 4,
+      exclusionCircles: [makeCircle(10, 0, 100)],
+    }
+    expect(createRoadBoundaryCollisionGeometry(options)).toBeNull()
+    expect(createRoadBoundaryWallSegments(options)).toHaveLength(0)
   })
 })

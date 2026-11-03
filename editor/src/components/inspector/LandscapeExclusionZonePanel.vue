@@ -167,8 +167,9 @@ function handleRemoveComponent(): void {
         </div>
         <div class="landscape-exclusion-panel__hint">
           圆心使用节点世界坐标原点，半径按世界米计算。新建到 Floor 的排除区会按楼板几何
-          自动填充；修改楼板或节点缩放后，请先点击“适配节点范围”，再在 Procedural
-          Landscape 面板点击“重新生成”应用。
+          自动填充。程序化公路可穿过排除区，与之相交的公路隔离墙和空气墙会在“重新生成”
+          后断开，形成道路入口；修改楼板、节点缩放或排除区位置后，请先按需点击“适配节点范围”，
+          再到 Procedural Landscape 面板点击“重新生成”应用。
         </div>
       </div>
     </v-expansion-panel-text>

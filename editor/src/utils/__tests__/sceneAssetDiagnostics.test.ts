@@ -130,7 +130,7 @@ describe('scene asset diagnostics', () => {
     }))
   })
 
-  it('invalidates the compiled road profile when an exclusion zone changes', () => {
+  it('keeps the compiled road profile valid when an exclusion zone changes', () => {
     const props = createDefaultProceduralLandscapeProps({ id: 'ground-1' })
     props.dem.assetId = 'dem-asset'
     props.dem.runtimeGridUrl = 'https://example.test/dem-grid.bin'
@@ -149,16 +149,16 @@ describe('scene asset diagnostics', () => {
         authoringSampleStep: 1,
         authoringCellSize: 30,
         exclusionSignature: '',
-        compiledProfile: {
-          sourceSignature: buildCompiledRoadProfileSourceSignature(props, {
-            groundSurfaceRevision: 0,
-            authoringSampleStep: 1,
-            authoringCellSize: 30,
-            exclusionSignature: '',
-          }),
-          pointsLocalXYZ: [0, 20, 0, 10, 20, 0],
-        },
       },
+    }
+    props.road.generatedRoute.centerline!.compiledProfile = {
+      sourceSignature: buildCompiledRoadProfileSourceSignature(props, {
+        groundSurfaceRevision: 0,
+        authoringSampleStep: 1,
+        authoringCellSize: 30,
+        exclusionSignature: '',
+      }),
+      pointsLocalXYZ: [0, 20, 0, 10, 20, 0],
     }
     const scene = createScene([
       createNode({
@@ -183,8 +183,7 @@ describe('scene asset diagnostics', () => {
     ])
 
     const report = validateSceneAssetReferences(scene, {})
-    expect(report.issues).toContainEqual(expect.objectContaining({
-      severity: 'error',
+    expect(report.issues).not.toContainEqual(expect.objectContaining({
       code: 'procedural-landscape-road-profile',
     }))
   })

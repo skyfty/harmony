@@ -10,6 +10,10 @@ export interface CompiledRoadProfileSignatureOptions {
   groundSurfaceRevision: number
   authoringSampleStep: number
   authoringCellSize: number
+  /**
+   * Baked centerline signature. Callers validating a saved route should pass
+   * the centerline's own value so moving exclusion zones does not invalidate it.
+   */
   exclusionSignature: string
 }
 

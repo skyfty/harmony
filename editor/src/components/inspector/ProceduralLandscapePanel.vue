@@ -1002,7 +1002,7 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             </template>
           </div>
           <div v-if="exclusionStale" class="pl-hint pl-hint--stale">
-            排除区位置或半径已变更，点击“重新生成”应用。
+            排除区位置或半径已变更，点击“重新生成”应用道路隔离墙开口及其他景观排除。
           </div>
           <v-select
             :model-value="propsValue.quality"

@@ -3,7 +3,8 @@ import * as THREE from 'three'
 /**
  * World-space circular keep-out area consumed by every procedural landscape
  * layer. Y is intentionally ignored: an exclusion applies through the full
- * vertical extent of the generated scene.
+ * vertical extent of the generated scene. Procedural roads are allowed through
+ * these circles; road containment walls use them as openings instead.
  */
 export interface LandscapeExclusionCircle {
   id: string

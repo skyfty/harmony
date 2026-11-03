@@ -223,7 +223,6 @@ import {
   filterLandscapeExclusionPlacements,
   getLandscapeExclusionSnapshot,
   landscapeExclusionSignature,
-  polylineIntersectsExclusion,
   type LandscapeExclusionCircle,
 } from './exclusion'
 import {
@@ -1709,13 +1708,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return changed
   }
 
-  function resolveRoadExclusionMargin(): number {
-    return roadHalfWidth(props)
-      + props.road.shoulderWidth
-      + Math.max(2, props.road.flattenBand)
-      + 0.5
-  }
-
   function treeExclusionMargin(placement: TreePlacement): number {
     return Math.max(1.25, placement.scale * 0.35)
   }
@@ -2763,10 +2755,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return null
     }
     host.updateMatrixWorld(true)
-    const currentExclusionSignature = landscapeExclusionSignature(appliedExclusionCircles)
-    const exclusionMargin = resolveRoadExclusionMargin()
     const cachedCenterline = route.centerline
     const cachedPointsXZ = cachedCenterline?.pointsXZ
+    const cachedExclusionSignature = cachedCenterline?.exclusionSignature
+      ?? landscapeExclusionSignature(appliedExclusionCircles)
     const expectedProfileSignature = buildCompiledRoadProfileSourceSignature(
       {
         ...props,
@@ -2779,7 +2771,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         groundSurfaceRevision: resolveHostGroundSurfaceRevision(host),
         authoringSampleStep: cachedCenterline?.authoringSampleStep ?? demGridSampleStep,
         authoringCellSize: cachedCenterline?.authoringCellSize ?? activeGrid.cellSize,
-        exclusionSignature: currentExclusionSignature,
+        exclusionSignature: cachedExclusionSignature,
       },
     )
     const hasMatchingProfile = compiledRoadProfileMatches(cachedCenterline, expectedProfileSignature)
@@ -2820,14 +2812,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       })
       if (cached) {
         cachedFallback = cached
-        const exclusionSignatureMatches = currentExclusionSignature
-          === (route.centerline?.exclusionSignature ?? '')
-        const crossesExclusion = polylineIntersectsExclusion(
-          centerlineWorld,
-          appliedExclusionCircles,
-          exclusionMargin,
-        )
-        if (exclusionSignatureMatches && !crossesExclusion) {
+        if (hasMatchingProfile) {
           return cached
         }
       } else {
@@ -2865,18 +2850,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       routeClearance: roadGeometryLimits.clearance,
       minimumTurnRadius: roadGeometryLimits.minimumTurnRadius,
       maximumHeadingChangeRad: roadGeometryLimits.maximumHeadingChangeRad,
-      exclusionCircles: appliedExclusionCircles,
-      exclusionMargin,
     })
     if (planned?.complete) {
       return planned
     }
     if (cachedFallback?.complete) {
-      warn('landscape-exclusion-road-unavoidable')
       return {
         ...cachedFallback,
         complete: false,
-        failureReason: planned?.failureReason ?? 'blocked-by-exclusion-zone',
+        failureReason: planned?.failureReason ?? 'road-route-incomplete',
       }
     }
     return planned
@@ -3629,6 +3611,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
    * Road containment belongs to the road rather than the terrain-driven wall
    * placement layer. Air walls use only the collision prism; isolation walls
    * add the same seasonal barrier visual used by the official hard guardrail.
+   * Landscape exclusions cut both representations so roadside zones become
+   * stable entrances without changing the road centerline.
    */
   function buildRoadBoundary(): void {
     disposeRoadBoundary()
@@ -3651,6 +3635,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       rowSpacing: ROAD_BOUNDARY_ROW_SPACING,
       lift: ROAD_BAND_LIFT,
       hostInverse,
+      exclusionCircles: appliedExclusionCircles,
     }
     const collision = createRoadBoundaryCollisionGeometry(options)
     if (collision) {
@@ -5941,16 +5926,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     getGeneratedRoadCenterlineLocal(): ProceduralLandscapeGeneratedRouteCenterline | null {
       const generatedRoute = props.road.generatedRoute
       const saved = generatedRoute?.centerline
-      const currentExclusionSignature = landscapeExclusionSignature(appliedExclusionCircles)
-      if (
-        saved?.pointsXZ.length
-        && (saved.exclusionSignature ?? '') === currentExclusionSignature
-      ) {
+      if (saved?.pointsXZ.length) {
+        const bakedExclusionSignature = saved.exclusionSignature
+          ?? landscapeExclusionSignature(appliedExclusionCircles)
         const sourceSignature = buildCompiledRoadProfileSourceSignature(props, {
           groundSurfaceRevision: resolveHostGroundSurfaceRevision(hostObject),
           authoringSampleStep: saved.authoringSampleStep,
           authoringCellSize: saved.authoringCellSize,
-          exclusionSignature: currentExclusionSignature,
+          exclusionSignature: bakedExclusionSignature,
         })
         if (compiledRoadProfileMatches(saved, sourceSignature)) {
           return {
@@ -5958,7 +5941,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             algorithmVersion: saved.algorithmVersion,
             authoringSampleStep: saved.authoringSampleStep,
             authoringCellSize: saved.authoringCellSize,
-            exclusionSignature: saved.exclusionSignature ?? '',
+            exclusionSignature: bakedExclusionSignature,
             compiledProfile: {
               sourceSignature,
               pointsLocalXYZ: [...saved.compiledProfile!.pointsLocalXYZ],

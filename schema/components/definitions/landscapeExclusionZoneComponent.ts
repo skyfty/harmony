@@ -165,7 +165,7 @@ const landscapeExclusionZoneComponentDefinition: ComponentDefinition<LandscapeEx
   label: 'Landscape Exclusion Zone',
   icon: 'mdi-vector-circle',
   order: 94,
-  description: 'Keep procedurally generated landscape content outside this node radius.',
+  description: 'Keep procedurally generated landscape content outside this radius and cut road containment walls where the generated road crosses it.',
   canAttach(node: SceneNode) {
     return node.nodeType === 'Mesh' || node.nodeType === 'Group' || node.nodeType === 'Empty'
   },

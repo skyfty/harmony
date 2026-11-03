@@ -22,24 +22,14 @@ import {
   type RoadComponentProps,
   type WallComponentProps,
 } from '@schema/components'
-import * as THREE from 'three'
 import {
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   type ProceduralLandscapeComponentProps,
 } from '@schema/components/definitions/proceduralLandscapeComponent'
 import {
-  LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE,
-  clampLandscapeExclusionZoneProps,
-  type LandscapeExclusionZoneProps,
-} from '@schema/components/definitions/landscapeExclusionZoneComponent'
-import {
   buildCompiledRoadProfileSourceSignature,
   compiledRoadProfileMatches,
 } from '@schema/proceduralLandscape/compiledRoadProfile'
-import {
-  landscapeExclusionSignature,
-  type LandscapeExclusionCircle,
-} from '@schema/proceduralLandscape/exclusion'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import {
@@ -781,49 +771,11 @@ export function buildSceneAssetReferenceSummaryMap(
   return summaryMap
 }
 
-function collectLandscapeExclusionSignature(nodes: SceneNode[]): string {
-  const circles: LandscapeExclusionCircle[] = []
-  const localPosition = new THREE.Vector3()
-  const localScale = new THREE.Vector3()
-  const localQuaternion = new THREE.Quaternion()
-  const localEuler = new THREE.Euler()
-  const localMatrix = new THREE.Matrix4()
-  const worldPosition = new THREE.Vector3()
-  const visit = (list: SceneNode[], parentMatrix: THREE.Matrix4): void => {
-    for (const node of list) {
-      localPosition.set(node.position?.x ?? 0, node.position?.y ?? 0, node.position?.z ?? 0)
-      localEuler.set(node.rotation?.x ?? 0, node.rotation?.y ?? 0, node.rotation?.z ?? 0, 'XYZ')
-      localQuaternion.setFromEuler(localEuler)
-      localScale.set(node.scale?.x ?? 1, node.scale?.y ?? 1, node.scale?.z ?? 1)
-      localMatrix.compose(localPosition, localQuaternion, localScale)
-      const worldMatrix = new THREE.Matrix4().multiplyMatrices(parentMatrix, localMatrix)
-      const exclusionState = node.components?.[LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE] as
-        | SceneNodeComponentState<LandscapeExclusionZoneProps>
-        | undefined
-      if (exclusionState && exclusionState.enabled !== false) {
-        worldPosition.setFromMatrixPosition(worldMatrix)
-        circles.push({
-          id: `${node.id}:${exclusionState.id}`,
-          centerX: worldPosition.x,
-          centerZ: worldPosition.z,
-          radius: clampLandscapeExclusionZoneProps(exclusionState.props).radius,
-        })
-      }
-      if (Array.isArray(node.children) && node.children.length) {
-        visit(node.children, worldMatrix)
-      }
-    }
-  }
-  visit(nodes, new THREE.Matrix4())
-  return landscapeExclusionSignature(circles)
-}
-
 function buildStructuralIssues(scene: AssetLookupScene): SceneAssetDiagnosticIssue[] {
   // 环境不再有背景/HDRI/SkyCube 资产引用（只保留 Slow Roads 预设），
   // 因此环境相关的资产完整性检查不再需要。
   const issues: SceneAssetDiagnosticIssue[] = []
   const stack: SceneNode[] = [...scene.nodes]
-  const exclusionSignature = collectLandscapeExclusionSignature(scene.nodes)
 
   while (stack.length) {
     const node = stack.pop()
@@ -886,7 +838,7 @@ function buildStructuralIssues(scene: AssetLookupScene): SceneAssetDiagnosticIss
               : 0,
             authoringSampleStep: centerline.authoringSampleStep,
             authoringCellSize: centerline.authoringCellSize,
-            exclusionSignature,
+            exclusionSignature: centerline.exclusionSignature ?? '',
           })
         : ''
       if (!compiledRoadProfileMatches(centerline, expectedSignature)) {

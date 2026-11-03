@@ -110,7 +110,11 @@ export interface ProceduralLandscapeGeneratedRouteCenterline {
   authoringSampleStep: number
   /** Runtime height-grid cell size used when the snapshot was authored. */
   authoringCellSize: number
-  /** Landscape exclusion signature used when this path was generated. */
+  /**
+   * Landscape exclusion signature baked when this path was generated. It is
+   * retained for compiled-profile compatibility and is not live cache
+   * invalidation input after road planning stopped avoiding exclusion zones.
+   */
   exclusionSignature?: string
   /** DEM road heights baked by the editor for all runtime environments. */
   compiledProfile?: ProceduralLandscapeCompiledRoadProfile
