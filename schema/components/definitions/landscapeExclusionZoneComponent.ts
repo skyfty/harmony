@@ -1,4 +1,4 @@
-import type { Object3D } from 'three'
+import { Euler, Quaternion, Vector3, type Object3D } from 'three'
 import type { SceneNode, SceneNodeComponentState } from '../../core'
 import {
   registerLandscapeExclusion,
@@ -16,6 +16,76 @@ export const LANDSCAPE_EXCLUSION_ZONE_MAX_RADIUS = 10_000
 export interface LandscapeExclusionZoneProps {
   /** World-space radius in meters. Node scaling does not affect this value. */
   radius: number
+}
+
+/**
+ * Resolve a circle that covers the node-origin-relative footprint of a Floor.
+ * Floor vertices are the outer contour; corner smoothing curves inward, so the
+ * furthest transformed vertex is sufficient. Other node kinds retain the
+ * generic default until they have an equally explicit footprint definition.
+ */
+export function resolveLandscapeExclusionZoneRadiusForNode(node: SceneNode): number {
+  const mesh = node.dynamicMesh
+  if (!mesh || mesh.type !== 'Floor' || !Array.isArray(mesh.vertices) || mesh.vertices.length < 3) {
+    return LANDSCAPE_EXCLUSION_ZONE_DEFAULT_RADIUS
+  }
+
+  const scaleX = Math.abs(Number(node.scale?.x))
+  const scaleY = Math.abs(Number(node.scale?.y))
+  const scaleZ = Math.abs(Number(node.scale?.z))
+  if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || !Number.isFinite(scaleZ)) {
+    return LANDSCAPE_EXCLUSION_ZONE_DEFAULT_RADIUS
+  }
+
+  const rotationX = node.rotation?.x == null ? 0 : Number(node.rotation.x)
+  const rotationY = node.rotation?.y == null ? 0 : Number(node.rotation.y)
+  const rotationZ = node.rotation?.z == null ? 0 : Number(node.rotation.z)
+  if (
+    !Number.isFinite(rotationX)
+    || !Number.isFinite(rotationY)
+    || !Number.isFinite(rotationZ)
+  ) {
+    return LANDSCAPE_EXCLUSION_ZONE_DEFAULT_RADIUS
+  }
+  const rotation = new Quaternion().setFromEuler(
+    new Euler(rotationX, rotationY, rotationZ),
+  )
+  const thickness = Number(mesh.thickness)
+  const halfThickness = Number.isFinite(thickness) ? Math.max(0, thickness) * 0.5 : 0
+  const localYValues = halfThickness > 0 ? [-halfThickness, halfThickness] : [0]
+  const point = new Vector3()
+  let maxRadius = 0
+  let validVertexCount = 0
+
+  for (const vertex of mesh.vertices) {
+    if (!Array.isArray(vertex) || vertex.length < 2) {
+      continue
+    }
+    const localX = Number(vertex[0])
+    const localZ = Number(vertex[1])
+    if (!Number.isFinite(localX) || !Number.isFinite(localZ)) {
+      continue
+    }
+    validVertexCount += 1
+    for (const localY of localYValues) {
+      point
+        .set(localX * scaleX, localY * scaleY, localZ * scaleZ)
+        .applyQuaternion(rotation)
+      const radius = Math.hypot(point.x, point.z)
+      if (Number.isFinite(radius)) {
+        maxRadius = Math.max(maxRadius, radius)
+      }
+    }
+  }
+
+  if (!validVertexCount) {
+    return LANDSCAPE_EXCLUSION_ZONE_DEFAULT_RADIUS
+  }
+  return clampLandscapeExclusionZoneProps({
+    // Round outward so the inspector shows a stable meter value that still
+    // covers every transformed floor vertex.
+    radius: Math.ceil(maxRadius * 100) / 100,
+  }).radius
 }
 
 export function clampLandscapeExclusionZoneProps(
@@ -99,8 +169,10 @@ const landscapeExclusionZoneComponentDefinition: ComponentDefinition<LandscapeEx
   canAttach(node: SceneNode) {
     return node.nodeType === 'Mesh' || node.nodeType === 'Group' || node.nodeType === 'Empty'
   },
-  createDefaultProps() {
-    return clampLandscapeExclusionZoneProps(null)
+  createDefaultProps(node) {
+    return clampLandscapeExclusionZoneProps({
+      radius: resolveLandscapeExclusionZoneRadiusForNode(node),
+    })
   },
   createInstance(context) {
     return new LandscapeExclusionZoneComponent(context)

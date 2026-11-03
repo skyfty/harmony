@@ -30,6 +30,7 @@ import {
   ROAD_WIDTH_PRESETS,
   type RoadStyleId,
 } from '@schema/proceduralLandscape/roadStyle'
+import { resolveProceduralLandscapeRoadGeometryLimits } from '@schema/proceduralLandscape/roadGeometry'
 import { getTerrainDemOrthoFileInfo } from '@/utils/demOrthoTextureLoader'
 
 const sceneStore = useSceneStore()
@@ -333,8 +334,9 @@ const roadFailureText = computed(() => {
   const reason = runtimeStats.value?.roadFailureReason
   if (reason === 'road-geometry-self-overlap' && runtimeStats.value) {
     const width = propsValue.value?.road.width ?? 0
-    const requiredClearance = Math.max(7, width)
-    const requiredTurnRadius = 20
+    const limits = resolveProceduralLandscapeRoadGeometryLimits(width)
+    const requiredClearance = limits.clearance
+    const requiredTurnRadius = limits.minimumTurnRadius
     return `路线存在自重叠或过急弯道，该路线未提交。当前中心线间距 ${runtimeStats.value.roadMinCenterlineClearance.toFixed(1)}m（需 ≥ ${requiredClearance.toFixed(1)}m），最小转弯半径 ${runtimeStats.value.roadMinTurnRadius.toFixed(1)}m（需 ≥ ${requiredTurnRadius.toFixed(1)}m）。请增大绕行半径或调整途经点。`
   }
   if (

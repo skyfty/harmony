@@ -7,6 +7,35 @@ export interface RoadGeometryValidation {
   maxHeadingChangeRad: number
 }
 
+export interface RoadCenterlineGeometryLimits {
+  clearance: number
+  minimumTurnRadius: number
+  maximumHeadingChangeRad: number
+}
+
+/**
+ * Runtime limits for generated landscape roads.
+ *
+ * Waypoint capture can place two adjacent centerline samples on either side
+ * of the exact waypoint, which produces a very high per-sample heading change
+ * even when the authored route is otherwise valid. Keep the full-width overlap
+ * guard, but judge curvature as a radius instead of rejecting that sampling
+ * artifact. A road may turn within half of its width before it is reported as
+ * too sharp.
+ */
+export function resolveProceduralLandscapeRoadGeometryLimits(
+  roadWidth: number,
+): RoadCenterlineGeometryLimits {
+  const width = Number.isFinite(roadWidth) ? Math.max(0, roadWidth) : 0
+  return {
+    clearance: Math.max(7, width),
+    minimumTurnRadius: Math.max(2, width * 0.5),
+    // Heading change alone is sample-spacing dependent. Radius and
+    // non-local centerline separation provide the meaningful guards.
+    maximumHeadingChangeRad: Math.PI,
+  }
+}
+
 /**
  * Reject centerlines that fold back onto themselves or turn more tightly than
  * the generated road band can represent. Adjacent samples are ignored because
@@ -150,8 +179,8 @@ export function validateRoadCenterlineGeometry(
   return {
     valid: minCenterlineClearance >= options.clearance
       // Piecewise-circumradius measurements carry a few centimetres of
-      // discretisation error at 2m spacing; keep the 20m design limit
-      // without rejecting a visually identical 19.98m sample.
+      // discretisation error at 2m spacing, so keep the configured design
+      // limit without rejecting a visually identical boundary sample.
       && minTurnRadius >= options.minimumTurnRadius - 0.05
       && maxHeadingChangeRad <= (
         options.maximumHeadingChangeRad ?? Math.PI

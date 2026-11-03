@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { RoadTraceNode } from '@schema/proceduralLandscape/roadTrace'
-import { validateRoadCenterlineGeometry } from '@schema/proceduralLandscape/roadGeometry'
+import {
+  resolveProceduralLandscapeRoadGeometryLimits,
+  validateRoadCenterlineGeometry,
+} from '@schema/proceduralLandscape/roadGeometry'
 
 function node(x: number, z: number, index: number): RoadTraceNode {
   return {
@@ -46,5 +49,43 @@ describe('road centerline geometry', () => {
     })
     expect(geometry.valid).toBe(true)
     expect(geometry.minCenterlineClearance).toBeGreaterThanOrEqual(14)
+  })
+
+  it('keeps the full-width overlap guard while allowing a road-width-aware bend', () => {
+    const nodes = [
+      node(0, -10, 0),
+      node(0, 0, 1),
+      node(0, 10, 2),
+      node(10, 10, 3),
+      node(10, 20, 4),
+      node(10, 30, 5),
+    ]
+    const strict = validateRoadCenterlineGeometry(nodes, {
+      clearance: 7,
+      minimumTurnRadius: 20,
+      maximumHeadingChangeRad: (10 * Math.PI) / 180,
+    })
+    const relaxed = validateRoadCenterlineGeometry(
+      nodes,
+      resolveProceduralLandscapeRoadGeometryLimits(7),
+    )
+
+    expect(strict.valid).toBe(false)
+    expect(strict.minCenterlineClearance).toBeGreaterThanOrEqual(7)
+    expect(relaxed.valid).toBe(true)
+    expect(relaxed.minCenterlineClearance).toBeGreaterThanOrEqual(7)
+  })
+
+  it('scales the minimum radius from road width without dropping overlap checks', () => {
+    expect(resolveProceduralLandscapeRoadGeometryLimits(7)).toEqual({
+      clearance: 7,
+      minimumTurnRadius: 3.5,
+      maximumHeadingChangeRad: Math.PI,
+    })
+    expect(resolveProceduralLandscapeRoadGeometryLimits(12)).toEqual({
+      clearance: 12,
+      minimumTurnRadius: 6,
+      maximumHeadingChangeRad: Math.PI,
+    })
   })
 })

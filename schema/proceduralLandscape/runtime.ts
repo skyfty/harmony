@@ -34,6 +34,7 @@ import {
   type TerrainSurfaceSampler,
 } from './terrainSurfaceSampler'
 import type { RoadTraceNode } from './roadTrace'
+import { resolveProceduralLandscapeRoadGeometryLimits } from './roadGeometry'
 import {
   buildRoadFieldData,
   computeRoadEdgeHeights,
@@ -2610,6 +2611,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       activeGrid.cellSize * 2,
       Math.max(0.5, road.width * 0.5) + road.shoulderWidth + 2,
     )
+    const roadGeometryLimits = resolveProceduralLandscapeRoadGeometryLimits(
+      road.width,
+    )
     const planned = planWaypointRoadRoute(activeGrid, {
       waypoints: waypointsWorld,
       strategy: route.strategy,
@@ -2627,12 +2631,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       centerlineMode: usesDemTerrain()
         ? 'dem-roadbed-spline'
         : 'terrain-following',
-      routeClearance: Math.max(
-        7,
-        road.width,
-      ),
-      minimumTurnRadius: 20,
-      maximumHeadingChangeRad: (10 * Math.PI) / 180,
+      routeClearance: roadGeometryLimits.clearance,
+      minimumTurnRadius: roadGeometryLimits.minimumTurnRadius,
+      maximumHeadingChangeRad: roadGeometryLimits.maximumHeadingChangeRad,
       exclusionCircles: appliedExclusionCircles,
       exclusionMargin,
     })

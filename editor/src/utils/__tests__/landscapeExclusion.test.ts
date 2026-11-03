@@ -9,6 +9,7 @@ import {
   clampLandscapeExclusionZoneProps,
   createLandscapeExclusionZoneComponentState,
   landscapeExclusionZoneComponentDefinition,
+  resolveLandscapeExclusionZoneRadiusForNode,
 } from '@schema/components/definitions/landscapeExclusionZoneComponent'
 import {
   filterLandscapeExclusionPlacements,
@@ -87,6 +88,36 @@ function makeWallSample(x: number): WallSample {
   }
 }
 
+function makeFloorNode(options: {
+  vertices?: Array<[number, number]>
+  scale?: { x: number; y: number; z: number }
+  rotation?: { x: number; y: number; z: number }
+  thickness?: number
+} = {}): SceneNode {
+  return {
+    id: 'floor-node',
+    name: 'Floor',
+    nodeType: 'Mesh',
+    position: { x: 38.598741398540675, y: 40.198858521504555, z: 617.8621828682665 },
+    rotation: options.rotation ?? {
+      x: 0.020377207518447793,
+      y: -0.00006531868964283226,
+      z: -0.006410712135535227,
+    },
+    scale: options.scale ?? { x: 1, y: 1, z: 1 },
+    dynamicMesh: {
+      type: 'Floor',
+      vertices: options.vertices ?? [
+        [25.30132248010326, -62.967489150277856],
+        [60.19566587942704, 31.329593333857815],
+        [-25.301322480103266, 62.96748915027774],
+        [-60.19566587942705, -31.32959333385793],
+      ],
+      thickness: options.thickness ?? 0,
+    },
+  } as SceneNode
+}
+
 describe('landscape exclusion geometry', () => {
   beforeEach(() => {
     resetLandscapeExclusionsForTests()
@@ -97,6 +128,41 @@ describe('landscape exclusion geometry', () => {
     expect(clampLandscapeExclusionZoneProps({ radius: 0 }).radius).toBe(0.5)
     expect(clampLandscapeExclusionZoneProps({ radius: 20_000 }).radius).toBe(10_000)
     expect(clampLandscapeExclusionZoneProps({ radius: Number.NaN }).radius).toBe(20)
+  })
+
+  it('fits a new exclusion zone to the transformed floor footprint', () => {
+    const node = makeFloorNode()
+    const state = createLandscapeExclusionZoneComponentState(node)
+
+    expect(resolveLandscapeExclusionZoneRadiusForNode(node)).toBe(67.86)
+    expect(state.props.radius).toBe(67.86)
+    expect(createLandscapeExclusionZoneComponentState(node, { radius: 2 }).props.radius).toBe(2)
+  })
+
+  it('uses the node origin for fit radius and includes node scale', () => {
+    const node = makeFloorNode({
+      vertices: [[2, 0], [4, 0], [-1, 3]],
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 3, y: 1, z: 2 },
+    })
+
+    // Local (4, 0) becomes 12m from the origin after X scaling;
+    // a bounding-box-center sphere would incorrectly report a smaller radius.
+    expect(resolveLandscapeExclusionZoneRadiusForNode(node)).toBe(12)
+  })
+
+  it('falls back for malformed floors and clamps oversized fitted radii', () => {
+    const emptyFloor = makeFloorNode({ vertices: [] })
+    const malformedFloor = makeFloorNode({ vertices: [[Number.NaN, 1]] })
+    const malformedRotation = makeFloorNode({
+      rotation: { x: Number.NaN, y: 0, z: 0 },
+    })
+    const hugeFloor = makeFloorNode({ vertices: [[20_000, 0], [0, 20_000], [-1, -1]] })
+
+    expect(resolveLandscapeExclusionZoneRadiusForNode(emptyFloor)).toBe(20)
+    expect(resolveLandscapeExclusionZoneRadiusForNode(malformedFloor)).toBe(20)
+    expect(resolveLandscapeExclusionZoneRadiusForNode(malformedRotation)).toBe(20)
+    expect(resolveLandscapeExclusionZoneRadiusForNode(hugeFloor)).toBe(10_000)
   })
 
   it('uses world position and world radius regardless of node scale', () => {
