@@ -25,7 +25,11 @@ export function createCannonSceneRigidBody(params: CannonSceneRigidBodyCreatePar
   body.linearDamping = params.desc.linearDamping ?? 0.01
   body.angularDamping = params.desc.angularDamping ?? 0.01
   body.material = params.world.defaultMaterial
-  const bindings = createCannonSceneShapeBindings(params.shapeMap, params.desc.shapeId)
+  const bindings = createCannonSceneShapeBindings(
+    params.shapeMap,
+    params.desc.shapeId,
+    params.desc.type === 'dynamic',
+  )
   const shouldRotateBodyForHeightfield = bindings.length > 0
     && bindings.every((binding) => binding.shapeKind === 'heightfield')
 

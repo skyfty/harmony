@@ -69,6 +69,7 @@ export function cloneTerrainFlatteningComponentProps(
 }
 
 export type TerrainFlatteningOwnerType = 'Floor' | 'Region' | 'Wall'
+export type TerrainFlatteningCollisionAuthority = 'generated-terrain' | 'rigidbody'
 
 export interface TerrainFlatteningPolygonFootprint {
   kind: 'polygon'
@@ -100,6 +101,12 @@ export interface LandscapeTerrainFlatteningSnapshot {
   ownerNodeId: string
   componentId: string
   ownerType: TerrainFlatteningOwnerType
+  /**
+   * The collision source that owns the configured footprint. A static Rigidbody
+   * keeps its exact collider authoritative; generated DEM collision remains
+   * available below it and outside the footprint.
+   */
+  collisionAuthority: TerrainFlatteningCollisionAuthority
   footprint: TerrainFlatteningFootprint
   targetY: number
   gradeY: number
@@ -211,6 +218,26 @@ function rounded(value: number): string {
   return Number.isFinite(value) ? value.toFixed(3) : 'NaN'
 }
 
+function resolveCollisionAuthority(
+  node: SceneNode,
+): TerrainFlatteningCollisionAuthority {
+  const rigidbody = node.components?.rigidbody as
+    | {
+        enabled?: boolean
+        props?: {
+          bodyType?: unknown
+        } | null
+      }
+    | undefined
+  if (!rigidbody || rigidbody.enabled === false) {
+    return 'generated-terrain'
+  }
+  const bodyType = rigidbody?.props?.bodyType
+  return bodyType === 'DYNAMIC' || bodyType === 'KINEMATIC'
+    ? 'generated-terrain'
+    : 'rigidbody'
+}
+
 function sanitizeContour(points: ReadonlyArray<FloorVertex2D>): FloorVertex2D[] {
   const out: FloorVertex2D[] = []
   for (const point of points) {
@@ -308,6 +335,7 @@ export function buildLandscapeTerrainFlatteningOwnerSnapshot(params: {
   object.updateWorldMatrix(true, false)
   const props = clampTerrainFlatteningComponentProps(params.props)
   const ownerType = node.dynamicMesh.type
+  const collisionAuthority = resolveCollisionAuthority(node)
   const mesh = node.dynamicMesh
   let footprint: TerrainFlatteningFootprint
   if (mesh.type === 'Floor' || mesh.type === 'Region') {
@@ -387,6 +415,7 @@ export function buildLandscapeTerrainFlatteningOwnerSnapshot(params: {
   const signatureParts = [
     id,
     ownerType,
+    collisionAuthority,
     props.heightMode,
     rounded(targetY),
     props.edgeMode,
@@ -408,6 +437,7 @@ export function buildLandscapeTerrainFlatteningOwnerSnapshot(params: {
       ownerNodeId: node.id,
       componentId: params.componentId ?? '',
       ownerType,
+      collisionAuthority,
       footprint,
       targetY,
       gradeY,
@@ -549,6 +579,12 @@ export interface DemTerrainFlatteningTarget {
   surfaceHeightAt(x: number, z: number): number
   terrainHeightAt(x: number, z: number): number
   visibleHeightAt(x: number, z: number, rawHeight: number): number
+  /**
+   * Height used by automatically generated physics surfaces. When a static
+   * Rigidbody owns the footprint, this deliberately stays below the rendered
+   * owner surface so the authored collider is the only contact surface.
+   */
+  collisionHeightAt(x: number, z: number, rawHeight: number): number
 }
 
 function clampPointToSegmentDistanceSquared(
@@ -982,6 +1018,11 @@ export function createDemTerrainFlatteningTarget(
       return isCore(x, z)
         ? (snapshot.ownerType === 'Floor' ? surfaceHeightAt(x, z) : terrainHeightAt(x, z))
         : target.heightAt(x, z, rawHeight)
+    },
+    collisionHeightAt(x: number, z: number, rawHeight: number): number {
+      return snapshot.collisionAuthority === 'rigidbody'
+        ? target.heightAt(x, z, rawHeight)
+        : target.visibleHeightAt(x, z, rawHeight)
     },
   }
   return target

@@ -82,6 +82,16 @@ const warningMessage = computed(() => {
       return code
   }
 })
+const collisionAuthority = computed(() => snapshotResult.value?.snapshot?.collisionAuthority ?? null)
+const collisionAuthorityLabel = computed(() => {
+  if (collisionAuthority.value === 'rigidbody') {
+    return 'Rigidbody'
+  }
+  if (collisionAuthority.value === 'generated-terrain') {
+    return 'Terrain'
+  }
+  return 'Unavailable'
+})
 
 watch(
   [() => propsValue.value.manualHeight, effectiveHeight],
@@ -292,6 +302,7 @@ function removeComponent(): void {
         <div class="terrain-flattening-panel__status">
           <span>{{ ownerType }}</span>
           <span v-if="ownerHeight !== null">Owner {{ ownerHeight.toFixed(2) }}m</span>
+          <span>Collision source: {{ collisionAuthorityLabel }}</span>
         </div>
 
         <div class="terrain-flattening-panel__label">Target elevation</div>
@@ -397,7 +408,9 @@ function removeComponent(): void {
         <p v-if="feedbackMessage" class="terrain-flattening-panel__feedback">{{ feedbackMessage }}</p>
         <p class="terrain-flattening-panel__hint">
           Floor and Region flatten their full polygon. Wall flattens a corridor around every wall chain.
-          Owner nodes are never moved or rotated by this component.
+          Owner nodes are never moved or rotated by this component. A static Rigidbody owns collision
+          inside the footprint; generated DEM collision stays below it and outside the footprint.
+          Do not add a Ground Collision Source for the same Rigidbody surface.
         </p>
       </div>
     </v-expansion-panel-text>
@@ -427,7 +440,9 @@ function removeComponent(): void {
 
 .terrain-flattening-panel__status {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
+  gap: 0.25rem 0.75rem;
   font-size: 0.76rem;
   color: rgba(233, 236, 241, 0.72);
   font-variant-numeric: tabular-nums;

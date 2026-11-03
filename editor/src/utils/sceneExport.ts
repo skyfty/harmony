@@ -32,6 +32,11 @@ import {
   buildCapsuleShapeFromObject,
 } from '@/utils/rigidbodyCollider'
 import {
+  buildStaticMeshShapeFromObject,
+  shouldReuseGeneratedRigidbodyShape,
+  shouldUseExactFlatFloorCollider,
+} from '@/utils/rigidbodySurfaceCollision'
+import {
   buildExportConvexShape,
   buildRigidbodySamplingObject,
   buildSceneNodeLookup,
@@ -726,6 +731,8 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     if (!samplingNode || isGroundDynamicMesh(samplingNode.dynamicMesh)) {
       continue
     }
+    const rigidbodyProps = clampRigidbodyComponentProps(entry.component.props)
+    const useExactFlatFloorCollider = shouldUseExactFlatFloorCollider(entry.node, rigidbodyProps)
     const hostWorldTransform = worldTransformMap.get(entry.node.id) ?? null
     const sourceWorldTransform = worldTransformMap.get(samplingNode.id) ?? hostWorldTransform
 
@@ -741,7 +748,11 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       continue
     }
     const existingRigidbodyMetadata = entry.component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
-    if (existingRigidbodyMetadata?.shape) {
+    if (shouldReuseGeneratedRigidbodyShape(
+      entry.node,
+      rigidbodyProps,
+      existingRigidbodyMetadata?.shape,
+    )) {
       continue
     }
     const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore, groundNode, sourceWorldTransform)
@@ -784,7 +795,6 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     const buildSphere = async () => buildSphereShapeFromObject(samplingObject, { frameMatrix, storageScale })
     const buildCylinder = async () => buildCylinderShapeFromObject(samplingObject, { frameMatrix, storageScale })
     const buildCapsule = async () => buildCapsuleShapeFromObject(samplingObject, { frameMatrix, storageScale })
-    const rigidbodyProps = clampRigidbodyComponentProps(entry.component.props)
     const builderPriority: Record<RigidbodyColliderType, Array<() => Promise<RigidbodyPhysicsShape | null>>> = {
       convex: [buildConvex, buildBox, buildSphere, buildCylinder],
       box: [buildBox, buildConvex, buildSphere, buildCylinder],
@@ -792,11 +802,20 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       cylinder: [buildCylinder, buildConvex, buildBox, buildSphere],
       capsule: [buildCapsule, buildConvex, buildBox, buildSphere],
     }
-    const builders = builderPriority[rigidbodyProps.colliderType]
-    for (const builder of builders) {
-      shape = await builder()
-      if (shape) {
-        break
+    if (useExactFlatFloorCollider) {
+      shape = buildStaticMeshShapeFromObject(samplingObject, hostWorldTransform)
+      if (!shape) {
+        // Keep the static floor physically supported even if a malformed
+        // sampling mesh cannot produce triangles.
+        shape = await buildBox()
+      }
+    } else {
+      const builders = builderPriority[rigidbodyProps.colliderType]
+      for (const builder of builders) {
+        shape = await builder()
+        if (shape) {
+          break
+        }
       }
     }
     if (!shape) {

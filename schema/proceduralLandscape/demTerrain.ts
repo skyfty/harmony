@@ -58,6 +58,47 @@ export function sampleVisibleDemSurfaceHeightAt(
 }
 
 /**
+ * Samples the height owned by generated DEM collision. An explicit static
+ * Rigidbody on a Terrain Flattening owner takes precedence over both generated
+ * ground and roadbed collision inside its footprint. Outside that footprint,
+ * sampling follows the normal visible roadbed/DEM order.
+ */
+export function sampleDemTerrainCollisionHeightAt(
+  grid: TerrainHeightGrid | null | undefined,
+  roadbed: DemRoadbedTarget | null | undefined,
+  worldX: number,
+  worldZ: number,
+  flattenTargets: ReadonlyArray<DemTerrainFlatteningTarget> = [],
+): number | null {
+  if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
+    return null
+  }
+  const rawHeight = grid?.sampleHeight(worldX, worldZ) ?? null
+  const flattenTarget = selectDemTerrainFlatteningTargetAt(flattenTargets, worldX, worldZ)
+  if (flattenTarget?.snapshot.collisionAuthority === 'rigidbody') {
+    return flattenTarget.collisionHeightAt(
+      worldX,
+      worldZ,
+      rawHeight ?? flattenTarget.gradeY,
+    )
+  }
+  if (
+    roadbed
+    && roadbed.distanceAt(worldX, worldZ) <= roadbed.meshHalfWidth
+  ) {
+    return roadbed.walkableHeightAt(worldX, worldZ)
+  }
+  if (flattenTarget) {
+    return flattenTarget.collisionHeightAt(
+      worldX,
+      worldZ,
+      rawHeight ?? flattenTarget.gradeY,
+    )
+  }
+  return rawHeight
+}
+
+/**
  * Samples the normal of the DEM surface that is actually rendered at world XZ.
  * The probes use the same roadbed-aware height sampler as the visible mesh so
  * cut/fill slopes are not replaced by the raw DEM normal.

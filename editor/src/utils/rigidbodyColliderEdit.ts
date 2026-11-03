@@ -87,9 +87,9 @@ export function cloneRuntimeObjectForCollider(
 }
 
 /**
- * Converts a persisted/generated convex collision shape into a viewport overlay geometry.
- * Vertices, part offsets and the shape offset follow the runtime `applyScale` semantics so
- * the overlay matches the physics collider exactly.
+ * Converts a persisted/generated convex or static-mesh collision shape into a
+ * viewport overlay geometry. Vertices, part offsets and the shape offset follow
+ * the runtime `applyScale` semantics so the overlay matches physics exactly.
  */
 export function buildConvexShapeOverlay(params: {
   shape: RigidbodyPhysicsShape
@@ -185,7 +185,22 @@ export function buildConvexShapeOverlay(params: {
     return true
   }
 
-  if (shape.kind === 'convex') {
+  if (shape.kind === 'static-mesh') {
+    const baseIndex = positions.length / 3
+    shape.vertices.forEach((vertex) => {
+      pointHelper
+        .set(vertex[0] * scaleX, vertex[1] * scaleY, vertex[2] * scaleZ)
+        .applyQuaternion(shapeQuaternion)
+        .add(offset)
+      positions.push(pointHelper.x, pointHelper.y, pointHelper.z)
+    })
+    shape.indices.forEach((vertexIndex) => {
+      const index = Math.trunc(vertexIndex)
+      if (Number.isInteger(index) && index >= 0 && index < shape.vertices.length) {
+        indices.push(baseIndex + index)
+      }
+    })
+  } else if (shape.kind === 'convex') {
     appendPart(shape.vertices, shape.faces, undefined, undefined)
   } else if (shape.kind === 'convex-mesh') {
     const parts = Array.isArray(shape.parts) ? shape.parts : []
@@ -196,7 +211,7 @@ export function buildConvexShapeOverlay(params: {
     return null
   }
 
-  if (positions.length < 12 || indices.length < 3) {
+  if (positions.length < 9 || indices.length < 3) {
     return null
   }
 

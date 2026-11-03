@@ -14,6 +14,7 @@ export function createAmmoSchemaShape(
   ammo: AmmoApi,
   definition: SchemaShapeDefinition,
   scaleLike: SchemaShapeScaleLike,
+  dynamic = false,
 ): BuiltAmmoShape | null {
   const safeScale = normalizeShapeScale(scaleLike)
   if (definition.kind === 'box') {
@@ -99,6 +100,24 @@ export function createAmmoSchemaShape(
       heights,
       localOffset: definition.offset,
     } as any, false)
+  }
+  if (definition.kind === 'static-mesh') {
+    const scaleX = definition.applyScale === true ? safeScale.x : 1
+    const scaleY = definition.applyScale === true ? safeScale.y : 1
+    const scaleZ = definition.applyScale === true ? safeScale.z : 1
+    const sourceVertices = definition.vertices
+    const vertices = new Float32Array(sourceVertices.length * 3)
+    sourceVertices.forEach((vertex, index) => {
+      vertices[index * 3] = Number(vertex[0] ?? 0) * scaleX
+      vertices[index * 3 + 1] = Number(vertex[1] ?? 0) * scaleY
+      vertices[index * 3 + 2] = Number(vertex[2] ?? 0) * scaleZ
+    })
+    return createAmmoShape(ammo, {
+      id: -1,
+      kind: 'static-mesh',
+      vertices,
+      indices: Array.from(definition.indices),
+    } as any, dynamic)
   }
   return null
 }

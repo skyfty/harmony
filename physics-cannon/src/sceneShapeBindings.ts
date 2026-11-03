@@ -8,6 +8,7 @@ import type {
   PhysicsVector3,
 } from '@harmony/physics-core'
 import { createCannonCapsuleCompoundParts, createCannonConvexPolyhedron } from './shapeFactory'
+import { createPlanarConvexFallbackShape } from './planarConvexFallback'
 
 export type CannonSceneShapeBinding = {
   shapeKind: PhysicsShapeDesc['kind']
@@ -23,6 +24,7 @@ cylinderShapeRotation.setFromEuler(Math.PI / 2, 0, 0, 'XYZ')
 export function createCannonSceneShapeBindings(
   shapeMap: Map<number, PhysicsShapeDesc>,
   shapeId: number,
+  dynamic = false,
 ): CannonSceneShapeBinding[] {
   const shapeDesc = shapeMap.get(shapeId)
   if (!shapeDesc) {
@@ -30,7 +32,7 @@ export function createCannonSceneShapeBindings(
   }
   if (shapeDesc.kind === 'compound') {
     return shapeDesc.children.flatMap((child) => {
-      const childBindings = createCannonSceneShapeBindings(shapeMap, child.shapeId)
+      const childBindings = createCannonSceneShapeBindings(shapeMap, child.shapeId, dynamic)
       return childBindings.map((binding) => composeShapeBinding(binding, child.transform))
     })
   }
@@ -52,13 +54,16 @@ export function createCannonSceneShapeBindings(
   }
   return [{
     shapeKind: shapeDesc.kind,
-    shape: createShape(shapeDesc),
+    shape: createShape(shapeDesc, dynamic),
     position: new CANNON.Vec3(0, 0, 0),
     quaternion: new CANNON.Quaternion(0, 0, 0, 1),
   }]
 }
 
-function createShape(shapeDesc: Exclude<PhysicsShapeDesc, PhysicsCompoundShapeDesc>): CANNON.Shape {
+function createShape(
+  shapeDesc: Exclude<PhysicsShapeDesc, PhysicsCompoundShapeDesc>,
+  dynamic: boolean,
+): CANNON.Shape {
   switch (shapeDesc.kind) {
     case 'box':
       return new CANNON.Box(vec3FromTuple(shapeDesc.halfExtents))
@@ -75,7 +80,7 @@ function createShape(shapeDesc: Exclude<PhysicsShapeDesc, PhysicsCompoundShapeDe
       return cylinder
     }
     case 'convex-hull':
-      return createConvexHullShape(shapeDesc)
+      return createConvexHullShape(shapeDesc, dynamic)
     case 'static-mesh':
       return createStaticMeshShape(shapeDesc)
     case 'heightfield':
@@ -103,7 +108,14 @@ function createHeightfieldShape(shapeDesc: Extract<PhysicsShapeDesc, { kind: 'he
   return new CANNON.Heightfield(matrix, { elementSize: shapeDesc.elementSize })
 }
 
-function createConvexHullShape(shapeDesc: PhysicsConvexHullShapeDesc): CANNON.ConvexPolyhedron {
+function createConvexHullShape(
+  shapeDesc: PhysicsConvexHullShapeDesc,
+  dynamic: boolean,
+): CANNON.Shape {
+  const flatShape = !dynamic ? createPlanarConvexFallbackShape(shapeDesc) : null
+  if (flatShape) {
+    return flatShape
+  }
   const vertices: Array<[number, number, number]> = []
   for (let index = 0; index < shapeDesc.vertices.length; index += 3) {
     vertices.push([

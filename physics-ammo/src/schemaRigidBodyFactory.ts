@@ -35,7 +35,12 @@ export function createAmmoSchemaRigidBody(ammo: AmmoApi, params: SchemaRigidBody
   const cleanup: Array<() => void> = [() => ammo.destroy(compoundShape)]
 
   params.shapes.forEach((binding) => {
-    const shape = createAmmoSchemaShape(ammo, binding.definition, safeScale)
+    const shape = createAmmoSchemaShape(
+      ammo,
+      binding.definition,
+      safeScale,
+      params.bodyType === 'DYNAMIC',
+    )
     if (!shape) {
       return
     }

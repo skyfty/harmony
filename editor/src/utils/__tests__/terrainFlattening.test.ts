@@ -39,6 +39,7 @@ import {
 import {
   createDemTerrainHeightGrid,
   createDemTerrainMeshBuilder,
+  sampleDemTerrainCollisionHeightAt,
   sampleVisibleDemSurfaceHeightAt,
   splitDemTerrainGeometry,
 } from '@schema/proceduralLandscape/demTerrain'
@@ -355,6 +356,62 @@ describe('terrain flattening component', () => {
 
 describe('terrain flattening targets', () => {
   beforeEach(() => resetLandscapeTerrainFlatteningForTests())
+
+  it('moves generated collision below a static Rigidbody owner surface', () => {
+    const floor = makeFloorNode()
+    const withoutRigidbody = snapshotFor(floor).snapshot!
+    floor.components = {
+      rigidbody: {
+        id: 'floor-rigidbody',
+        type: 'rigidbody',
+        enabled: true,
+        props: {
+          bodyType: 'STATIC',
+        },
+      },
+    } as any
+
+    const withRigidbody = snapshotFor(floor).snapshot!
+    const target = createDemTerrainFlatteningTarget(withRigidbody)
+    expect(withRigidbody.collisionAuthority).toBe('rigidbody')
+    expect(withRigidbody.signature).not.toBe(withoutRigidbody.signature)
+    expect(target.visibleHeightAt(0, 0, 80)).toBe(42)
+    expect(target.collisionHeightAt(0, 0, 80)).toBeCloseTo(
+      42 - TERRAIN_FLATTENING_FLOOR_CLEARANCE,
+      5,
+    )
+    const grid = createDemTerrainHeightGrid(makeGridData())
+    expect(sampleVisibleDemSurfaceHeightAt(grid, null, 0, 0, [target])).toBe(42)
+    expect(sampleDemTerrainCollisionHeightAt(grid, null, 0, 0, [target])).toBeCloseTo(
+      42 - TERRAIN_FLATTENING_FLOOR_CLEARANCE,
+      5,
+    )
+    const roadbed = {
+      distanceAt: () => 0,
+      walkableHeightAt: () => 99,
+      meshHalfWidth: 3,
+    } as any
+    expect(sampleDemTerrainCollisionHeightAt(grid, roadbed, 0, 0, [target])).toBeCloseTo(
+      42 - TERRAIN_FLATTENING_FLOOR_CLEARANCE,
+      5,
+    )
+    expect(sampleDemTerrainCollisionHeightAt(grid, roadbed, 30, 0, [target])).toBe(99)
+
+    const rigidbody = (floor.components as any).rigidbody
+    rigidbody.enabled = false
+    const disabledTarget = createDemTerrainFlatteningTarget(snapshotFor(floor).snapshot!)
+    expect(disabledTarget.snapshot.collisionAuthority).toBe('generated-terrain')
+    expect(disabledTarget.collisionHeightAt(0, 0, 80)).toBe(42)
+
+    rigidbody.enabled = true
+    rigidbody.props.bodyType = 'DYNAMIC'
+    const dynamicTarget = createDemTerrainFlatteningTarget(snapshotFor(floor).snapshot!)
+    expect(dynamicTarget.snapshot.collisionAuthority).toBe('generated-terrain')
+
+    rigidbody.props.bodyType = 'KINEMATIC'
+    const kinematicTarget = createDemTerrainFlatteningTarget(snapshotFor(floor).snapshot!)
+    expect(kinematicTarget.snapshot.collisionAuthority).toBe('generated-terrain')
+  })
 
   it('flattens polygon interiors and transitions toward raw terrain', () => {
     const snapshot = snapshotFor(makeFloorNode()).snapshot!

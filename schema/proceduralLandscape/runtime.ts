@@ -20,6 +20,7 @@ import {
   createDemTerrainMeshBuilder,
   createTerrainDemRuntimeOrthoTexture,
   loadTerrainDemRuntimeGrid,
+  sampleDemTerrainCollisionHeightAt,
   sampleVisibleDemSurfaceHeightAt,
   sampleVisibleDemSurfaceNormalAt,
   splitDemTerrainGeometry,
@@ -2087,7 +2088,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       markProceduralLandscapeDemTerrain(mesh, {
         cellSize: Math.max(1, (demGridData?.cellSizeX ?? 1) * demGridSampleStep),
         sampleHeightAt: (worldX, worldZ) => (
-          sampleVisibleDemSurfaceHeightAt(
+          sampleDemTerrainCollisionHeightAt(
             activeGrid,
             demRoadbedTarget,
             worldX,
@@ -2127,7 +2128,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       markProceduralLandscapeDemTerrain(flatteningMesh, {
         cellSize: Math.max(1, activeGrid.cellSize),
         sampleHeightAt: (worldX, worldZ) => (
-          sampleVisibleDemSurfaceHeightAt(
+          sampleDemTerrainCollisionHeightAt(
             activeGrid,
             demRoadbedTarget,
             worldX,

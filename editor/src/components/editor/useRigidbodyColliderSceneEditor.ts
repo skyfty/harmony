@@ -30,6 +30,11 @@ import {
   type SceneNodeWorldTransform,
 } from '@/utils/rigidbodyShapeBuild'
 import {
+  buildStaticMeshShapeFromObject,
+  isDegenerateConvexRigidbodyShape,
+  shouldUseExactFlatFloorCollider,
+} from '@/utils/rigidbodySurfaceCollision'
+import {
   applyEditableColliderShape,
   buildColliderMetadataPayload,
   buildConvexShapeOverlay,
@@ -336,7 +341,21 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
 
   function readStoredConvexState(): ConvexShapeState | null {
     const shape = activeMetadata?.shape
-    if (!shape || (shape.kind !== 'convex' && shape.kind !== 'convex-mesh')) {
+    if (
+      !shape
+      || (shape.kind !== 'convex' && shape.kind !== 'convex-mesh' && shape.kind !== 'static-mesh')
+    ) {
+      return null
+    }
+    if (
+      selectedNode.value
+      && shouldUseExactFlatFloorCollider(
+        selectedNode.value,
+        clampRigidbodyComponentProps(readActiveComponentProps() ?? undefined),
+      )
+      && shape.kind !== 'static-mesh'
+      && isDegenerateConvexRigidbodyShape(shape)
+    ) {
       return null
     }
     return {
@@ -374,6 +393,10 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
       return null
     }
     const props = clampRigidbodyComponentProps(readActiveComponentProps() ?? undefined)
+    if (selectedNode.value && shouldUseExactFlatFloorCollider(selectedNode.value, props)) {
+      const shape = buildStaticMeshShapeFromObject(object, hostWorldTransform)
+      return shape ? { shape } : null
+    }
     const built = await buildExportConvexShape({
       samplingObject: object,
       samplingNode,
