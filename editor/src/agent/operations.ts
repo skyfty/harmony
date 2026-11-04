@@ -21,6 +21,16 @@ import { resolveSceneNodeWorldMatrix, useSceneStore } from '@/stores/sceneStore'
 import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
 import { AgentBridgeError } from '@/agent/errors'
 import { setAgentCameraState, setAgentTool } from '@/agent/viewportControl'
+import {
+  getProceduralLandscapeStats,
+  sampleProceduralLandscapeTerrainHeight,
+} from '@schema/proceduralLandscape/runtime'
+import {
+  createDemTerrainFlatteningTarget,
+  getLandscapeTerrainFlatteningSnapshot,
+  type TerrainFlatteningComponentProps,
+} from '@schema/proceduralLandscape/terrainFlattening'
+import { fitTerrainFlatteningTransition } from '@schema/proceduralLandscape/terrainTransitionFit'
 
 type SceneStore = ReturnType<typeof useSceneStore>
 
@@ -186,6 +196,103 @@ function readString(args: Record<string, unknown>, key: string): string {
     throw new AgentBridgeError('VALIDATION_FAILED', `${key} must be a non-empty string`)
   }
   return value.trim()
+}
+
+function readOptionalNumber(
+  args: Record<string, unknown>,
+  key: string,
+  min: number,
+  max: number,
+): number | undefined {
+  const value = args[key]
+  if (value === undefined) {
+    return undefined
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new AgentBridgeError('VALIDATION_FAILED', `${key} must be a finite number`)
+  }
+  if (value < min || value > max) {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      `${key} must be between ${min} and ${max}`,
+    )
+  }
+  return value
+}
+
+function analyzeTerrainTransition(
+  store: SceneStore,
+  args: Record<string, unknown>,
+) {
+  const ownerNodeId = readString(args, 'ownerNodeId')
+  const landscapeNodeId = readString(args, 'landscapeNodeId')
+  const ownerNode = findNodeOrThrow(store, ownerNodeId)
+  const component = resolveComponent(
+    ownerNode,
+    typeof args.componentId === 'string' ? args.componentId : undefined,
+    'terrainFlattening',
+  )
+  const landscapeNode = findNodeOrThrow(store, landscapeNodeId)
+  if (!landscapeNode.components?.proceduralLandscape) {
+    throw new AgentBridgeError(
+      'COMPONENT_NOT_FOUND',
+      `Node ${landscapeNodeId} has no proceduralLandscape component`,
+    )
+  }
+  const stats = getProceduralLandscapeStats(landscapeNodeId)
+  if (!stats) {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      `Node ${landscapeNodeId} has no active Procedural Landscape runtime`,
+    )
+  }
+  if (stats.demStatus !== 'ready') {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      `Procedural Landscape ${landscapeNodeId} is ${stats.demStatus}, not ready`,
+    )
+  }
+  const targetSnapshot = getLandscapeTerrainFlatteningSnapshot().targets.find(
+    (candidate) => (
+      candidate.ownerNodeId === ownerNodeId
+      && candidate.componentId === component.id
+    ),
+  )
+  if (!targetSnapshot) {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      `No active Terrain Flattening target was found for ${ownerNodeId}:${component.id}`,
+    )
+  }
+  const target = createDemTerrainFlatteningTarget(targetSnapshot)
+  const componentProps = component.props as unknown as Partial<TerrainFlatteningComponentProps>
+  const analysis = fitTerrainFlatteningTransition(
+    target,
+    (x, z) => sampleProceduralLandscapeTerrainHeight(landscapeNodeId, x, z),
+    {
+      maxGradeDegrees: readOptionalNumber(args, 'maxGradeDegrees', 1, 45),
+      minBlendWidth: readOptionalNumber(args, 'minBlendWidth', 0.25, 100),
+      maxBlendWidth: readOptionalNumber(args, 'maxBlendWidth', 0.25, 100),
+      perimeterSpacing: readOptionalNumber(args, 'perimeterSpacing', 0.5, 50),
+      profileSamples: readOptionalNumber(args, 'profileSamples', 4, 32),
+      widthStep: readOptionalNumber(args, 'widthStep', 0.5, 20),
+    },
+  )
+  if (analysis.reason === 'unsupported-footprint') {
+    throw new AgentBridgeError(
+      'OPERATION_NOT_SUPPORTED',
+      'Transition fitting currently supports Floor and Region polygon footprints',
+    )
+  }
+  return {
+    ownerNodeId,
+    landscapeNodeId,
+    componentId: component.id,
+    currentEdgeBlendWidth: Number.isFinite(componentProps.edgeBlendWidth)
+      ? Number(componentProps.edgeBlendWidth)
+      : target.influenceWidth,
+    analysis,
+  }
 }
 
 async function createNode(
@@ -375,6 +482,43 @@ async function executeDomainOperation(
       }
     }
     case 'terrain': {
+      if (operation.action === 'runtime_stats') {
+        const nodeId = readString(args, 'nodeId')
+        findNodeOrThrow(store, nodeId)
+        const stats = getProceduralLandscapeStats(nodeId)
+        if (!stats) {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            `Node ${nodeId} has no active Procedural Landscape runtime`,
+          )
+        }
+        return { nodeId, stats }
+      }
+      if (operation.action === 'analyze_transition') {
+        return analyzeTerrainTransition(store, args)
+      }
+      if (operation.action === 'fit_transition') {
+        const analyzed = analyzeTerrainTransition(store, args)
+        const recommended = analyzed.analysis.recommendedBlendWidth
+        if (recommended == null) {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            `Transition analysis did not produce a usable width: ${analyzed.analysis.reason}`,
+          )
+        }
+        const changed = analyzed.analysis.requiresChange
+          ? store.updateNodeComponentProps(
+              analyzed.ownerNodeId,
+              analyzed.componentId,
+              { edgeBlendWidth: recommended },
+            )
+          : false
+        return {
+          ...analyzed,
+          changed,
+          edgeBlendWidth: recommended,
+        }
+      }
       switch (operation.action) {
         case 'raise_region':
           return store.raiseGroundRegion(args.bounds as never, Number(args.amount ?? 1))
@@ -586,6 +730,14 @@ export async function applySceneOperations(
       && operation.op !== 'camera.focus'
       && operation.op !== 'camera.set'
       && operation.op !== 'tool.set_active'
+      && !(
+        operation.op === 'domain.apply'
+        && operation.domain === 'terrain'
+        && (
+          operation.action === 'runtime_stats'
+          || operation.action === 'analyze_transition'
+        )
+      )
     ),
   )
   const results: unknown[] = []
@@ -595,7 +747,12 @@ export async function applySceneOperations(
     for (const operation of request.operations) {
       results.push(await executeOperation(store, operation))
       if (operation.op === 'asset.place') pending.push(`asset:${operation.assetId}`)
-      if (operation.op === 'domain.apply' && operation.domain === 'terrain') {
+      if (
+        operation.op === 'domain.apply'
+        && operation.domain === 'terrain'
+        && operation.action !== 'runtime_stats'
+        && operation.action !== 'analyze_transition'
+      ) {
         pending.push('terrain:compiled-ground')
       }
     }

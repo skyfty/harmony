@@ -34,6 +34,7 @@ import {
   resolveTerrainFlatteningOwnerReferenceWorldY,
   selectDemTerrainFlatteningTargetAt,
   terrainFlatteningTriangleIntersectsCore,
+  terrainFlatteningTriangleIntersectsInfluence,
   type TerrainFlatteningComponentProps,
 } from '@schema/proceduralLandscape/terrainFlattening'
 import {
@@ -423,6 +424,37 @@ describe('terrain flattening targets', () => {
     expect(target.heightAt(30, 0, 80)).toBe(80)
   })
 
+  it('keeps the coarse DEM outside the complete authored transition band', () => {
+    const target = createDemTerrainFlatteningTarget(snapshotFor(makeFloorNode()).snapshot!)
+    expect(terrainFlatteningTriangleIntersectsCore(
+      target,
+      10.5,
+      0,
+      12,
+      0,
+      11,
+      1,
+    )).toBe(false)
+    expect(terrainFlatteningTriangleIntersectsInfluence(
+      target,
+      10.5,
+      0,
+      12,
+      0,
+      11,
+      1,
+    )).toBe(true)
+    expect(terrainFlatteningTriangleIntersectsInfluence(
+      target,
+      20,
+      0,
+      22,
+      0,
+      21,
+      1,
+    )).toBe(false)
+  })
+
   it('makes Region terrain itself visible and leaves a Wall corridor flat', () => {
     const region = createDemTerrainFlatteningTarget(snapshotFor(makeRegionNode()).snapshot!)
     expect(region.surfaceY).toBeCloseTo(30 - TERRAIN_FLATTENING_TERRAIN_CLEARANCE)
@@ -511,6 +543,27 @@ describe('terrain flattening targets', () => {
       }
     }
     expect(atCorridorHeight).toBeGreaterThan(4)
+  })
+
+  it('keeps polygon transition geometry closed beneath roadbed priority', () => {
+    const target = createDemTerrainFlatteningTarget(snapshotFor(makeFloorNode()).snapshot!)
+    const withoutRoadbed = createDemTerrainFlatteningGeometry(target, {
+      rawHeightAt: () => 30,
+      hostInverse: new THREE.Matrix4(),
+      ringCount: 5,
+      maxSegmentLength: 2,
+    })
+    const withRoadbed = createDemTerrainFlatteningGeometry(target, {
+      rawHeightAt: () => 30,
+      hostInverse: new THREE.Matrix4(),
+      ringCount: 5,
+      maxSegmentLength: 2,
+      roadbed: {
+        distanceAt: () => 0,
+        meshHalfWidth: 25,
+      },
+    })
+    expect(withRoadbed?.triangleCount).toBe(withoutRoadbed?.triangleCount)
   })
 
   it('bakes flattening into the DEM mesh while roadbed remains priority', () => {

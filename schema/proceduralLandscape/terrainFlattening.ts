@@ -756,12 +756,7 @@ function segmentDistanceSquared(
   )
 }
 
-/**
- * Tests the full XZ triangle, not only its centroid. Coarse DEM cells can be
- * much wider than a concave plaza, so centroid-only tests leave triangle
- * wedges above the flattened Floor even though no cell vertex is inside it.
- */
-export function terrainFlatteningTriangleIntersectsCore(
+function terrainFlatteningTriangleIntersectsBand(
   target: DemTerrainFlatteningTarget,
   ax: number,
   az: number,
@@ -769,23 +764,26 @@ export function terrainFlatteningTriangleIntersectsCore(
   bz: number,
   cx: number,
   cz: number,
+  padding: number,
 ): boolean {
+  const safePadding = Number.isFinite(padding) ? Math.max(0, padding) : 0
+  const paddedDistanceSquared = safePadding * safePadding + 1e-7
   const minX = Math.min(ax, bx, cx)
   const maxX = Math.max(ax, bx, cx)
   const minZ = Math.min(az, bz, cz)
   const maxZ = Math.max(az, bz, cz)
   if (
-    maxX < target.minX
-    || minX > target.maxX
-    || maxZ < target.minZ
-    || minZ > target.maxZ
+    maxX < target.minX - safePadding
+    || minX > target.maxX + safePadding
+    || maxZ < target.minZ - safePadding
+    || minZ > target.maxZ + safePadding
   ) {
     return false
   }
   if (
-    target.distanceOutsideCore(ax, az) <= 1e-7
-    || target.distanceOutsideCore(bx, bz) <= 1e-7
-    || target.distanceOutsideCore(cx, cz) <= 1e-7
+    target.distanceOutsideCore(ax, az) <= safePadding + 1e-7
+    || target.distanceOutsideCore(bx, bz) <= safePadding + 1e-7
+    || target.distanceOutsideCore(cx, cz) <= safePadding + 1e-7
   ) {
     return true
   }
@@ -802,9 +800,36 @@ export function terrainFlatteningTriangleIntersectsCore(
       const current = contour[index]!
       const next = contour[(index + 1) % contour.length]!
       if (
-        segmentsIntersect2D(ax, az, bx, bz, current[0], current[1], next[0], next[1])
-        || segmentsIntersect2D(bx, bz, cx, cz, current[0], current[1], next[0], next[1])
-        || segmentsIntersect2D(cx, cz, ax, az, current[0], current[1], next[0], next[1])
+        segmentDistanceSquared(
+          ax,
+          az,
+          bx,
+          bz,
+          current[0],
+          current[1],
+          next[0],
+          next[1],
+        ) <= paddedDistanceSquared
+        || segmentDistanceSquared(
+          bx,
+          bz,
+          cx,
+          cz,
+          current[0],
+          current[1],
+          next[0],
+          next[1],
+        ) <= paddedDistanceSquared
+        || segmentDistanceSquared(
+          cx,
+          cz,
+          ax,
+          az,
+          current[0],
+          current[1],
+          next[0],
+          next[1],
+        ) <= paddedDistanceSquared
       ) {
         return true
       }
@@ -813,7 +838,7 @@ export function terrainFlatteningTriangleIntersectsCore(
   }
 
   const halfWidth = footprint.halfWidth
-  const maxDistanceSquared = halfWidth * halfWidth + 1e-7
+  const maxDistanceSquared = (halfWidth + safePadding) ** 2 + 1e-7
   for (const chain of footprint.chains) {
     const points = chain.pointsWorldXZ
     const segmentCount = chain.closed ? points.length : points.length - 1
@@ -847,6 +872,58 @@ export function terrainFlatteningTriangleIntersectsCore(
     }
   }
   return false
+}
+
+/**
+ * Tests the full XZ triangle, not only its centroid. Coarse DEM cells can be
+ * much wider than a concave plaza, so centroid-only tests leave triangle
+ * wedges above the flattened Floor even though no cell vertex is inside it.
+ */
+export function terrainFlatteningTriangleIntersectsCore(
+  target: DemTerrainFlatteningTarget,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+  cx: number,
+  cz: number,
+): boolean {
+  return terrainFlatteningTriangleIntersectsBand(
+    target,
+    ax,
+    az,
+    bx,
+    bz,
+    cx,
+    cz,
+    0,
+  )
+}
+
+/**
+ * Tests the core footprint plus the complete authored slope band. The dense
+ * flattening surface owns this area, so the coarse DEM must not render a
+ * second surface through the same transition.
+ */
+export function terrainFlatteningTriangleIntersectsInfluence(
+  target: DemTerrainFlatteningTarget,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+  cx: number,
+  cz: number,
+): boolean {
+  return terrainFlatteningTriangleIntersectsBand(
+    target,
+    ax,
+    az,
+    bx,
+    bz,
+    cx,
+    cz,
+    target.influenceWidth,
+  )
 }
 
 function footprintBoundsPoints(
@@ -1368,16 +1445,6 @@ function createPolygonGeometry(
     if (a == null || b == null || c == null) {
       return
     }
-    const midpoint = shapeVertices[a]!.clone()
-      .add(shapeVertices[b]!)
-      .add(shapeVertices[c]!)
-      .multiplyScalar(1 / 3)
-    if (
-      options.roadbed
-      && options.roadbed.distanceAt(midpoint.x, midpoint.y) <= options.roadbed.meshHalfWidth + 0.35
-    ) {
-      return
-    }
     pushUpwardTriangle(positions, indices, a, b, c)
   })
 
@@ -1421,26 +1488,6 @@ function createPolygonGeometry(
       const b = firstRingVertex + row * rowStride + nextIndex
       const c = firstRingVertex + (row + 1) * rowStride + index
       const d = firstRingVertex + (row + 1) * rowStride + nextIndex
-      const currentRing = rings[row]!
-      const nextRing = rings[row + 1]!
-      const midpointX = (
-        currentRing[index]![0]
-        + currentRing[nextIndex]![0]
-        + nextRing[index]![0]
-        + nextRing[nextIndex]![0]
-      ) * 0.25
-      const midpointZ = (
-        currentRing[index]![1]
-        + currentRing[nextIndex]![1]
-        + nextRing[index]![1]
-        + nextRing[nextIndex]![1]
-      ) * 0.25
-      if (
-        options.roadbed
-        && options.roadbed.distanceAt(midpointX, midpointZ) <= options.roadbed.meshHalfWidth + 0.35
-      ) {
-        continue
-      }
       pushUpwardTriangle(positions, indices, a, d, c)
       pushUpwardTriangle(positions, indices, a, b, d)
     }

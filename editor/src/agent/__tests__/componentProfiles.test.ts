@@ -34,6 +34,12 @@ describe('component Agent profiles', () => {
       editMode: 'domain',
       domain: 'terrain',
       tool: 'harmony_terrain_edit',
+      actions: expect.arrayContaining([
+        'runtime_stats',
+        'analyze_transition',
+        'fit_transition',
+        'patch_component',
+      ]),
     })
     expect(componentManager.getAgentProfile('vehicle')).toMatchObject({
       editMode: 'domain',

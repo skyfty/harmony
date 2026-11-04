@@ -104,6 +104,30 @@ Examples:
 
 Build tool activation uses the Editor's normal cancellation and selection-context path. `tool.set_active` with group `build` and tool `null` deactivates the current build tool and returns to selection.
 
+## Terrain Transition Fitting
+
+`harmony_terrain_edit` supports a deterministic Floor/Region-to-DEM transition workflow:
+
+1. `runtime_stats` checks whether the Procedural Landscape runtime is ready.
+2. `analyze_transition` samples the original DEM around the owner polygon and simulates the current smoothstep profile.
+3. `fit_transition` widens `edgeBlendWidth` to the smallest candidate that keeps the peak grade within the requested limit.
+4. Wait for terrain compilation, read back `runtime_stats`, and capture the viewport.
+
+Example:
+
+```json
+{
+  "action": "analyze_transition",
+  "args": {
+    "ownerNodeId": "floor-or-region-node-id",
+    "landscapeNodeId": "procedural-landscape-node-id",
+    "maxGradeDegrees": 10
+  }
+}
+```
+
+Use the returned `analysis.recommendedBlendWidth` as evidence before calling `fit_transition` with the same arguments and the latest `expectedRevision`. The fit only changes the transition width; it does not move the owner or change its elevation mode.
+
 ## Verification
 
 Read-only MCP smoke test:

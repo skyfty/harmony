@@ -91,7 +91,16 @@ const AGENT_ACTIONS_BY_DOMAIN: Record<HarmonyAgentDomain, string[]> = {
     'add_branch',
     'patch_component',
   ],
-  terrain: ['raise_region', 'lower_region', 'reset_region', 'compile', 'patch_component'],
+  terrain: [
+    'runtime_stats',
+    'analyze_transition',
+    'fit_transition',
+    'raise_region',
+    'lower_region',
+    'reset_region',
+    'compile',
+    'patch_component',
+  ],
 }
 
 const DOMAIN_PROTECTED_FIELDS: Record<HarmonyAgentDomain, string[]> = {

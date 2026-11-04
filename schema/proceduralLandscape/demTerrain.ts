@@ -11,7 +11,7 @@ import {
 import type { TerrainHeightGrid } from './terrainSampler'
 import type { DemRoadbedTarget } from './demRoadbed'
 import {
-  terrainFlatteningTriangleIntersectsCore,
+  terrainFlatteningTriangleIntersectsInfluence,
   selectDemTerrainFlatteningTargetAt,
   type DemTerrainFlatteningTarget,
 } from './terrainFlattening'
@@ -404,7 +404,7 @@ export function splitDemTerrainGeometry(
     const second = triangleWorld[1]!
     const third = triangleWorld[2]!
     return flattenTargets.some((target) => (
-      terrainFlatteningTriangleIntersectsCore(
+      terrainFlatteningTriangleIntersectsInfluence(
         target,
         first.x,
         first.z,

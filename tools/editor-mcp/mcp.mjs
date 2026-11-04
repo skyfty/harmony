@@ -243,7 +243,7 @@ async function main() {
     HARMONY_AGENT_TOOLS.terrain,
     'terrain',
     'Edit Harmony terrain',
-    'Apply terrain region edits and wait for dependent ground compilation through the editor terrain pipeline.',
+    'Inspect terrain runtime state, analyze and fit Floor/Region transition slopes, apply terrain region edits, and wait for dependent ground compilation.',
   )
   domainTool(
     HARMONY_AGENT_TOOLS.actor,
