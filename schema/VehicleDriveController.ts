@@ -204,8 +204,8 @@ const DEFAULT_VEHICLE_SPEED_HARD_CAP = 12.5
 const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.96
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
-const VEHICLE_MANUAL_DRIVE_ACCEL_RESPONSE = 14
-const VEHICLE_MANUAL_DRIVE_ACCEL_RESPONSE_NEAR_CAP = 4.5
+const VEHICLE_MANUAL_DRIVE_ACCEL_RESPONSE = 7
+const VEHICLE_MANUAL_DRIVE_ACCEL_RESPONSE_NEAR_CAP = 3.5
 // 平滑停车默认阻尼
 const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.18
 // 平滑停车最大阻尼
@@ -219,12 +219,13 @@ const VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ = VEHICLE_SMOOTH_STOP_FINAL_SPEED * VEH
 // 平滑停车最小混合比
 const VEHICLE_SMOOTH_STOP_MIN_BLEND = 0.25
 // 最大转向角（弧度）
-const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
+const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(26)
 // 转向开始衰减的速度（m/s）
 const VEHICLE_STEER_SOFT_CAP = 4.2
 // 转向强烈限制的速度（m/s）
 const VEHICLE_STEER_HARD_CAP = 10
 const VEHICLE_STEER_SOFT_CAP_SQ = VEHICLE_STEER_SOFT_CAP * VEHICLE_STEER_SOFT_CAP
+const VEHICLE_STEER_HIGH_SPEED_REDUCTION = 0.75
 // 相机世界上方向
 const VEHICLE_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 // 相机高度兜底值
@@ -248,12 +249,12 @@ const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 // 重置车辆时的抬升高度
 const VEHICLE_RESET_LIFT = 0.75
 // 转向输入响应指数，越大越不敏感
-const VEHICLE_STEERING_RESPONSE_EXPONENT = 2.5
+const VEHICLE_STEERING_RESPONSE_EXPONENT = 1.5
 const TRANSFORM_DRIVE_MAX_REVERSE_SPEED = 3.0
 const TRANSFORM_DRIVE_BRAKE_DECELERATION = 11
 const TRANSFORM_DRIVE_COAST_DECELERATION = 2.8
-const TRANSFORM_DRIVE_STEER_RATE = THREE.MathUtils.degToRad(96)
-const TRANSFORM_DRIVE_MIN_STEER_FACTOR = 0.32
+const TRANSFORM_DRIVE_STEER_RATE = THREE.MathUtils.degToRad(78)
+const TRANSFORM_DRIVE_MIN_STEER_FACTOR = 0.24
 const TRANSFORM_DRIVE_MIN_SPEED_EPSILON = 1e-3
 const TRANSFORM_DRIVE_STEER_TRACK_SPEED = 12
 const TRANSFORM_DRIVE_STEER_RELEASE_SPEED = 8
@@ -1038,7 +1039,7 @@ export class VehicleDriveController {
       const range = Math.max(0.1, VEHICLE_STEER_HARD_CAP - VEHICLE_STEER_SOFT_CAP)
       const excess = Math.min(Math.max(0, speed - VEHICLE_STEER_SOFT_CAP), range)
       const slowRatio = Math.min(1, excess / range)
-      steeringValue *= 1 - 0.45 * slowRatio
+      steeringValue *= 1 - VEHICLE_STEER_HIGH_SPEED_REDUCTION * slowRatio
     }
     const baseBrakeForce = brakeInput * VEHICLE_BRAKE_FORCE
     const brakeForce = Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, baseBrakeForce))

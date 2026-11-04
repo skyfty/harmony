@@ -252,6 +252,7 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
       speedGovernorBrakeAssist: 0,
       speedGovernorOverHardCap: false,
       speedGovernorSmoothedForwardSpeedAbs: 0,
+      speedGovernorSteeringAngle: 0,
     }
   }
 

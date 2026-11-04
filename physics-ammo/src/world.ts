@@ -324,6 +324,7 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
       speedGovernorBrakeAssist: 0,
       speedGovernorOverHardCap: false,
       speedGovernorSmoothedForwardSpeedAbs: 0,
+      speedGovernorSteeringAngle: 0,
       cleanup: [
         () => ammo.destroy(tuning),
         () => ammo.destroy(raycaster),

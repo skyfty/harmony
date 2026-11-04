@@ -153,6 +153,12 @@ export type PhysicsVehicleDesc = {
   indexUpAxis: 0 | 1 | 2
   indexForwardAxis: 0 | 1 | 2
   maxSpeedKmh?: number
+  /** Maximum physical wheel deflection at crawl speed. */
+  maxSteerDegrees?: number
+  /** Maximum rate at which the physical steering angle may change. */
+  maxSteerRateDegPerSec?: number
+  /** Used to derive a stable speed-sensitive steering limit. */
+  wheelbaseMeters?: number
   /** Chassis mass in kilograms. Drive force is normalized against this value so
    * the same vehicle tuning produces the same acceleration at any mass. */
   mass?: number

@@ -12,6 +12,7 @@ export type PhysicsVehicleSpeedGovernorState = {
   speedGovernorBrakeAssist: number
   speedGovernorOverHardCap: boolean
   speedGovernorSmoothedForwardSpeedAbs: number
+  speedGovernorSteeringAngle: number
 }
 
 export type PhysicsVehicleSpeedGovernorInput = {
@@ -59,12 +60,16 @@ type VehicleSpeedGovernorContext = {
 // than an order of magnitude slower once its 1400 kg rigidbody is simulated.
 const VEHICLE_ENGINE_FORCE_REFERENCE = 340
 const VEHICLE_DRIVE_REFERENCE_MASS_KG = 1400
-const VEHICLE_DRIVE_TARGET_ACCEL_MPS2 = 5.5
+const VEHICLE_DRIVE_TARGET_ACCEL_MPS2 = 4
 const VEHICLE_DRIVE_MIN_TARGET_ACCEL_MPS2 = 0.8
-const VEHICLE_DRIVE_MAX_TARGET_ACCEL_MPS2 = 9
+const VEHICLE_DRIVE_MAX_TARGET_ACCEL_MPS2 = 6.5
 const VEHICLE_DRIVE_FALLBACK_WHEEL_COUNT = 2
 const VEHICLE_BRAKE_FORCE = 42
-const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
+const VEHICLE_DEFAULT_MAX_STEER_DEGREES = 26
+const VEHICLE_DEFAULT_MAX_STEER_RATE_DEG_PER_SEC = 140
+const VEHICLE_DEFAULT_WHEELBASE_METERS = 2.8
+const VEHICLE_ARCADE_MAX_LATERAL_ACCEL_MPS2 = 5
+const VEHICLE_ARCADE_MIN_STEER_DEGREES = 6
 const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.96
 const VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
 const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
@@ -135,10 +140,10 @@ export function stepPhysicsVehicleSpeedGovernor(
   input: PhysicsVehicleSpeedGovernorInput,
 ): PhysicsVehicleSpeedGovernorResult {
   const normalizedInput = normalizeVehicleSpeedGovernorInput(input)
-  const steeringValue = normalizedInput.steeringInput * VEHICLE_STEER_ANGLE
   const context = createVehicleSpeedGovernorContext(state, normalizedInput)
   const speedForGovernor = updateVehicleSpeedGovernorSpeed(state, context)
   context.speedForGovernor = speedForGovernor
+  const steeringValue = updateVehicleGovernorSteeringAngle(state, context)
   const engineForce = resolveVehicleEngineForce(state, context)
   const brakeForce = resolveVehicleBrakeForce(state, context)
 
@@ -150,6 +155,25 @@ export function stepPhysicsVehicleSpeedGovernor(
     },
     speedForGovernor,
   }
+}
+
+export function resolvePhysicsVehicleSteeringLimitRadians(
+  desc: PhysicsVehicleDesc,
+  speedMps: number,
+): number {
+  const configuredMaxDegrees = Number.isFinite(desc.maxSteerDegrees)
+    ? desc.maxSteerDegrees as number
+    : VEHICLE_DEFAULT_MAX_STEER_DEGREES
+  const maxSteerRadians = degreesToRadians(clamp(configuredMaxDegrees, 1, 89))
+  const minSteerRadians = Math.min(maxSteerRadians, degreesToRadians(VEHICLE_ARCADE_MIN_STEER_DEGREES))
+  const wheelbaseMeters = Number.isFinite(desc.wheelbaseMeters) && (desc.wheelbaseMeters as number) > 0
+    ? desc.wheelbaseMeters as number
+    : VEHICLE_DEFAULT_WHEELBASE_METERS
+  const speedAbs = Math.abs(Number.isFinite(speedMps) ? speedMps : 0)
+  const geometricLimit = Math.atan(
+    (VEHICLE_ARCADE_MAX_LATERAL_ACCEL_MPS2 * wheelbaseMeters) / Math.max(0.01, speedAbs * speedAbs),
+  )
+  return clamp(geometricLimit, minSteerRadians, maxSteerRadians)
 }
 
 export function shouldWakePhysicsVehicle(
@@ -173,6 +197,31 @@ function updateVehicleSpeedGovernorSpeed(
     context.dt,
   )
   return state.speedGovernorSmoothedForwardSpeedAbs
+}
+
+function updateVehicleGovernorSteeringAngle(
+  state: PhysicsVehicleSpeedGovernorState,
+  context: VehicleSpeedGovernorContext,
+): number {
+  const steeringLimit = resolvePhysicsVehicleSteeringLimitRadians(
+    state.desc,
+    context.speedForGovernor,
+  )
+  const targetAngle = context.input.steeringInput * steeringLimit
+  const configuredRate = Number.isFinite(state.desc.maxSteerRateDegPerSec)
+    ? state.desc.maxSteerRateDegPerSec as number
+    : VEHICLE_DEFAULT_MAX_STEER_RATE_DEG_PER_SEC
+  const maxRateRadians = degreesToRadians(clamp(configuredRate, 1, 1080))
+  const previousAngle = Number.isFinite(state.speedGovernorSteeringAngle)
+    ? state.speedGovernorSteeringAngle
+    : 0
+  const maxStep = maxRateRadians * context.dt
+  state.speedGovernorSteeringAngle = clamp(
+    previousAngle + clamp(targetAngle - previousAngle, -maxStep, maxStep),
+    -steeringLimit,
+    steeringLimit,
+  )
+  return state.speedGovernorSteeringAngle
 }
 
 function resolveVehicleEngineForce(
@@ -322,4 +371,8 @@ function updateVehicleSpeedGovernorScale(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
+}
+
+function degreesToRadians(value: number): number {
+  return (value * Math.PI) / 180
 }

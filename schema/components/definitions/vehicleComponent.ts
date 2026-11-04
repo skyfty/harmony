@@ -56,9 +56,16 @@ export interface VehicleComponentProps {
 export const DEFAULT_VEHICLE_WHEEL_SCALE_MODE: VehicleScaleMode = 'relative'
 export const DEFAULT_VEHICLE_CAMERA_FOLLOW_DISTANCE = DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE
 export const DEFAULT_VEHICLE_CAMERA_FOLLOW_HEIGHT = DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT
-// Manual driving is intentionally faster than the authored cruise-speed value,
-// which is also used by auto tours and pursuit controllers.
-export const VEHICLE_MANUAL_DRIVE_SPEED_MULTIPLIER = 2.25
+// The authored value is the actual governing speed for sightseeing vehicles.
+// Keeping manual and auto-tour caps aligned avoids surprising 2x acceleration
+// on the same turn when a player takes control.
+export const VEHICLE_MANUAL_DRIVE_SPEED_MULTIPLIER = 1
+export const VEHICLE_RUNTIME_MIN_WHEEL_FRICTION_SLIP = 2.6
+
+export function resolveVehicleRuntimeWheelFrictionSlip(value: number): number {
+  const authored = Number.isFinite(value) ? Math.max(0, value) : 0
+  return Math.max(VEHICLE_RUNTIME_MIN_WHEEL_FRICTION_SLIP, authored)
+}
 
 export function createDefaultVehicleComponentProps(): VehicleComponentProps {
   return clampVehicleComponentProps({ wheelScaleMode: DEFAULT_VEHICLE_WHEEL_SCALE_MODE })
