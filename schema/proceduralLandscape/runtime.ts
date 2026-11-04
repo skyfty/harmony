@@ -249,6 +249,8 @@ const NEAR_TREE_INSTANCE_MARGIN = 32
 const NEAR_ROAD_FALLBACK_SAMPLE_METERS = 10
 const NEAR_ROAD_FALLBACK_DEDUPE_CELL_METERS = 5
 const ROAD_FIELD_RESOLUTION = 1024
+/** Extra DEM cut beyond the shoulder so coarse triangles cannot cross the pavement. */
+const DEM_ROADBED_CUT_SAFETY_WIDTH = 1
 /** 横坡贴合模式下路面带相对地形的固定抬升（米）。 */
 const ROAD_BAND_LIFT = 0.05
 /** 贴合模式下路面带的横向采样列数（从左缘到右缘）。 */
@@ -882,7 +884,7 @@ export function resolveDemSurfaceOverrides(
     }
   }
   return {
-    uPlRoadbedCutProx: 0,
+    uPlRoadbedCutProx: cutProx,
     uPlUseBaseSurface: 1,
     uPlRoadDisplacement: 0,
     uPlFlattenStrength: 0,
@@ -3180,10 +3182,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             sideWidth: Math.max(15, activeGrid.cellSize * 0.8),
             coverageWidth: Math.max(4, activeGrid.cellSize * 0.35),
             roadSurfaceLift: ROAD_BAND_LIFT,
-            // The 30m coarse triangles interpolate across the roadbed design
-            // surface; a 2m safety drop keeps them below the 3m-sampled
-            // high-resolution roadbed on steep, curved sections.
-            coarseClearance: 2,
+            // Coarse triangles interpolate across the roadbed design surface;
+            // a 4m safety drop keeps them below the high-resolution roadbed on
+            // steep bends without widening the raster cut.
+            coarseClearance: 4,
           })
           demRoadbedSideWidth = demRoadbedTarget.sideWidth
           demRoadbedHalfWidth = demRoadbedTarget.meshHalfWidth
@@ -3199,12 +3201,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
                 },
               })
             : null
-          // Keep the shader cut limited to the actual asphalt + shoulder.
-          // A 60m distance-field cut is a circular tube, while the high-res
-          // roadbed is a swept ribbon; on hairpins the two disagree and leave
-          // terrain holes. Coarse side-slope triangles are already graded
-          // below the high-res roadbed, so they must not be cut by distance.
-          demRoadbedCutProx = Math.max(0, props.road.shoulderWidth + 0.25)
+          // Cut only the asphalt and shoulder with the raster distance field.
+          // The high-resolution roadbed is a swept ribbon; a wider raster cut
+          // disagrees with it on tight hairpins and exposes sky-coloured holes.
+          // Its side-slope occlusion is handled by the roadbed geometry itself.
+          demRoadbedCutProx = Math.max(
+            0,
+            props.road.shoulderWidth + 0.25 + DEM_ROADBED_CUT_SAFETY_WIDTH,
+          )
           const roadbed = createDemRoadbedTargetGeometry(roadBandRows, demRoadbedTarget, {
             lateralStep: 3,
             maxVerticalError: 0.01,
@@ -3290,8 +3294,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
                 const rawY = demRoadbedTarget.rawHeightAt(x, z)
                 demRoadbedMaxCutFill = Math.max(demRoadbedMaxCutFill, Math.abs(targetY - rawY))
                 demRoadbedAuditSamples += 1
-                const cut = demRoadbedTarget.distanceAt(x, z) < demRoadbedCutProx
-                if (!cut && coarseY > targetY + 1e-3) {
+                const distance = demRoadbedTarget.distanceAt(x, z)
+                const cut = distance < demRoadbedCutProx
+                // The outer coverage ring is intentionally buried under the
+                // coarse DEM to hide the seam and is not a visible roadbed
+                // surface, so only audit the asphalt/shoulder/side-slope span.
+                const ownsVisibleSurface =
+                  distance <= demRoadbedTarget.outerHalfWidth + 1e-6
+                if (ownsVisibleSurface && !cut && coarseY > targetY + 1e-3) {
                   demRoadbedOcclusionCount += 1
                 }
               }

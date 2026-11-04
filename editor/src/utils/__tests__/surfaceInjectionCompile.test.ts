@@ -100,7 +100,7 @@ describe('surface injection compilability', () => {
       createProceduralLandscapeSurfaceUniforms(),
       {
         overridesForMesh: () => ({
-          uPlRoadbedCutProx: 0,
+          uPlRoadbedCutProx: 0.05,
           uPlUseBaseSurface: 1,
           uPlRoadDisplacement: 0,
           uPlFlattenStrength: 0,
@@ -114,6 +114,8 @@ describe('surface injection compilability', () => {
     expect(roadbed.material).not.toBe(original)
     expect((roadbed.material as THREE.MeshLambertMaterial).isMeshLambertMaterial).toBe(true)
     expect((roadbed.material as THREE.MeshLambertMaterial).side).toBe(THREE.DoubleSide)
+    const { fragment } = compileSources(roadbed.material as THREE.MeshLambertMaterial)
+    expect(fragment).toContain('plRoadProx < uPlRoadbedCutProx')
 
     patch.restore()
     expect(roadbed.material).toBe(original)

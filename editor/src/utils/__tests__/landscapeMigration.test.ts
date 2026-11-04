@@ -1020,16 +1020,17 @@ describe('DEM roadbed target', () => {
     }, options)).not.toBe(committedSignature)
   })
 
-  it('disables raster vertex flattening for both already-graded DEM surfaces', () => {
-    expect(resolveDemSurfaceOverrides('terrain', 2.75)).toMatchObject({
-      uPlRoadbedCutProx: 2.75,
+  it('passes explicit cut depths to both DEM surface materials', () => {
+    expect(resolveDemSurfaceOverrides('terrain', 3.75)).toMatchObject({
+      uPlRoadbedCutProx: 3.75,
       uPlFlattenStrength: 0,
       uPlRoadDisplacement: 0,
     })
-    expect(resolveDemSurfaceOverrides('roadbed', 0)).toMatchObject({
-      uPlRoadbedCutProx: 0,
+    expect(resolveDemSurfaceOverrides('roadbed', 0.05)).toMatchObject({
+      uPlRoadbedCutProx: 0.05,
       uPlFlattenStrength: 0,
       uPlRoadDisplacement: 0,
+      uPlUseBaseSurface: 1,
     })
   })
 })
