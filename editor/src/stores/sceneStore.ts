@@ -1459,6 +1459,8 @@ let sceneAutoSaveTimerHandle: ReturnType<typeof setTimeout> | null = null
 let sceneAutoSaveActivePromise: Promise<StoredSceneDocument | null> | null = null
 let sceneAutoSaveRequestedGeneration = 0
 let sceneAutoSaveSavedGeneration = 0
+let sceneAutoSaveSuppressionDepth = 0
+let sceneRevisionSuppressionDepth = 0
 
 type MaterialTextureMap = Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>>
 
@@ -9599,7 +9601,7 @@ type SceneAutoSaveTarget = Pick<
 function commitSceneSnapshot(
   store: Pick<
     SceneState,
-    'nodes' | 'currentSceneId' | 'environment' | 'hasUnsavedChanges' | 'groundNode' | 'currentSceneMeta' | 'activeTransformNodeId' | 'isSceneReady'
+    'nodes' | 'currentSceneId' | 'environment' | 'hasUnsavedChanges' | 'groundNode' | 'currentSceneMeta' | 'activeTransformNodeId' | 'isSceneReady' | 'sceneRevision'
   > & { requestSceneAutoSave?: (options?: { mode?: SceneAutoSaveMode }) => void },
   options: { updateNodes?: boolean; autoSaveMode?: SceneAutoSaveMode } = {},
 ) {
@@ -9618,12 +9620,17 @@ function commitSceneSnapshot(
   }
 
   normalizeCurrentSceneMeta(store)
+  if (sceneRevisionSuppressionDepth === 0) {
+    store.sceneRevision += 1
+  }
   store.hasUnsavedChanges = true
-  store.requestSceneAutoSave?.({
-    mode:
-      options.autoSaveMode
-      ?? (store.activeTransformNodeId && store.isSceneReady ? 'interactive' : 'structural'),
-  })
+  if (sceneAutoSaveSuppressionDepth === 0) {
+    store.requestSceneAutoSave?.({
+      mode:
+        options.autoSaveMode
+        ?? (store.activeTransformNodeId && store.isSceneReady ? 'interactive' : 'structural'),
+    })
+  }
 }
 
 function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument) {
@@ -9655,6 +9662,7 @@ function createInitialSceneState(): SceneState {
     currentSceneMeta: null,
     sceneLifecycle: createSceneLifecycleState(),
     sceneSwitchToken: 0,
+    sceneRevision: 0,
     isSceneReady: false,
     nodes: clonedNodes,
     groundNode: initialGroundNode,
@@ -9720,6 +9728,7 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.currentSceneMeta = null
   store.sceneLifecycle = createSceneLifecycleState()
   store.sceneSwitchToken += 1
+  store.sceneRevision = 0
   store.isSceneReady = false
   replaceSceneNodes(store, cloneSceneNodes(initialState.nodes))
   store.environment = cloneEnvironmentSettings(initialState.environment)
@@ -10698,6 +10707,7 @@ export const useSceneStore = defineStore('scene', {
 
     applySceneDocumentToState(scene: StoredSceneDocument) {
       this.currentSceneId = scene.id
+      this.sceneRevision = 0
       applyCurrentSceneMeta(this, scene)
       applySceneAssetState(this, scene)
       this.environment = resolveSceneDocumentEnvironment(scene)
@@ -11008,6 +11018,54 @@ export const useSceneStore = defineStore('scene', {
         return await fn()
       } finally {
         this.endHistoryCaptureSuppression()
+      }
+    },
+    async runAgentTransaction<T>(fn: () => Promise<T> | T): Promise<T> {
+      if (!this.isSceneReady || !this.currentSceneId) {
+        throw new Error('Scene is not ready')
+      }
+      if (this.isRestoringHistory) {
+        throw new Error('Scene history is currently being restored')
+      }
+
+      if (sceneAutoSaveActivePromise) {
+        await sceneAutoSaveActivePromise
+      }
+      clearSceneAutoSaveTimer()
+      const before = createContentHistoryEntry(this) as Extract<SceneHistoryEntry, { kind: 'content-snapshot' }>
+      const beforeRevision = this.sceneRevision
+      let succeeded = false
+
+      this.beginHistoryCaptureSuppression()
+      this.beginScenePatchSuppression()
+      sceneAutoSaveSuppressionDepth += 1
+      sceneRevisionSuppressionDepth += 1
+      try {
+        const result = await fn()
+        this.appendUndoEntry(before)
+        succeeded = true
+        return result
+      } catch (error) {
+        this.nodes.forEach((node) => releaseRuntimeTree(node))
+        this.nodes = ensureEnvironmentNode(
+          ensureGroundNode(cloneSceneNodes(before.nodes), cloneGroundSettings(before.groundSettings)),
+          this.environment,
+        )
+        this.materials = cloneSceneMaterials(before.materials)
+        this.groundSettings = cloneGroundSettings(before.groundSettings)
+        this.setSelection(this.selectedNodeIds)
+        await this.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
+        throw error
+      } finally {
+        sceneRevisionSuppressionDepth = Math.max(0, sceneRevisionSuppressionDepth - 1)
+        sceneAutoSaveSuppressionDepth = Math.max(0, sceneAutoSaveSuppressionDepth - 1)
+        this.endHistoryCaptureSuppression()
+        this.endScenePatchSuppression()
+        if (succeeded) {
+          this.sceneRevision = beforeRevision + 1
+          this.hasUnsavedChanges = true
+          this.requestSceneAutoSave({ mode: 'structural' })
+        }
       }
     },
     async undo() {
@@ -15921,8 +15979,39 @@ export const useSceneStore = defineStore('scene', {
       }
       this.resourceProviderId = providerId
     },
-    setCameraState(camera: SceneCameraState) {
-      this.camera = cloneCameraState(camera)
+    setCameraState(camera: SceneCameraState, options: { markDirty?: boolean } = {}) {
+      const next = cloneCameraState(camera)
+      if (stableSerialize(this.camera) === stableSerialize(next)) {
+        return false
+      }
+      this.camera = next
+      if (options.markDirty === true) {
+        commitSceneSnapshot(this, { updateNodes: false })
+      }
+      return true
+    },
+    setAgentCameraState(
+      camera: SceneCameraState,
+      options: {
+        projection?: CameraProjection
+        controlMode?: CameraControlMode
+      } = {},
+    ) {
+      const nextCamera = cloneCameraState(camera)
+      const nextViewportSettings = cloneViewportSettings({
+        ...this.viewportSettings,
+        ...(options.projection ? { cameraProjection: options.projection } : {}),
+        ...(options.controlMode ? { cameraControlMode: options.controlMode } : {}),
+      })
+      const cameraChanged = stableSerialize(this.camera) !== stableSerialize(nextCamera)
+      const viewportChanged = !viewportSettingsEqual(this.viewportSettings, nextViewportSettings)
+      if (!cameraChanged && !viewportChanged) {
+        return false
+      }
+      this.camera = nextCamera
+      this.viewportSettings = nextViewportSettings
+      commitSceneSnapshot(this, { updateNodes: false })
+      return true
     },
     resetCameraState() {
       this.camera = cloneCameraState(defaultCameraState)

@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
+import AgentBridgeStatus from '@/components/editor/AgentBridgeStatus.vue'
+import { useEditorAgentBridgeLifecycle } from '@/agent/bridgeClient'
 import MaterialDetailsPanel from '@/components/inspector/MaterialDetailsPanel.vue'
 import VehicleWheelDetailsPanel from '@/components/inspector/VehicleWheelDetailsPanel.vue'
 import VehicleSuspensionEditorDialog from '@/components/inspector/VehicleSuspensionEditorDialog.vue'
@@ -1092,6 +1094,8 @@ async function captureViewportScreenshot(): Promise<Blob | null> {
     return null
   }
 }
+
+useEditorAgentBridgeLifecycle({ captureScreenshot: captureViewportScreenshot })
 
 
 function openPublishDialog() {
@@ -2452,6 +2456,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="editor-view">
+  <AgentBridgeStatus />
   <div class="editor-layout" :class="layoutClasses" :style="layoutStyles">
       <MenuBar 
         @menu-action="handleAction"

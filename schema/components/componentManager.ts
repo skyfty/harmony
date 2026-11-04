@@ -6,6 +6,11 @@ import type {
   SceneNodeComponentState,
   SceneNodeComponentMap,
 } from '../core'
+import type {
+  HarmonyAgentComponentProfile,
+  HarmonyAgentDomain,
+  HarmonyAgentEditMode,
+} from '../editorAgentProtocol'
 
 import { stableSerialize } from '../stableSerialize'
 
@@ -29,6 +34,98 @@ export interface ComponentDefinition<TProps = Record<string, unknown>> {
   canAttach(node: SceneNode): boolean
   createDefaultProps(node: SceneNode): TProps
   createInstance(context: ComponentRuntimeContext<TProps>): Component<TProps>
+}
+
+const AGENT_DOMAIN_BY_COMPONENT_TYPE: Record<string, HarmonyAgentDomain> = {
+  animation: 'actor',
+  autoTour: 'guideRoute',
+  behavior: 'behavior',
+  billboard: 'builder',
+  boundaryWall: 'builder',
+  characterController: 'actor',
+  cityGenerator: 'builder',
+  displayBoard: 'builder',
+  floor: 'builder',
+  guideboard: 'builder',
+  guideRoute: 'guideRoute',
+  landscapeExclusionZone: 'terrain',
+  landform: 'builder',
+  lod: 'actor',
+  modelCollision: 'actor',
+  particleSystem: 'builder',
+  planningImages: 'builder',
+  proceduralCity: 'builder',
+  proceduralLandscape: 'terrain',
+  rigidbody: 'actor',
+  road: 'builder',
+  signboard: 'builder',
+  skin: 'actor',
+  steer: 'actor',
+  terrainFlattening: 'terrain',
+  vehicle: 'actor',
+  viewPoint: 'builder',
+  wall: 'builder',
+  warpGate: 'builder',
+  water: 'builder',
+}
+
+const AGENT_TOOL_BY_DOMAIN: Record<HarmonyAgentDomain, string> = {
+  actor: 'harmony_actor_edit',
+  behavior: 'harmony_behavior_edit',
+  builder: 'harmony_builder_edit',
+  guideRoute: 'harmony_guide_route_edit',
+  terrain: 'harmony_terrain_edit',
+}
+
+const AGENT_ACTIONS_BY_DOMAIN: Record<HarmonyAgentDomain, string[]> = {
+  actor: ['add_character', 'add_vehicle', 'patch', 'patch_component'],
+  behavior: ['replace', 'patch_component'],
+  builder: ['create', 'apply_preset', 'patch_component'],
+  guideRoute: [
+    'create',
+    'update_waypoints',
+    'move_stop',
+    'remove_stop',
+    'move_anchor',
+    'remove_anchor',
+    'add_branch',
+    'patch_component',
+  ],
+  terrain: ['raise_region', 'lower_region', 'reset_region', 'compile', 'patch_component'],
+}
+
+const DOMAIN_PROTECTED_FIELDS: Record<HarmonyAgentDomain, string[]> = {
+  actor: [
+    'animationBindings',
+    'collider',
+    'colliders',
+    'targetNodeId',
+    'wheelDetails',
+    'wheels',
+  ],
+  behavior: ['behaviors'],
+  builder: [
+    'anchors',
+    'cornerModels',
+    'dynamicMesh',
+    'faces',
+    'legs',
+    'paths',
+    'points',
+    'segments',
+    'stops',
+    'transitions',
+    'vertices',
+  ],
+  guideRoute: ['anchors', 'legs', 'stops', 'transitions'],
+  terrain: ['dynamicMesh', 'heightSamples', 'manualHeightMap', 'regions'],
+}
+
+function isSimpleInspectorField(field: ComponentInspectorSection['fields'][number]): boolean {
+  return field.kind === 'number'
+    || field.kind === 'boolean'
+    || field.kind === 'text'
+    || field.kind === 'select'
 }
 
 type AnyComponentDefinition = ComponentDefinition<any>
@@ -172,6 +269,53 @@ export class ComponentManager {
       }
       return a.label.localeCompare(b.label, 'en')
     })
+  }
+
+  getAgentProfile(type: NodeComponentType): HarmonyAgentComponentProfile | null {
+    const definition = this.getDefinition(type)
+    if (!definition) {
+      return null
+    }
+    const domain = AGENT_DOMAIN_BY_COMPONENT_TYPE[type] ?? null
+    const safeFields = Array.from(
+      new Set(
+        (definition.inspector ?? []).flatMap((section) => (
+          section.fields
+            .filter(isSimpleInspectorField)
+            .map((field) => field.key)
+        )),
+      ),
+    )
+    const editMode: HarmonyAgentEditMode = domain
+      ? 'domain'
+      : safeFields.length
+        ? 'generic'
+        : 'readonly'
+    const protectedFields = domain ? DOMAIN_PROTECTED_FIELDS[domain] : []
+    const notes = domain
+      ? [`Complex ${domain} edits must use ${AGENT_TOOL_BY_DOMAIN[domain]}.`]
+      : []
+
+    return {
+      type,
+      label: definition.label,
+      description: definition.description,
+      category: definition.category,
+      editMode,
+      domain,
+      tool: domain ? AGENT_TOOL_BY_DOMAIN[domain] : null,
+      actions: domain ? AGENT_ACTIONS_BY_DOMAIN[domain] : [],
+      safeFields,
+      protectedFields,
+      inspector: definition.inspector ?? [],
+      notes,
+    }
+  }
+
+  listAgentProfiles(): HarmonyAgentComponentProfile[] {
+    return this.listDefinitions()
+      .map((definition) => this.getAgentProfile(definition.type))
+      .filter((profile): profile is HarmonyAgentComponentProfile => Boolean(profile))
   }
 
   /** Number of scene nodes that currently own component instances. */

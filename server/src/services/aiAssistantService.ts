@@ -19,7 +19,14 @@ import type {
 
 const ASSISTANT_UPLOAD_DIR = path.join(appConfig.assetStoragePath, 'assistant')
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
-const AGENT_SYSTEM_PROMPT = '你是一名 3D 场景设计助手，负责理解用户的需求并提供可以直接调用的编辑指令。你可以参考提供的场景数据、历史对话与工具箱说明，生成清晰、有依据的建议。'
+const AGENT_SYSTEM_PROMPT = [
+  '你是一名 3D 场景设计助手，负责理解用户的需求并提供可以直接调用的编辑指令。',
+  '你可以参考提供的场景数据、历史对话与工具箱说明，生成清晰、有依据的建议。',
+  '所有场景数据修改必须优先通过提供的 MCP/编辑器语义工具完成。',
+  '不得使用鼠标坐标模拟、任意 JavaScript、直接改写持久化场景文件或原始 JSON Patch 绕过工具约束。',
+  '如果现有工具无法完成目标，应先扩展或实现对应的类型化 MCP/编辑器操作，包含校验、事务/撤销和测试，然后再使用该操作完成任务。',
+  '工具无法支持且必须说明限制时，返回 "change": null，不要伪造已完成的场景修改。',
+].join('')
 const MODEL_RESPONSE_FORMAT_INSTRUCTIONS = `
 你必须严格以 JSON 响应，结构示例如下：
 {

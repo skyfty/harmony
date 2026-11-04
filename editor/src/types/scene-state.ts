@@ -50,6 +50,8 @@ export interface SceneState {
   } | null
   sceneLifecycle: SceneLifecycleState
   sceneSwitchToken: number
+  /** Monotonic revision for persisted scene content. Runtime-only UI state is excluded. */
+  sceneRevision: number
   isSceneReady: boolean
   nodes: SceneNode[]
   /** Runtime-only cached reference to the current unique ground node derived from nodes. */

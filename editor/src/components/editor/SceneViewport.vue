@@ -226,7 +226,20 @@ import type { AlignCommand, ArrangeDirection, WorldAlignMode } from '@/types/sce
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'
 import type { TransformGroupEntry, TransformGroupState } from '@/types/scene-viewport-transform-group'
-import type { BuildTool } from '@/types/build-tool'
+import { BUILD_TOOL_LABELS, type BuildTool } from '@/types/build-tool'
+import type {
+  HarmonyCameraSetRequest,
+  HarmonyCameraSetResult,
+  HarmonyCameraState,
+  HarmonyToolSetRequest,
+  HarmonyToolSetResult,
+  HarmonyToolState,
+  HarmonyTransformTool,
+} from '@schema/editorAgentProtocol'
+import {
+  registerHarmonyAgentViewportController,
+} from '@/agent/viewportControl'
+import { AgentBridgeError } from '@/agent/errors'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
@@ -1173,6 +1186,7 @@ function syncInstanceLayoutInstancedMatrices(params: {
 let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let camera: THREE.PerspectiveCamera | null = null
+let disposeAgentViewportController: (() => void) | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
 let viewPointPreviewRenderer: THREE.WebGLRenderer | null = null
 let viewPointPreviewCamera: THREE.PerspectiveCamera | null = null
@@ -15657,6 +15671,230 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   isApplyingCameraState = false
 }
 
+function getHarmonyCameraState(): HarmonyCameraState {
+  if (!camera || !mapControls) {
+    throw new AgentBridgeError('SESSION_UNAVAILABLE', 'The Editor camera is not ready')
+  }
+  const target = mapControls.target
+  const offset = camera.position.clone().sub(target)
+  const distance = offset.length()
+  const forward = new THREE.Vector3()
+  camera.getWorldDirection(forward)
+  const safeDistance = Math.max(distance, 1e-6)
+  return {
+    position: {
+      x: camera.position.x,
+      y: camera.position.y,
+      z: camera.position.z,
+    },
+    target: {
+      x: target.x,
+      y: target.y,
+      z: target.z,
+    },
+    forward: {
+      x: forward.x,
+      y: forward.y,
+      z: forward.z,
+    },
+    fov: camera instanceof THREE.PerspectiveCamera ? camera.fov : perspectiveCamera?.fov ?? DEFAULT_PERSPECTIVE_FOV,
+    distance,
+    azimuthDeg: (THREE.MathUtils.radToDeg(Math.atan2(offset.x, offset.z)) + 360) % 360,
+    polarDeg: THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(offset.y / safeDistance, -1, 1))),
+    projection: sceneStore.viewportSettings.cameraProjection,
+    controlMode: sceneStore.viewportSettings.cameraControlMode,
+  }
+}
+
+function resolveCameraPresetOffset(
+  preset: NonNullable<HarmonyCameraSetRequest['preset']>,
+  distance: number,
+): THREE.Vector3 {
+  switch (preset) {
+    case 'top':
+      return new THREE.Vector3(0.001, distance, 0.001)
+    case 'front':
+      return new THREE.Vector3(0, 0, distance)
+    case 'back':
+      return new THREE.Vector3(0, 0, -distance)
+    case 'left':
+      return new THREE.Vector3(distance, 0, 0)
+    case 'right':
+      return new THREE.Vector3(-distance, 0, 0)
+    case 'isometric': {
+      const component = distance / Math.sqrt(3)
+      return new THREE.Vector3(component, component, component)
+    }
+  }
+}
+
+function readFiniteCameraVector(value: unknown, label: string): THREE.Vector3 {
+  if (!value || typeof value !== 'object') {
+    throw new AgentBridgeError('VALIDATION_FAILED', `${label} must be a vector`)
+  }
+  const candidate = value as { x?: unknown; y?: unknown; z?: unknown }
+  if (
+    typeof candidate.x !== 'number'
+    || typeof candidate.y !== 'number'
+    || typeof candidate.z !== 'number'
+    || !Number.isFinite(candidate.x)
+    || !Number.isFinite(candidate.y)
+    || !Number.isFinite(candidate.z)
+  ) {
+    throw new AgentBridgeError('VALIDATION_FAILED', `${label} must contain finite x, y, and z values`)
+  }
+  return new THREE.Vector3(candidate.x, candidate.y, candidate.z)
+}
+
+async function setHarmonyCameraState(request: HarmonyCameraSetRequest): Promise<HarmonyCameraSetResult> {
+  if (!camera || !mapControls) {
+    throw new AgentBridgeError('SESSION_UNAVAILABLE', 'The Editor camera is not ready')
+  }
+  if (!request || typeof request !== 'object') {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'camera.set requires a request object')
+  }
+  const beforeRevision = sceneStore.sceneRevision
+  if (
+    typeof request.expectedRevision === 'number'
+    && request.expectedRevision !== beforeRevision
+  ) {
+    throw new AgentBridgeError(
+      'STALE_REVISION',
+      `Expected scene revision ${request.expectedRevision}, current revision is ${beforeRevision}`,
+      { expectedRevision: request.expectedRevision, currentRevision: beforeRevision },
+    )
+  }
+  if (
+    request.position
+    && (
+      typeof request.distance === 'number'
+      || typeof request.azimuthDeg === 'number'
+      || typeof request.polarDeg === 'number'
+      || request.preset
+    )
+  ) {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      'camera.position cannot be combined with distance, orbit angles, or a preset',
+    )
+  }
+  if (
+    request.preset
+    && (request.azimuthDeg !== undefined || request.polarDeg !== undefined)
+  ) {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      'camera.preset cannot be combined with orbit angles',
+    )
+  }
+  if (request.fov !== undefined && (!Number.isFinite(request.fov) || request.fov < 1 || request.fov > 179)) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'camera.fov must be between 1 and 179 degrees')
+  }
+  if (request.distance !== undefined && (!Number.isFinite(request.distance) || request.distance <= 0)) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'camera.distance must be a positive number')
+  }
+  if (
+    request.polarDeg !== undefined
+    && (!Number.isFinite(request.polarDeg) || request.polarDeg < 0.1 || request.polarDeg > 179.9)
+  ) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'camera.polarDeg must be between 0.1 and 179.9')
+  }
+  if (
+    request.azimuthDeg !== undefined
+    && !Number.isFinite(request.azimuthDeg)
+  ) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'camera.azimuthDeg must be finite')
+  }
+  if (
+    request.projection !== undefined
+    && request.projection !== 'perspective'
+    && request.projection !== 'orthographic'
+  ) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'camera.projection is invalid')
+  }
+  if (
+    request.controlMode !== undefined
+    && request.controlMode !== 'map'
+    && request.controlMode !== 'orbit'
+  ) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'camera.controlMode is invalid')
+  }
+  if (
+    request.preset !== undefined
+    && !['top', 'front', 'back', 'left', 'right', 'isometric'].includes(request.preset)
+  ) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'camera.preset is invalid')
+  }
+
+  const current = getHarmonyCameraState()
+  const target = request.target
+    ? readFiniteCameraVector(request.target, 'camera.target')
+    : new THREE.Vector3(current.target.x, current.target.y, current.target.z)
+  target.y = Math.max(target.y, MIN_TARGET_HEIGHT)
+  const requestedDistance = request.distance ?? (current.distance > 1e-6 ? current.distance : 10)
+  let position: THREE.Vector3
+
+  if (request.preset) {
+    position = target.clone().add(resolveCameraPresetOffset(request.preset, requestedDistance))
+  } else if (request.position) {
+    position = readFiniteCameraVector(request.position, 'camera.position')
+  } else if (
+    request.distance !== undefined
+    || request.azimuthDeg !== undefined
+    || request.polarDeg !== undefined
+  ) {
+    const azimuth = THREE.MathUtils.degToRad(request.azimuthDeg ?? current.azimuthDeg)
+    const polar = THREE.MathUtils.degToRad(request.polarDeg ?? current.polarDeg)
+    const horizontal = requestedDistance * Math.sin(polar)
+    position = new THREE.Vector3(
+      target.x + horizontal * Math.sin(azimuth),
+      target.y + requestedDistance * Math.cos(polar),
+      target.z + horizontal * Math.cos(azimuth),
+    )
+  } else if (request.target) {
+    const previousTarget = new THREE.Vector3(current.target.x, current.target.y, current.target.z)
+    position = camera.position.clone().add(target.clone().sub(previousTarget))
+  } else {
+    position = camera.position.clone()
+  }
+
+  if (position.y < MIN_CAMERA_HEIGHT) {
+    position.y = MIN_CAMERA_HEIGHT
+  }
+  const fov = request.fov ?? current.fov
+  const nextForward = target.clone().sub(position)
+  if (nextForward.lengthSq() < 1e-12) {
+    nextForward.set(0, 0, -1)
+  } else {
+    nextForward.normalize()
+  }
+  const nextState: SceneCameraState = {
+    position: { x: position.x, y: position.y, z: position.z },
+    target: { x: target.x, y: target.y, z: target.z },
+    fov,
+    forward: {
+      x: nextForward.x,
+      y: nextForward.y,
+      z: nextForward.z,
+    },
+  }
+  applyCameraState(nextState)
+  sceneStore.setAgentCameraState(nextState, {
+    projection: request.projection,
+    controlMode: request.controlMode,
+  })
+  await nextTick()
+  applyCameraState(nextState)
+  await sceneStore.flushPendingSceneAutoSave({ force: true })
+  const state = getHarmonyCameraState()
+  return {
+    changed: JSON.stringify(current) !== JSON.stringify(state),
+    beforeRevision,
+    afterRevision: sceneStore.sceneRevision,
+    state,
+  }
+}
+
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
@@ -22769,6 +23007,64 @@ function handleBuildToolChange(tool: BuildTool | null) {
   }
 }
 
+function getHarmonyToolState(): HarmonyToolState {
+  return {
+    activeTransformTool: sceneStore.activeTool as HarmonyTransformTool,
+    activeBuildTool: activeBuildTool.value,
+    buildToolsDisabled: buildToolsStore.buildToolsDisabled,
+    selectedNodeIds: [...sceneStore.selectedNodeIds],
+    availableTransformTools: TRANSFORM_TOOLS.map((tool) => tool.value as HarmonyTransformTool),
+    availableBuildTools: Object.keys(BUILD_TOOL_LABELS) as BuildTool[],
+  }
+}
+
+async function setHarmonyActiveTool(request: HarmonyToolSetRequest): Promise<HarmonyToolSetResult> {
+  if (!request || typeof request !== 'object') {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'tool.set_active requires a request object')
+  }
+  const before = getHarmonyToolState()
+  if (request.group === 'build') {
+    const tool = request.tool === null ? null : String(request.tool)
+    if (tool !== null && !(tool in BUILD_TOOL_LABELS)) {
+      throw new AgentBridgeError('VALIDATION_FAILED', `Unknown build tool ${tool}`)
+    }
+    if (tool !== null && buildToolsStore.buildToolsDisabled) {
+      throw new AgentBridgeError(
+        'WRITE_LEASE_DENIED',
+        'Build tools are disabled while the Editor is in a blocking configuration mode',
+      )
+    }
+    emit('changeTool', 'select')
+    handleBuildToolChange(tool as BuildTool | null)
+    await nextTick()
+    if (activeBuildTool.value !== tool) {
+      throw new AgentBridgeError('OPERATION_NOT_SUPPORTED', `Build tool ${tool ?? 'none'} was not activated`)
+    }
+  } else if (request.group === 'transform') {
+    const tool = (request.tool ?? 'select') as EditorTool
+    if (!TRANSFORM_TOOLS.some((entry) => entry.value === tool)) {
+      throw new AgentBridgeError('VALIDATION_FAILED', `Unknown transform tool ${tool}`)
+    }
+    handleBuildToolChange(null)
+    emit('changeTool', tool)
+    await nextTick()
+    if (props.activeTool !== tool) {
+      throw new AgentBridgeError(
+        'OPERATION_NOT_SUPPORTED',
+        `Transform tool ${tool} was rejected for the current selection`,
+      )
+    }
+  } else {
+    throw new AgentBridgeError('VALIDATION_FAILED', `Unknown tool group ${String(request.group)}`)
+  }
+
+  const state = getHarmonyToolState()
+  return {
+    changed: JSON.stringify(before) !== JSON.stringify(state),
+    state,
+  }
+}
+
 function extractAssetPayload(event: DragEvent): { assetId: string } | null {
   if (event.dataTransfer) {
     if (sceneStore.draggingAssetId) {
@@ -28016,6 +28312,12 @@ onMounted(() => {
   setProceduralLandscapeDemOrthoResolver(proceduralLandscapeDemOrthoResolver)
   setProceduralLandscapeEnvironment('editor')
   initScene()
+  disposeAgentViewportController = registerHarmonyAgentViewportController({
+    getCameraState: getHarmonyCameraState,
+    setCameraState: setHarmonyCameraState,
+    getToolState: getHarmonyToolState,
+    setActiveTool: setHarmonyActiveTool,
+  })
   if (canvasRef.value) {
     canvasRef.value.addEventListener('wheel', handleViewportWheel, { passive: false, capture: true })
   }
@@ -28065,6 +28367,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  disposeAgentViewportController?.()
+  disposeAgentViewportController = null
   clearGuideRouteAnchorPressCandidate()
   clearLandscapeRoadPlacementNotice()
   setGroundTextureSourceResolver(null)
