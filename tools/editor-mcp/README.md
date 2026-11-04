@@ -11,7 +11,7 @@ All Harmony-related Agent work must use the semantic MCP tools first:
 - If the required operation is missing, first extend the typed MCP/editor command and add validation, transaction/undo behavior, and tests.
 - UI automation is a last resort for an external blocker or an explicit user request, and the reason must be explained.
 
-The same policy is delivered in the MCP server initialization instructions, the Editor bridge capabilities, the repository [AGENTS.md](../../AGENTS.md), and the server-side Editor AI system prompt.
+The same policy is delivered in the MCP server initialization instructions, the Editor bridge capabilities, and the repository [AGENTS.md](../../AGENTS.md). Codex through the MCP bridge is the supported Agent editing path.
 
 ## Start
 

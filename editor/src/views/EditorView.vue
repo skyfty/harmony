@@ -2497,7 +2497,6 @@ onBeforeUnmount(() => {
           <InspectorPanel
             ref="dockedInspectorRef"
             :floating="false"
-            :capture-viewport-screenshot="captureViewportScreenshot"
             @collapse="inspectorOpen = false"
             @toggle-placement="togglePanelPlacement('inspector')"
             @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('docked', payload)"
@@ -2517,7 +2516,6 @@ onBeforeUnmount(() => {
         <section v-if="showProjectDocked" class="panel project-panel">
           <ProjectPanel
             :floating="false"
-            :capture-viewport-screenshot="captureViewportScreenshot"
             @collapse="projectOpen = false"
             @toggle-placement="togglePanelPlacement('project')"
           />
@@ -2539,7 +2537,6 @@ onBeforeUnmount(() => {
             <InspectorPanel
               ref="floatingInspectorRef"
               :floating="true"
-              :capture-viewport-screenshot="captureViewportScreenshot"
               @collapse="inspectorOpen = false"
               @toggle-placement="togglePanelPlacement('inspector')"
               @open-material-details="(payload) => handleInspectorMaterialDetailsOpen('floating', payload)"
@@ -2558,7 +2555,6 @@ onBeforeUnmount(() => {
           <div v-if="showProjectFloating" class="floating-panel project-floating">
             <ProjectPanel
               :floating="true"
-              :capture-viewport-screenshot="captureViewportScreenshot"
               @collapse="projectOpen = false"
               @toggle-placement="togglePanelPlacement('project')"
             />

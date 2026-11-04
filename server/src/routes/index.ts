@@ -4,7 +4,6 @@ import resourceRouter from './resources'
 import roleRouter from './roles'
 import miniprogramRouter from './miniprogram'
 import hotFeaturedRouter from './hotFeatured'
-import assistantRouter from './aiAssistant'
 import aiTagRouter from './aiTags'
 import userSceneRouter from './userScenes'
 import userProjectRouter from './userProjects'
@@ -22,7 +21,6 @@ export const routes: Router[] = [
   resourceRouter,
   hotFeaturedRouter,
   miniprogramRouter,
-  assistantRouter,
   aiTagRouter,
   userSceneRouter,
   userProjectRouter,

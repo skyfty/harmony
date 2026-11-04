@@ -112,7 +112,6 @@ type BehaviorDetailsPayload = {
 }
 const props = defineProps<{
   floating?: boolean
-  captureViewportScreenshot?: () => Promise<Blob | null>
 }>()
 
 
