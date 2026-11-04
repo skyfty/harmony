@@ -26,10 +26,7 @@ import {
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   type ProceduralLandscapeComponentProps,
 } from '@schema/components/definitions/proceduralLandscapeComponent'
-import {
-  buildCompiledRoadProfileSourceSignature,
-  compiledRoadProfileMatches,
-} from '@schema/proceduralLandscape/compiledRoadProfile'
+import { inspectCompiledRoadProfileForProps } from '@schema/proceduralLandscape/compiledRoadProfile'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import {
@@ -830,18 +827,11 @@ function buildStructuralIssues(scene: AssetLookupScene): SceneAssetDiagnosticIss
       && landscapeProps.road.enabled
       && generatedRoute
     ) {
-      const centerline = generatedRoute.centerline
-      const expectedSignature = centerline
-        ? buildCompiledRoadProfileSourceSignature(landscapeProps, {
-            groundSurfaceRevision: node.dynamicMesh?.type === 'Ground'
-              ? node.dynamicMesh.surfaceRevision ?? 0
-              : 0,
-            authoringSampleStep: centerline.authoringSampleStep,
-            authoringCellSize: centerline.authoringCellSize,
-            exclusionSignature: centerline.exclusionSignature ?? '',
-          })
-        : ''
-      if (!compiledRoadProfileMatches(centerline, expectedSignature)) {
+      if (inspectCompiledRoadProfileForProps(landscapeProps, {
+        groundSurfaceRevision: node.dynamicMesh?.type === 'Ground'
+          ? node.dynamicMesh.surfaceRevision ?? 0
+          : 0,
+      }).status !== 'valid') {
         issues.push({
           severity: 'error',
           code: 'procedural-landscape-road-profile',

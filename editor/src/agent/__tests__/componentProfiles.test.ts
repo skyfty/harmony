@@ -41,6 +41,16 @@ describe('component Agent profiles', () => {
         'patch_component',
       ]),
     })
+    expect(componentManager.getAgentProfile('proceduralLandscape')).toMatchObject({
+      editMode: 'domain',
+      domain: 'terrain',
+      tool: 'harmony_terrain_edit',
+      actions: expect.arrayContaining([
+        'runtime_stats',
+        'regenerate_road',
+        'patch_component',
+      ]),
+    })
     expect(componentManager.getAgentProfile('vehicle')).toMatchObject({
       editMode: 'domain',
       domain: 'actor',

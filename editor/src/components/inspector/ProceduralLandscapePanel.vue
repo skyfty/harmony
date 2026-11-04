@@ -31,6 +31,7 @@ import {
   type RoadStyleId,
 } from '@schema/proceduralLandscape/roadStyle'
 import { resolveProceduralLandscapeRoadGeometryLimits } from '@schema/proceduralLandscape/roadGeometry'
+import { inspectCompiledRoadProfileForProps } from '@schema/proceduralLandscape/compiledRoadProfile'
 import { getTerrainDemOrthoFileInfo } from '@/utils/demOrthoTextureLoader'
 
 const sceneStore = useSceneStore()
@@ -251,6 +252,26 @@ const roadPathEditing = computed(
   () => componentEnabled.value && activeBuildTool.value === 'landscapeRoad' && Boolean(landscapeComponent.value),
 )
 const roadHasGeneratedResult = computed(() => (runtimeStats.value?.roadNodeCount ?? 0) >= 2)
+const compiledRoadProfile = computed(() => {
+  const props = propsValue.value
+  if (
+    !props
+    || !props.road.enabled
+    || !props.dem.assetId
+    || !props.dem.runtimeGridUrl
+    || !props.road.generatedRoute
+  ) {
+    return null
+  }
+  return inspectCompiledRoadProfileForProps(props, {
+    groundSurfaceRevision: selectedNode.value?.dynamicMesh?.type === 'Ground'
+      ? selectedNode.value.dynamicMesh.surfaceRevision ?? 0
+      : 0,
+  })
+})
+const compiledRoadProfileStale = computed(
+  () => compiledRoadProfile.value != null && compiledRoadProfile.value.status !== 'valid',
+)
 const roadStale = computed(() => {
   const generated = propsValue.value?.road.generatedRoute
   const current = propsValue.value?.road
@@ -1082,6 +1103,9 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
           <div v-if="roadActionMessage" class="pl-hint">{{ roadActionMessage }}</div>
           <div v-if="roadStale" class="pl-hint pl-hint--stale">
             途经点或公路曲线已修改，点击“重新生成公路”应用。
+          </div>
+          <div v-if="compiledRoadProfileStale" class="pl-hint pl-hint--stale">
+            已提交公路的编译高度与当前 DEM 或道路参数不一致，导出前需要重新生成公路。
           </div>
   
           <div class="pl-subtitle">选线策略</div>

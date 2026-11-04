@@ -128,6 +128,23 @@ Example:
 
 Use the returned `analysis.recommendedBlendWidth` as evidence before calling `fit_transition` with the same arguments and the latest `expectedRevision`. The fit only changes the transition width; it does not move the owner or change its elevation mode.
 
+## DEM Road Profile Regeneration
+
+`harmony_terrain_edit` also supports `regenerate_road`. It validates the current editable road waypoints, commits a new route revision, bakes the DEM height profile used by preview, viewer, and export, and updates the automatic Guide Route.
+
+```json
+{
+  "action": "regenerate_road",
+  "expectedRevision": 12,
+  "args": {
+    "nodeId": "procedural-landscape-node-id",
+    "guideRoutePolicy": "preserve"
+  }
+}
+```
+
+`guideRoutePolicy` defaults to `preserve`. Use `recreate` only when the user explicitly wants to clear automatic Guide Route stops and extension legs. A failed generation leaves the previous road committed and returns its structured `failureReason`.
+
 ## Verification
 
 Read-only MCP smoke test:

@@ -403,6 +403,7 @@ import {
 } from '@schema/proceduralLandscape/officialScenicRoad'
 import { clampRoadWaypoints } from '@schema/proceduralLandscape/roadWaypoints'
 import type { ProceduralLandscapeComponentProps } from '@schema/proceduralLandscape/config'
+import { inspectCompiledRoadProfileForProps } from '@schema/proceduralLandscape/compiledRoadProfile'
 import { collectTerrainMeshSources } from '@schema/proceduralLandscape/terrainSampler'
 import {
   createSlowroadsEnvironmentRuntime,
@@ -8994,13 +8995,27 @@ function backfillProceduralLandscapeRouteCenterlines(): void {
     if (!generatedRoute) {
       continue
     }
-    if (!generatedRoute.centerline?.pointsXZ.length || !generatedRoute.centerline.compiledProfile) {
-      const attemptKey = `${node.id}:${generatedRoute.revision}`
+    const profileInspection = inspectCompiledRoadProfileForProps(component.props, {
+      groundSurfaceRevision: node.dynamicMesh?.type === 'Ground'
+        ? node.dynamicMesh.surfaceRevision ?? 0
+        : 0,
+    })
+    if (profileInspection.status !== 'valid') {
+      const attemptKey = [
+        node.id,
+        generatedRoute.revision,
+        profileInspection.status,
+        profileInspection.storedSignature ?? '',
+        profileInspection.expectedSignature,
+      ].join(':')
       if (!proceduralLandscapeCenterlineBackfillAttempts.has(attemptKey)) {
-        const centerline = getProceduralLandscapeRoadCenterlineLocal(node.id)
-        if (centerline && centerline.pointsXZ.length >= 4) {
+        const runtimeCenterline = getProceduralLandscapeRoadCenterlineLocal(node.id)
+        if (runtimeCenterline && runtimeCenterline.pointsXZ.length >= 4) {
           proceduralLandscapeCenterlineBackfillAttempts.add(attemptKey)
-          if (sceneStore.backfillProceduralLandscapeRouteCenterline(node.id, centerline)) {
+          if (sceneStore.backfillProceduralLandscapeRouteCenterline(
+            node.id,
+            runtimeCenterline,
+          )) {
             console.info(`[SceneViewport] Backfilled procedural road centerline for ${node.name ?? node.id}`)
           }
         }

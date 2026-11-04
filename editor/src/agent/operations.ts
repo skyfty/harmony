@@ -25,6 +25,7 @@ import {
   getProceduralLandscapeStats,
   sampleProceduralLandscapeTerrainHeight,
 } from '@schema/proceduralLandscape/runtime'
+import type { ProceduralLandscapeComponentProps } from '@schema/proceduralLandscape/config'
 import {
   createDemTerrainFlatteningTarget,
   getLandscapeTerrainFlatteningSnapshot,
@@ -493,6 +494,42 @@ async function executeDomainOperation(
           )
         }
         return { nodeId, stats }
+      }
+      if (operation.action === 'regenerate_road') {
+        const nodeId = readString(args, 'nodeId')
+        const guideRoutePolicy = args.guideRoutePolicy ?? 'preserve'
+        if (guideRoutePolicy !== 'preserve' && guideRoutePolicy !== 'recreate') {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            'guideRoutePolicy must be "preserve" or "recreate"',
+          )
+        }
+        const result = store.generateProceduralLandscapeRoad(nodeId, {
+          guideRoutePolicy,
+        })
+        if (!result.accepted) {
+          return {
+            nodeId,
+            ...result,
+            changed: false,
+            guideRoutePolicy,
+          }
+        }
+        const node = findNodeOrThrow(store, nodeId)
+        const component = resolveComponent(node, undefined, 'proceduralLandscape')
+        const props = component.props as unknown as ProceduralLandscapeComponentProps
+        const generatedRoute = props.road.generatedRoute
+        return {
+          nodeId,
+          ...result,
+          changed: true,
+          guideRoutePolicy,
+          generationRevision: props.generationRevision,
+          routeRevision: generatedRoute?.revision ?? null,
+          waypointCount: generatedRoute?.waypoints.length ?? 0,
+          compiledProfileSignature:
+            generatedRoute?.centerline?.compiledProfile?.sourceSignature ?? null,
+        }
       }
       if (operation.action === 'analyze_transition') {
         return analyzeTerrainTransition(store, args)

@@ -99,6 +99,7 @@ const AGENT_ACTIONS_BY_DOMAIN: Record<HarmonyAgentDomain, string[]> = {
     'lower_region',
     'reset_region',
     'compile',
+    'regenerate_road',
     'patch_component',
   ],
 }

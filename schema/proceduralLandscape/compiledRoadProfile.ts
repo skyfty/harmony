@@ -17,6 +17,23 @@ export interface CompiledRoadProfileSignatureOptions {
   exclusionSignature: string
 }
 
+export type CompiledRoadProfileStatus =
+  | 'valid'
+  | 'missing-centerline'
+  | 'missing-profile'
+  | 'invalid-profile'
+  | 'stale-profile'
+
+export interface CompiledRoadProfileInspection {
+  status: CompiledRoadProfileStatus
+  expectedSignature: string
+  storedSignature: string | null
+}
+
+export interface CompiledRoadProfileInspectionOptions {
+  groundSurfaceRevision: number
+}
+
 export function buildCompiledRoadProfileSourceSignature(
   props: ProceduralLandscapeComponentProps,
   options: CompiledRoadProfileSignatureOptions,
@@ -83,6 +100,62 @@ export function hasValidCompiledRoadProfile(
     }
   }
   return true
+}
+
+export function inspectCompiledRoadProfile(
+  centerline: ProceduralLandscapeGeneratedRouteCenterline | null | undefined,
+  expectedSignature: string,
+): CompiledRoadProfileInspection {
+  const storedSignature = centerline?.compiledProfile?.sourceSignature?.trim() || null
+  if (!centerline) {
+    return {
+      status: 'missing-centerline',
+      expectedSignature,
+      storedSignature: null,
+    }
+  }
+  if (!centerline.compiledProfile) {
+    return {
+      status: 'missing-profile',
+      expectedSignature,
+      storedSignature,
+    }
+  }
+  if (!hasValidCompiledRoadProfile(centerline)) {
+    return {
+      status: 'invalid-profile',
+      expectedSignature,
+      storedSignature,
+    }
+  }
+  if (storedSignature !== expectedSignature) {
+    return {
+      status: 'stale-profile',
+      expectedSignature,
+      storedSignature,
+    }
+  }
+  return {
+    status: 'valid',
+    expectedSignature,
+    storedSignature,
+  }
+}
+
+export function inspectCompiledRoadProfileForProps(
+  props: ProceduralLandscapeComponentProps,
+  options: CompiledRoadProfileInspectionOptions,
+): CompiledRoadProfileInspection {
+  const centerline = props.road.generatedRoute?.centerline
+  const expectedSignature = centerline
+    ? buildCompiledRoadProfileSourceSignature(props, {
+        groundSurfaceRevision: options.groundSurfaceRevision,
+        authoringSampleStep: centerline.authoringSampleStep,
+        authoringCellSize: centerline.authoringCellSize,
+        exclusionSignature: centerline.exclusionSignature ?? '',
+      })
+    : ''
+  return inspectCompiledRoadProfile(centerline, expectedSignature)
 }
 
 export function compiledRoadProfileMatches(
