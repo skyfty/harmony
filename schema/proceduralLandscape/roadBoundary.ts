@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 
+import type { StaticBoxCollisionProxy } from '../groundCollisionRuntimeBridge'
 import type { LandscapeExclusionCircle } from './exclusion'
 import { BARRIER_TUNING, WALL_NODE_SPACING } from './roadStyle'
 import type { RoadBandRow } from './roadBandRows'
@@ -8,6 +9,8 @@ import type { WallSample, WallSegment } from './walls'
 export const ROAD_BOUNDARY_COLLISION_HEIGHT = 3
 export const ROAD_BOUNDARY_COLLISION_THICKNESS = 0.2
 export const ROAD_BOUNDARY_ROW_SPACING = 4
+const ROAD_BOUNDARY_COLLIDER_OVERLAP = 0.35
+const ROAD_BOUNDARY_COLLIDER_BOTTOM_MARGIN = 0.75
 
 export interface RoadBoundaryCollisionGeometryOptions {
   rows: ReadonlyArray<RoadBandRow>
@@ -25,6 +28,8 @@ export interface RoadBoundaryCollisionGeometryOptions {
 
 export interface RoadBoundaryCollisionGeometryResult {
   geometry: THREE.BufferGeometry
+  /** World-space convex boxes used by physics backends without box/trimesh contact. */
+  colliderBoxes: StaticBoxCollisionProxy[]
   sourceRowCount: number
   rowCount: number
   sideCount: number
@@ -449,6 +454,62 @@ function appendWallStrip(
   }
 }
 
+const boundaryColliderUp = new THREE.Vector3(0, 1, 0)
+const boundaryColliderRotation = new THREE.Quaternion()
+
+function appendBoundaryColliderBoxes(
+  boxes: StaticBoxCollisionProxy[],
+  samples: ReadonlyArray<BoundarySample>,
+  height: number,
+  thickness: number,
+): void {
+  for (let index = 0; index + 1 < samples.length; index += 1) {
+    const from = samples[index]!
+    const to = samples[index + 1]!
+    const dx = to.x - from.x
+    const dz = to.z - from.z
+    const length = Math.hypot(dx, dz)
+    if (!Number.isFinite(length) || length <= 1e-6) {
+      continue
+    }
+    let outwardX = (from.outwardX + to.outwardX) * 0.5
+    let outwardZ = (from.outwardZ + to.outwardZ) * 0.5
+    const outwardLength = Math.hypot(outwardX, outwardZ)
+    if (outwardLength <= 1e-9) {
+      outwardX = -dz / length
+      outwardZ = dx / length
+    } else {
+      outwardX /= outwardLength
+      outwardZ /= outwardLength
+    }
+    const halfThickness = thickness * 0.5
+    const minBaseY = Math.min(from.baseY, to.baseY)
+    const maxBaseY = Math.max(from.baseY, to.baseY)
+    const bottomY = minBaseY - ROAD_BOUNDARY_COLLIDER_BOTTOM_MARGIN
+    const topY = maxBaseY + height
+    const sourceYaw = -Math.atan2(dz, dx)
+    boundaryColliderRotation.setFromAxisAngle(boundaryColliderUp, sourceYaw)
+    boxes.push({
+      center: [
+        (from.x + to.x) * 0.5 + outwardX * halfThickness,
+        (bottomY + topY) * 0.5,
+        (from.z + to.z) * 0.5 + outwardZ * halfThickness,
+      ],
+      halfExtents: [
+        length * 0.5 + ROAD_BOUNDARY_COLLIDER_OVERLAP * 0.5,
+        (topY - bottomY) * 0.5,
+        halfThickness,
+      ],
+      rotation: [
+        boundaryColliderRotation.x,
+        boundaryColliderRotation.y,
+        boundaryColliderRotation.z,
+        boundaryColliderRotation.w,
+      ],
+    })
+  }
+}
+
 /**
  * Continuous collision-only walls at both asphalt edges. Non-loop roads also
  * receive caps across their start and end so a vehicle cannot drive around the
@@ -471,6 +532,7 @@ export function createRoadBoundaryCollisionGeometry(
   const { runs, selectedRows } = pathRuns
   const positions: number[] = []
   const indices: number[] = []
+  const colliderBoxes: StaticBoxCollisionProxy[] = []
 
   for (const run of runs) {
     appendWallStrip(
@@ -480,8 +542,14 @@ export function createRoadBoundaryCollisionGeometry(
       height,
       thickness,
     )
+    appendBoundaryColliderBoxes(
+      colliderBoxes,
+      run.samples,
+      height,
+      thickness,
+    )
   }
-  if (!indices.length) {
+  if (!indices.length || !colliderBoxes.length) {
     return null
   }
 
@@ -498,6 +566,7 @@ export function createRoadBoundaryCollisionGeometry(
   geometry.computeBoundingSphere()
   return {
     geometry,
+    colliderBoxes,
     sourceRowCount: rows.length,
     rowCount: selectedRows.length,
     sideCount: 2,

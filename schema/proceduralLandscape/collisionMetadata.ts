@@ -1,4 +1,5 @@
 import type { Object3D } from 'three'
+import type { StaticBoxCollisionProxy } from '../groundCollisionRuntimeBridge'
 
 /**
  * Marks the procedural road surface so collision diagnostics and physics
@@ -14,6 +15,7 @@ export const PROCEDURAL_LANDSCAPE_ROAD_SURFACE_USER_DATA_KEY = 'proceduralLandsc
 export const PROCEDURAL_LANDSCAPE_ROADBED_SURFACE_USER_DATA_KEY = 'proceduralLandscapeRoadbedSurface'
 export const PROCEDURAL_LANDSCAPE_ROAD_COLLISION_USER_DATA_KEY = 'proceduralLandscapeRoadCollision'
 export const PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_COLLISION_USER_DATA_KEY = 'proceduralLandscapeRoadBoundaryCollision'
+export const PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_COLLIDERS_USER_DATA_KEY = 'proceduralLandscapeRoadBoundaryColliders'
 export const PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_VISUAL_USER_DATA_KEY = 'proceduralLandscapeRoadBoundaryVisual'
 export const PROCEDURAL_LANDSCAPE_DEM_TERRAIN_USER_DATA_KEY = 'proceduralLandscapeDemTerrain'
 export const PROCEDURAL_LANDSCAPE_DEM_COLLISION_SAMPLER_USER_DATA_KEY = 'proceduralLandscapeDemCollisionSampler'
@@ -67,8 +69,18 @@ export function isProceduralLandscapeRoadCollision(
   return userData?.[PROCEDURAL_LANDSCAPE_ROAD_COLLISION_USER_DATA_KEY] === true
 }
 
-export function markProceduralLandscapeRoadBoundaryCollision(object: Object3D): void {
+export function markProceduralLandscapeRoadBoundaryCollision(
+  object: Object3D,
+  colliders: ReadonlyArray<StaticBoxCollisionProxy>,
+): void {
   object.userData[PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_COLLISION_USER_DATA_KEY] = true
+  object.userData[PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_COLLIDERS_USER_DATA_KEY] = colliders.map(
+    (collider) => ({
+      center: [...collider.center],
+      halfExtents: [...collider.halfExtents],
+      rotation: [...collider.rotation],
+    }),
+  )
 }
 
 export function isProceduralLandscapeRoadBoundaryCollision(
@@ -79,6 +91,51 @@ export function isProceduralLandscapeRoadBoundaryCollision(
   }
   const userData = object.userData as Record<string, unknown> | undefined
   return userData?.[PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_COLLISION_USER_DATA_KEY] === true
+}
+
+export function resolveProceduralLandscapeRoadBoundaryColliders(
+  object: Object3D | null | undefined,
+): readonly StaticBoxCollisionProxy[] {
+  if (!object) {
+    return []
+  }
+  const userData = object.userData as Record<string, unknown> | undefined
+  const candidate = userData?.[PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_COLLIDERS_USER_DATA_KEY]
+  if (!Array.isArray(candidate)) {
+    return []
+  }
+  const colliders: StaticBoxCollisionProxy[] = []
+  for (const entry of candidate) {
+    if (
+      !entry
+      || typeof entry !== 'object'
+      || !Array.isArray((entry as StaticBoxCollisionProxy).center)
+      || !Array.isArray((entry as StaticBoxCollisionProxy).halfExtents)
+      || !Array.isArray((entry as StaticBoxCollisionProxy).rotation)
+    ) {
+      return []
+    }
+    const center = (entry as StaticBoxCollisionProxy).center
+    const halfExtents = (entry as StaticBoxCollisionProxy).halfExtents
+    const rotation = (entry as StaticBoxCollisionProxy).rotation
+    if (
+      center.length !== 3
+      || halfExtents.length !== 3
+      || rotation.length !== 4
+      || ![...center, ...halfExtents, ...rotation].every(
+        (value) => typeof value === 'number' && Number.isFinite(value),
+      )
+      || !halfExtents.every((value) => value > 0)
+    ) {
+      return []
+    }
+    colliders.push({
+      center: [center[0]!, center[1]!, center[2]!],
+      halfExtents: [halfExtents[0]!, halfExtents[1]!, halfExtents[2]!],
+      rotation: [rotation[0]!, rotation[1]!, rotation[2]!, rotation[3]!],
+    })
+  }
+  return colliders
 }
 
 /**

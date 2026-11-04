@@ -124,6 +124,15 @@ function addSmallObstacle(host: THREE.Group, x: number, z = 0): THREE.Mesh {
 }
 
 function shapeMaxY(shape: MeshCollisionChunkShape): number {
+  if (shape.kind === 'static-box-compound') {
+    return shape.boxes.reduce(
+      (maxY, box) => Math.max(maxY, box.center[1] + box.halfExtents[1]),
+      Number.NEGATIVE_INFINITY,
+    )
+  }
+  if (shape.kind !== 'static-mesh') {
+    return Number.NEGATIVE_INFINITY
+  }
   let maxY = Number.NEGATIVE_INFINITY
   for (let index = 1; index < shape.vertices.length; index += 3) {
     const value = shape.vertices[index]
@@ -548,7 +557,7 @@ describe('mesh collision runtime host incremental re-index', () => {
       collision!.geometry,
       new THREE.MeshBasicMaterial({ visible: false }),
     )
-    markProceduralLandscapeRoadBoundaryCollision(collisionMesh)
+    markProceduralLandscapeRoadBoundaryCollision(collisionMesh, collision!.colliderBoxes)
     host.add(collisionMesh)
     drain(harness, host, 'terrain-node', probes)
 
@@ -557,6 +566,7 @@ describe('mesh collision runtime host incremental re-index', () => {
       .filter(isElevatedRecord)
     expect(boundaryBodies.length).toBeGreaterThan(0)
     expect(boundaryBodies.some((record) => shapeMaxY(record.shape) > 7.9)).toBe(true)
+    expect(boundaryBodies.some((record) => record.shape.kind === 'static-box-compound')).toBe(true)
     expect(boundaryBodies.some((record) => (
       String((record.body as { name?: string }).name ?? '').includes(':road-boundary:')
     ))).toBe(true)
@@ -598,7 +608,7 @@ describe('mesh collision runtime host incremental re-index', () => {
       collision!.geometry,
       new THREE.MeshBasicMaterial({ visible: false }),
     )
-    markProceduralLandscapeRoadBoundaryCollision(boundary)
+    markProceduralLandscapeRoadBoundaryCollision(boundary, collision!.colliderBoxes)
     host.add(boundary)
 
     const harness = createHarness()
@@ -630,6 +640,46 @@ describe('mesh collision runtime host incremental re-index', () => {
     }
   })
 
+  it('keeps collision initialization pending when road boundary proxies are missing', () => {
+    const host = new THREE.Group()
+    const rows = Array.from({ length: 21 }, (_, index) => ({
+      x: -20 + index * 2,
+      z: 0,
+      y: 5,
+      heading: 0,
+      index,
+      lateral: 0,
+      longitudinal: 0,
+      turn: 0,
+      headingDelta: 0,
+      sourceIndex: index,
+    }))
+    const collision = createRoadBoundaryCollisionGeometry({
+      rows,
+      halfWidth: 2,
+      closed: false,
+      rowSpacing: 4,
+      lift: 0.05,
+    })
+    expect(collision).not.toBeNull()
+    const boundary = new THREE.Mesh(
+      collision!.geometry,
+      new THREE.MeshBasicMaterial({ visible: false }),
+    )
+    markProceduralLandscapeRoadBoundaryCollision(boundary, [])
+    host.add(boundary)
+
+    const harness = createHarness()
+    const probes = [new THREE.Vector3(0, 5, 0)]
+    drain(harness, host, 'missing-proxy-node', probes, 8)
+    const snapshot = syncOnce(harness, host, 'missing-proxy-node', probes)
+
+    expect(snapshot.roadBoundaryChunkTotal).toBe(1)
+    expect(snapshot.roadBoundaryChunkCount).toBe(0)
+    expect(snapshot.pendingRoadBoundaryChunkCount).toBe(1)
+    expect(snapshot.pendingChunkCount).toBeGreaterThan(0)
+  })
+
   it('keeps all road containment resident as anchors advance across cells', () => {
     const host = new THREE.Group()
     const rows = Array.from({ length: 1001 }, (_, index) => ({
@@ -656,7 +706,7 @@ describe('mesh collision runtime host incremental re-index', () => {
       collision!.geometry,
       new THREE.MeshBasicMaterial({ visible: false }),
     )
-    markProceduralLandscapeRoadBoundaryCollision(boundary)
+    markProceduralLandscapeRoadBoundaryCollision(boundary, collision!.colliderBoxes)
     host.add(boundary)
 
     const harness = createHarness()
@@ -722,7 +772,7 @@ describe('mesh collision runtime host incremental re-index', () => {
         collision!.geometry,
         new THREE.MeshBasicMaterial({ visible: false }),
       )
-      markProceduralLandscapeRoadBoundaryCollision(mesh)
+      markProceduralLandscapeRoadBoundaryCollision(mesh, collision!.colliderBoxes)
       return mesh
     }
     const original = makeBoundary()
@@ -1123,6 +1173,10 @@ describe('mesh collision runtime host incremental re-index', () => {
       && (record.body as { name: string }).name.includes(':ground-patch:')
     ))
     expect(patch).toBeDefined()
+    expect(patch!.shape.kind).toBe('static-mesh')
+    if (patch!.shape.kind !== 'static-mesh') {
+      throw new Error('Expected a static ground patch')
+    }
     const { vertices } = patch!.shape
     const uniqueX = new Set<number>()
     const uniqueZ = new Set<number>()

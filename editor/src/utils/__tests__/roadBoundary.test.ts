@@ -57,6 +57,8 @@ describe('road boundary geometry', () => {
     expect(result!.endCapCount).toBe(2)
     expect(result!.rowCount).toBeLessThan(rows.length)
     expect(result!.triangleCount).toBeGreaterThan(0)
+    expect(result!.colliderBoxes.length).toBeGreaterThanOrEqual(result!.rowCount * 2)
+    expect(result!.colliderBoxes.every((box) => box.halfExtents[1] >= ROAD_BOUNDARY_COLLISION_HEIGHT * 0.5)).toBe(true)
     result!.geometry.computeBoundingBox()
     const bounds = result!.geometry.boundingBox!
     expect(bounds.min.x).toBeCloseTo(-ROAD_BOUNDARY_COLLISION_THICKNESS, 6)
@@ -87,6 +89,11 @@ describe('road boundary geometry', () => {
 
     expect(result).not.toBeNull()
     expect(result!.endCapCount).toBe(0)
+    expect(result!.colliderBoxes.every((box) => (
+      box.center[0] >= Math.min(...rows.map((row) => row.x))
+      && box.center[0] <= Math.max(...rows.map((row) => row.x))
+      && Math.abs(box.center[2]) <= 3 + ROAD_BOUNDARY_COLLISION_THICKNESS
+    ))).toBe(true)
     result!.geometry.computeBoundingBox()
     const bounds = result!.geometry.boundingBox!
     expect(bounds.min.x).toBeCloseTo(100, 6)
@@ -209,6 +216,11 @@ describe('road boundary geometry', () => {
       exclusionCircles,
     })
     expect(clipped).not.toBeNull()
+    expect(clipped!.colliderBoxes.some((box) => {
+      const dx = box.center[0] - 10
+      const dz = box.center[2] - 4
+      return dx * dx + dz * dz < 0.25
+    })).toBe(false)
 
     const mesh = new THREE.Mesh(
       clipped!.geometry,

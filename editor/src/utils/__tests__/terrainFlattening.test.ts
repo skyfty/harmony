@@ -383,6 +383,10 @@ describe('terrain flattening targets', () => {
     )
     const grid = createDemTerrainHeightGrid(makeGridData())
     expect(sampleVisibleDemSurfaceHeightAt(grid, null, 0, 0, [target])).toBe(42)
+    expect(sampleVisibleDemSurfaceHeightAt(grid, null, 0, 0)).not.toBe(42)
+    expect(sampleVisibleDemSurfaceHeightAt(grid, null, 0, 0, [target])).not.toBe(
+      sampleVisibleDemSurfaceHeightAt(grid, null, 0, 0),
+    )
     expect(sampleDemTerrainCollisionHeightAt(grid, null, 0, 0, [target])).toBeCloseTo(
       42 - TERRAIN_FLATTENING_FLOOR_CLEARANCE,
       5,

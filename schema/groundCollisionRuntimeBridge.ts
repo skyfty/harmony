@@ -26,9 +26,26 @@ export type StaticMeshCollisionShapeDefinition = {
   indices: Uint32Array
 }
 
+/**
+ * A world-space box used by chunked static collision proxies. The compound
+ * representation is important for Cannon: its box chassis does not have a
+ * native narrow-phase collision path against a static triangle mesh.
+ */
+export type StaticBoxCollisionProxy = {
+  center: [number, number, number]
+  halfExtents: [number, number, number]
+  rotation: [number, number, number, number]
+}
+
+export type StaticBoxCompoundCollisionShapeDefinition = {
+  kind: 'static-box-compound'
+  boxes: ReadonlyArray<StaticBoxCollisionProxy>
+}
+
 export type GroundCollisionRuntimeShapeDefinition =
   | RigidbodyPhysicsShape
   | StaticMeshCollisionShapeDefinition
+  | StaticBoxCompoundCollisionShapeDefinition
 
 export type GroundCollisionRuntimeBridgeDeps = {
   getPhysicsWorld: () => PhysicsWorldLike | null
@@ -142,6 +159,74 @@ function createRuntimeBodyEntry(
   const materialId = null
   let shapeDesc: PhysicsShapeDesc
   let shapeId = nextRuntimeId()
+
+  if (shapeDefinition.kind === 'static-box-compound') {
+    if (shapeDefinition.boxes.length === 0) {
+      return null
+    }
+    const shapes: PhysicsShapeDesc[] = []
+    const children: Extract<PhysicsShapeDesc, { kind: 'compound' }>['children'] = []
+    for (const box of shapeDefinition.boxes) {
+      const values = [
+        ...box.center,
+        ...box.halfExtents,
+        ...box.rotation,
+      ]
+      if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+        return null
+      }
+      if (!box.halfExtents.every((value) => value > 0)) {
+        return null
+      }
+      const childShapeId = nextRuntimeId()
+      shapes.push({
+        id: childShapeId,
+        kind: 'box',
+        halfExtents: [
+          box.halfExtents[0],
+          box.halfExtents[1],
+          box.halfExtents[2],
+        ],
+      })
+      children.push({
+        shapeId: childShapeId,
+        transform: {
+          position: [
+            box.center[0],
+            box.center[1],
+            box.center[2],
+          ],
+          rotation: [
+            box.rotation[0],
+            box.rotation[1],
+            box.rotation[2],
+            box.rotation[3],
+          ],
+        },
+      })
+    }
+    const compoundShapeId = nextRuntimeId()
+    shapes.push({
+      id: compoundShapeId,
+      kind: 'compound',
+      children,
+    })
+    return {
+      shapes,
+      body: {
+        id: bodyId,
+        name,
+        type: 'static',
+        mass: 0,
+        materialId,
+        shapeId: compoundShapeId,
+        transform: {
+          position: [0, 0, 0],
+          rotation: [0, 0, 0, 1],
+        },
+      },
+    }
+  }
 
   if (shapeDefinition.kind === 'static-mesh') {
     const vertices = flattenStaticMeshShapeVertices(shapeDefinition.vertices)

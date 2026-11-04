@@ -1,6 +1,10 @@
 import * as THREE from 'three'
 
-import type { StaticMeshCollisionShapeDefinition } from './groundCollisionRuntimeBridge'
+import type {
+  StaticBoxCollisionProxy,
+  StaticBoxCompoundCollisionShapeDefinition,
+  StaticMeshCollisionShapeDefinition,
+} from './groundCollisionRuntimeBridge'
 import type {
   PhysicsBodyBindingEntry as RigidbodyInstance,
   PhysicsBodyLike,
@@ -18,6 +22,7 @@ import {
   isProceduralLandscapeRoadCollision,
   isProceduralLandscapeRoadbedSurface,
   isProceduralLandscapeRoadSurface,
+  resolveProceduralLandscapeRoadBoundaryColliders,
   resolveProceduralLandscapeDemCollisionSampler,
   type ProceduralLandscapeDemCollisionSampler,
 } from './proceduralLandscape/collisionMetadata'
@@ -80,7 +85,9 @@ const MESH_COLLISION_GROUND_PATCH_CELL_SIZE_METERS = 2
 const MESH_COLLISION_GROUND_PATCH_CELLS = 16
 const MESH_COLLISION_GROUND_PATCH_UPDATE_DISTANCE_CELLS = 4
 
-export type MeshCollisionChunkShape = StaticMeshCollisionShapeDefinition
+export type MeshCollisionChunkShape =
+  | StaticMeshCollisionShapeDefinition
+  | StaticBoxCompoundCollisionShapeDefinition
 
 export type MeshCollisionRuntimeDeps = {
   getPhysicsWorld: () => PhysicsWorldLike | null
@@ -161,6 +168,7 @@ type MeshCollisionMeshSource = {
   vertexCount: number
   needsSubdivision: boolean
   bounds: MeshCollisionChunkBounds
+  colliderBoxes: ReadonlyArray<StaticBoxCollisionProxy>
 }
 
 type MeshCollisionChunk = MeshCollisionChunkBounds & {
@@ -171,6 +179,7 @@ type MeshCollisionChunk = MeshCollisionChunkBounds & {
   /** `null` means "every triangle of the mesh". */
   triangles: Int32Array | null
   triangleCount: number
+  colliderBoxes: ReadonlyArray<StaticBoxCollisionProxy> | null
 }
 
 type MeshCollisionMeshEntry = {
@@ -467,11 +476,21 @@ function resolveMeshSource(object: THREE.Object3D): MeshCollisionMeshSource | nu
   const extentX = bounds.maxX - bounds.minX
   const extentZ = bounds.maxZ - bounds.minZ
   const isGroundSurface = isProceduralLandscapeDemTerrain(object)
+  const isRoadBoundary = isProceduralLandscapeRoadBoundaryCollision(object)
+  const colliderBoxes = isRoadBoundary
+    ? resolveProceduralLandscapeRoadBoundaryColliders(object)
+    : []
+  if (isRoadBoundary && colliderBoxes.length === 0) {
+    console.warn(
+      '[MeshCollision] Road boundary has no box collision proxies',
+      JSON.stringify({ mesh: mesh.name || mesh.uuid }),
+    )
+  }
   return {
     mesh,
     debugKind: isGroundSurface
       ? 'dem-terrain'
-      : isProceduralLandscapeRoadBoundaryCollision(object)
+      : isRoadBoundary
         ? 'road-boundary'
         : (isProceduralLandscapeRoadCollision(object) ? 'roadbed' : 'mesh'),
     isGroundSurface,
@@ -483,6 +502,7 @@ function resolveMeshSource(object: THREE.Object3D): MeshCollisionMeshSource | nu
     needsSubdivision: triangleCount > MESH_COLLISION_MAX_TRIANGLES_PER_CHUNK
       || Math.max(extentX, extentZ) > MESH_COLLISION_SUBDIVIDE_EXTENT_METERS,
     bounds,
+    colliderBoxes,
   }
 }
 
@@ -678,6 +698,7 @@ function createWholeMeshChunk(
     isGroundSurface: source.isGroundSurface,
     triangles: null,
     triangleCount: source.triangleCount,
+    colliderBoxes: null,
     ...source.bounds,
   }
 }
@@ -698,8 +719,101 @@ function createSubdividedChunk(
     isGroundSurface: source.isGroundSurface,
     triangles: Int32Array.from(triangles),
     triangleCount: triangles.length,
+    colliderBoxes: null,
     ...computeTrianglesWorldBounds(source, triangles),
   }
+}
+
+const meshCollisionProxyQuaternion = new THREE.Quaternion()
+const meshCollisionProxyRotationMatrix = new THREE.Matrix4()
+
+function resolveColliderBoxWorldXZBounds(
+  box: StaticBoxCollisionProxy,
+): MeshCollisionChunkBounds {
+  meshCollisionProxyQuaternion.set(
+    box.rotation[0],
+    box.rotation[1],
+    box.rotation[2],
+    box.rotation[3],
+  ).normalize()
+  meshCollisionProxyRotationMatrix.makeRotationFromQuaternion(meshCollisionProxyQuaternion)
+  const elements = meshCollisionProxyRotationMatrix.elements
+  const extentX = Math.abs(elements[0]!) * box.halfExtents[0]
+    + Math.abs(elements[4]!) * box.halfExtents[1]
+    + Math.abs(elements[8]!) * box.halfExtents[2]
+  const extentZ = Math.abs(elements[2]!) * box.halfExtents[0]
+    + Math.abs(elements[6]!) * box.halfExtents[1]
+    + Math.abs(elements[10]!) * box.halfExtents[2]
+  return {
+    minX: box.center[0] - extentX,
+    maxX: box.center[0] + extentX,
+    minZ: box.center[2] - extentZ,
+    maxZ: box.center[2] + extentZ,
+  }
+}
+
+function createRoadBoundaryProxyChunks(
+  source: MeshCollisionMeshSource,
+  meshIndex: number,
+): MeshCollisionChunk[] {
+  if (source.colliderBoxes.length === 0) {
+    return [{
+      key: `mesh:${meshIndex}:invalid-road-boundary`,
+      meshIndex,
+      debugKind: source.debugKind,
+      isGroundSurface: false,
+      triangles: null,
+      triangleCount: 0,
+      colliderBoxes: [],
+      ...source.bounds,
+    }]
+  }
+  const groups = new Map<string, {
+    cellX: number
+    cellZ: number
+    boxes: StaticBoxCollisionProxy[]
+  }>()
+  for (const box of source.colliderBoxes) {
+    const cellX = Math.floor(box.center[0] / MESH_COLLISION_CELL_SIZE_METERS)
+    const cellZ = Math.floor(box.center[2] / MESH_COLLISION_CELL_SIZE_METERS)
+    const key = `${cellX}|${cellZ}`
+    const group = groups.get(key)
+    if (group) {
+      group.boxes.push(box)
+    } else {
+      groups.set(key, {
+        cellX,
+        cellZ,
+        boxes: [box],
+      })
+    }
+  }
+  return Array.from(groups.values()).map((group) => {
+    let minX = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let minZ = Number.POSITIVE_INFINITY
+    let maxZ = Number.NEGATIVE_INFINITY
+    group.boxes.forEach((box) => {
+      const bounds = resolveColliderBoxWorldXZBounds(box)
+      minX = Math.min(minX, bounds.minX)
+      maxX = Math.max(maxX, bounds.maxX)
+      minZ = Math.min(minZ, bounds.minZ)
+      maxZ = Math.max(maxZ, bounds.maxZ)
+    })
+    return {
+      key: `mesh:${meshIndex}:boxes:cell:${group.cellX}:${group.cellZ}:${MESH_COLLISION_CELL_SIZE_METERS}`,
+      meshIndex,
+      debugKind: source.debugKind,
+      isGroundSurface: false,
+      triangles: null,
+      triangleCount: 0,
+      colliderBoxes: group.boxes,
+      minX,
+      maxX,
+      minZ,
+      maxZ,
+    }
+  })
 }
 
 function appendBucketChunks(
@@ -799,6 +913,14 @@ function advanceSubdivision(state: MeshCollisionHostState, budget: number): numb
       state.buckets = null
       continue
     }
+    if (source.debugKind === 'road-boundary') {
+      state.chunks.push(...createRoadBoundaryProxyChunks(source, state.sourceIndex))
+      state.sourceIndex += 1
+      state.triangleCursor = 0
+      state.buckets = null
+      remaining -= 1
+      continue
+    }
     if (!source.needsSubdivision) {
       state.chunks.push(createWholeMeshChunk(source, state.sourceIndex))
       state.sourceIndex += 1
@@ -832,6 +954,15 @@ function buildChunkShape(
   source: MeshCollisionMeshSource,
   chunk: MeshCollisionChunk,
 ): MeshCollisionChunkShape | null {
+  if (source.debugKind === 'road-boundary') {
+    if (!chunk.colliderBoxes || chunk.colliderBoxes.length === 0) {
+      return null
+    }
+    return {
+      kind: 'static-box-compound',
+      boxes: chunk.colliderBoxes,
+    }
+  }
   const triangleOrdinals = chunk.triangles
   const triangleCount = triangleOrdinals ? triangleOrdinals.length : source.triangleCount
   if (triangleCount <= 0) {
@@ -1351,6 +1482,9 @@ export function syncMeshCollisionRuntimeHost(
     }
     const instance = createChunkInstance(deps, state.sourceId, sourceObject, source, candidate.chunk)
     if (!instance) {
+      // Keep the bootstrap gate closed instead of silently starting with a
+      // missing containment collider.
+      pendingChunkCount += 1
       continue
     }
     state.instances.set(candidate.chunk.key, instance)

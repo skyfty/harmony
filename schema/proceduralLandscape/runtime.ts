@@ -2294,22 +2294,41 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   // ---- World-anchored full forest ----
 
   function visibleForestHeightAt(x: number, z: number): number | null {
-    if (demRoadbedTarget && demRoadbedTarget.distanceAt(x, z) <= demRoadbedTarget.meshHalfWidth) {
-      return demRoadbedTarget.heightAt(x, z) + 0.01
+    if (!grid) {
+      return null
     }
-    return grid?.sampleHeight(x, z) ?? null
+    if (!usesDemTerrain()) {
+      return grid.sampleHeight(x, z)
+    }
+    // Vegetation must use the same flattened/roadbed-aware surface as the
+    // rendered DEM. Sampling the raw grid here leaves plants suspended over
+    // the Floor flattening transition.
+    return sampleVisibleDemSurfaceHeightAt(
+      grid,
+      demRoadbedTarget,
+      x,
+      z,
+      appliedTerrainFlatteningTargets,
+    )
   }
 
   function visibleForestNormalAt(x: number, z: number): { x: number; y: number; z: number } | null {
-    if (!demRoadbedTarget || demRoadbedTarget.distanceAt(x, z) > demRoadbedTarget.meshHalfWidth) {
-      const normal = grid?.sampleNormal(x, z)
+    if (!grid) {
+      return null
+    }
+    if (!usesDemTerrain()) {
+      const normal = grid.sampleNormal(x, z)
       return normal ? { x: normal.x, y: normal.y, z: normal.z } : null
     }
-    const step = Math.max(0.75, (grid?.cellSize ?? 30) * 0.05)
-    const dx = (demRoadbedTarget.heightAt(x + step, z) - demRoadbedTarget.heightAt(x - step, z)) / (2 * step)
-    const dz = (demRoadbedTarget.heightAt(x, z + step) - demRoadbedTarget.heightAt(x, z - step)) / (2 * step)
-    const inverseLength = 1 / Math.hypot(dx, 1, dz)
-    return { x: -dx * inverseLength, y: inverseLength, z: -dz * inverseLength }
+    const normal = sampleVisibleDemSurfaceNormalAt(
+      grid,
+      demRoadbedTarget,
+      x,
+      z,
+      Math.max(0.75, grid.cellSize * 0.05),
+      appliedTerrainFlatteningTargets,
+    )
+    return normal ? { x: normal.x, y: normal.y, z: normal.z } : null
   }
 
   function disposeNearCardLayers(): void {
@@ -3644,7 +3663,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       collisionMaterial.visible = false
       const collisionMesh = new THREE.Mesh(collision.geometry, collisionMaterial)
       collisionMesh.name = `slowroads-road-boundary-collision-${hooks.nodeId}`
-      markProceduralLandscapeRoadBoundaryCollision(collisionMesh)
+      markProceduralLandscapeRoadBoundaryCollision(collisionMesh, collision.colliderBoxes)
       tagArtifact(collisionMesh)
       hostObject.add(collisionMesh)
       roadBoundaryCollisionMesh = collisionMesh
