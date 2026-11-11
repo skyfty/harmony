@@ -408,9 +408,11 @@ import { collectTerrainMeshSources } from '@schema/proceduralLandscape/terrainSa
 import {
   createSlowroadsEnvironmentRuntime,
   getSlowroadsSceneFogFar,
+  setSlowroadsSceneViewDistanceScale,
   type SlowroadsEnvironmentRuntime,
 } from '@schema/slowroads/render/environmentRuntime'
 import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
+import { resolveSceneViewDistanceScale } from '@schema/slowroads/core/environment'
 import { resolveViewportCameraFar } from './viewportCameraFar'
 import { PlacementSurfaceTargetIndex } from '@/utils/placementSurfaceTargetIndex'
 import { intersectRayWithPlacementHeightfield } from '@/utils/placementHeightfieldRaycast'
@@ -15484,10 +15486,15 @@ async function restoreGroundScatterGuarded(): Promise<void> {
 
 watch(isSceneReady, (ready) => {
   if (!ready) {
+    setSlowroadsSceneViewDistanceScale(1)
     return
   }
 
   syncSceneGraph()
+  applySceneSourceAssetViewDistanceScale()
+  ensureSlowroadsEnvironmentRuntime()
+  slowroadsEnvironment?.update(0)
+  syncCameraFarToSceneFog()
   void restoreGroundAllGuarded()
 })
 
@@ -16011,6 +16018,72 @@ function getViewportSelectionFocusIds(): string[] {
     ...sceneStore.selectedNodeIds,
     props.selectedNodeId ?? null,
   ].filter((id): id is string => typeof id === 'string' && id.trim().length > 0))]
+}
+
+const sourceAssetViewDistanceBoundsScratch = new THREE.Box3()
+const sourceAssetViewDistanceSizeScratch = new THREE.Vector3()
+
+/**
+ * 导入的大尺度资源没有 proceduralLandscape 组件来下发雾尺度。按顶层资源根的
+ * 世界水平对角线自动拟合视距；有程序化地形时仍由该组件全权管理。
+ */
+function applySceneSourceAssetViewDistanceScale(): void {
+  const nodeById = new Map<string, SceneNode>()
+  const walk = (nodes: SceneNode[]) => {
+    nodes.forEach((node) => {
+      nodeById.set(node.id, node)
+      if (node.children?.length) {
+        walk(node.children)
+      }
+    })
+  }
+  walk(sceneStore.nodes)
+  const hasProceduralLandscape = Array.from(nodeById.values()).some((node) => {
+    const component = node.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<unknown>
+      | undefined
+    return Boolean(component && component.enabled !== false)
+  })
+  if (hasProceduralLandscape) {
+    return
+  }
+
+  const parentIdMap = buildParentIdMap(sceneStore.nodes)
+  let maxHorizontalDiagonal = 0
+  rootGroup.updateMatrixWorld(true)
+  nodeById.forEach((node, nodeId) => {
+    const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+    if (!sourceAssetId) {
+      return
+    }
+    const visited = new Set<string>()
+    let parentId = parentIdMap.get(nodeId) ?? null
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId)
+      const parentNode = nodeById.get(parentId)
+      const parentSourceAssetId = typeof parentNode?.sourceAssetId === 'string'
+        ? parentNode.sourceAssetId.trim()
+        : ''
+      if (parentSourceAssetId === sourceAssetId) {
+        return
+      }
+      parentId = parentIdMap.get(parentId) ?? null
+    }
+    const object = objectMap.get(nodeId) ?? null
+    if (!object) {
+      return
+    }
+    sourceAssetViewDistanceBoundsScratch.setFromObject(object)
+    if (sourceAssetViewDistanceBoundsScratch.isEmpty()) {
+      return
+    }
+    sourceAssetViewDistanceBoundsScratch.getSize(sourceAssetViewDistanceSizeScratch)
+    maxHorizontalDiagonal = Math.max(
+      maxHorizontalDiagonal,
+      Math.hypot(sourceAssetViewDistanceSizeScratch.x, sourceAssetViewDistanceSizeScratch.z),
+    )
+  })
+  setSlowroadsSceneViewDistanceScale(resolveSceneViewDistanceScale(maxHorizontalDiagonal))
 }
 
 function syncCameraClipPlanes(params: { target: THREE.Vector3; radiusHint?: number | null }) {
@@ -26797,6 +26870,7 @@ function syncSceneGraph() {
 }
 
 function disposeSceneNodes() {
+  setSlowroadsSceneViewDistanceScale(1)
   clearOutlineSelectionTargets()
   instanceLayoutMatrixCache.clear()
   clearLightHelpers()

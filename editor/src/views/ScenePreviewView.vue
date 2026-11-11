@@ -198,10 +198,12 @@ import { setGroundTextureSourceResolver } from '@schema/groundTextureSourceResol
 import {
 	createSlowroadsEnvironmentRuntime,
 	getSlowroadsSceneFogFar,
+	setSlowroadsSceneViewDistanceScale,
 	type SlowroadsEnvironmentRuntime,
 } from '@schema/slowroads/render/environmentRuntime'
 import {
 	resolveCameraFarForFogDistance,
+	resolveSceneViewDistanceScale,
 	TIME_OF_DAY_LABELS,
 	TIME_OF_DAY_ORDER,
 	WEATHER_LABELS,
@@ -2386,6 +2388,8 @@ const SCENE_CAMERA_FAR_MAX = 30000
  * 固定 far=2000m 时只看到 2km 内的雾，地形轮廓直接切在天穹平面上）。
  */
 const SCENE_CAMERA_FAR_FOG_MARGIN = 1.25
+const sourceAssetViewDistanceBoundsScratch = new THREE.Box3()
+const sourceAssetViewDistanceSizeScratch = new THREE.Vector3()
 const tempDirection = new THREE.Vector3()
 const landscapeFrameCameraDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
@@ -13297,7 +13301,7 @@ function syncInstancedMatrixUploadEstimateForFrame(): void {
 function syncCameraFarToSceneFog(activeCamera: THREE.PerspectiveCamera): void {
 	const far = resolveCameraFarForFogDistance({
 		fogFar: getSlowroadsSceneFogFar(),
-		fallbackFar: DEFAULT_SCENE_CAMERA_FAR,
+		fallbackFar: resolveCameraFarBase(),
 		maxFar: SCENE_CAMERA_FAR_MAX,
 		marginFactor: SCENE_CAMERA_FAR_FOG_MARGIN,
 	})
@@ -13306,6 +13310,15 @@ function syncCameraFarToSceneFog(activeCamera: THREE.PerspectiveCamera): void {
 	}
 	activeCamera.far = far
 	activeCamera.updateProjectionMatrix()
+}
+
+/**
+ * 视点保存了自己的远裁剪设置；它作为下限参与雾距计算，不能被普通预览基准覆盖。
+ */
+function resolveCameraFarBase(): number {
+	const targetId = cameraViewState.mode === 'watching' ? cameraViewState.watchTargetId : null
+	const viewPointProps = resolveViewPointPropsForNodeId(targetId)
+	return viewPointProps?.cameraFar ?? DEFAULT_SCENE_CAMERA_FAR
 }
 
 function startAnimationLoop() {
@@ -13403,6 +13416,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetSkinRuntime()
 	clearBehaviorDelayTimers()
 	clearBehaviorSounds()
+	setSlowroadsSceneViewDistanceScale(1)
 	currentScenePreviewEnvironmentSettings = null
 	const groundCollisionHostObject = cachedGroundNodeId ? (nodeObjectMap.get(cachedGroundNodeId) ?? null) : null
 	void syncGroundCache(null)
@@ -17269,6 +17283,62 @@ function attachBuiltRootToPreview(
 	}
 }
 
+function isTopLevelSourceAssetNode(node: SceneNode): boolean {
+	const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+	if (!sourceAssetId) {
+		return false
+	}
+	const visited = new Set<string>()
+	let parentId = resolveParentNodeId(node.id)
+	while (parentId && !visited.has(parentId)) {
+		visited.add(parentId)
+		const parent = resolveNodeById(parentId)
+		const parentSourceAssetId = typeof parent?.sourceAssetId === 'string'
+			? parent.sourceAssetId.trim()
+			: ''
+		if (parentSourceAssetId === sourceAssetId) {
+			return false
+		}
+		parentId = resolveParentNodeId(parentId)
+	}
+	return true
+}
+
+/**
+ * 导入的大尺度资源没有 proceduralLandscape 组件来下发雾尺度。按顶层资源根的
+ * 世界水平对角线自动拟合视距，方向变化时仍能覆盖斜向远景。
+ */
+function applySceneSourceAssetViewDistanceScale(
+	document: SceneJsonExportDocument,
+	hasProceduralLandscape: boolean,
+): number {
+	if (hasProceduralLandscape) {
+		return 1
+	}
+	let maxHorizontalDiagonal = 0
+	document.nodes.forEach((node) => {
+		if (!isTopLevelSourceAssetNode(node)) {
+			return
+		}
+		const object = nodeObjectMap.get(node.id) ?? null
+		if (!object) {
+			return
+		}
+		sourceAssetViewDistanceBoundsScratch.setFromObject(object)
+		if (sourceAssetViewDistanceBoundsScratch.isEmpty()) {
+			return
+		}
+		sourceAssetViewDistanceBoundsScratch.getSize(sourceAssetViewDistanceSizeScratch)
+		maxHorizontalDiagonal = Math.max(
+			maxHorizontalDiagonal,
+			Math.hypot(sourceAssetViewDistanceSizeScratch.x, sourceAssetViewDistanceSizeScratch.z),
+		)
+	})
+	const scale = resolveSceneViewDistanceScale(maxHorizontalDiagonal)
+	setSlowroadsSceneViewDistanceScale(scale)
+	return scale
+}
+
 async function applyInitialDocumentGraph(
 	document: SceneJsonExportDocument,
 	previewRoot: THREE.Object3D,
@@ -17293,6 +17363,8 @@ async function applyInitialDocumentGraph(
 
 	applyPhysicsEnvironmentSettings(document.environment ?? DEFAULT_ENVIRONMENT_SETTINGS)
 	const landscapeNodeIds = collectActiveProceduralLandscapeNodeIds(document.nodes)
+	previewRoot.updateMatrixWorld(true)
+	applySceneSourceAssetViewDistanceScale(document, landscapeNodeIds.length > 0)
 	landscapeBuildPumpActive = landscapeNodeIds.length > 0
 	const landscapeBuildPump = landscapeNodeIds.length > 0
 		? window.setInterval(() => {
@@ -17343,7 +17415,9 @@ async function applyInitialDocumentGraph(
 	initializeLazyPlaceholders(document)
 	const protagonistCameraActive = !vehicleDriveState.active
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
+	ensureSlowroadsEnvironmentRuntime()
 	void applyEnvironmentSettingsToScene(environmentSettings)
+	slowroadsEnvironment?.update(0)
 	applyRendererShadowSetting()
 }
 

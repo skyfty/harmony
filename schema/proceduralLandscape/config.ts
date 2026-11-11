@@ -6,6 +6,7 @@ import {
   type RoadStyleId,
 } from './roadStyle'
 import { clampRoadWaypoints, type RoadWaypoint } from './roadWaypoints'
+import { resolveSceneViewDistanceScale } from '../slowroads/core/environment'
 
 export type ProceduralLandscapeEnvironment = 'editor' | 'preview' | 'viewer'
 export type ProceduralLandscapeQuality = 'auto' | 'low' | 'medium' | 'high'
@@ -957,7 +958,7 @@ export function resolveSurfaceViewDistanceScale(
   if (props.surface.viewDistanceScale != null) {
     return clamp(props.surface.viewDistanceScale, 1, 16)
   }
-  return clamp(Math.max(1, horizontalSizeMeters) / 3000, 1, 16)
+  return resolveSceneViewDistanceScale(horizontalSizeMeters)
 }
 
 /**

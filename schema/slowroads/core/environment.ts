@@ -131,6 +131,29 @@ export const ENVIRONMENT_SKY_DISTANCE = ENVIRONMENT_VIEW_DISTANCE * 2
 /** 固定晴空底色（lab `SKY_COLOR`）：渲染器 clear color / 水面 uSkyColor 共用。 */
 export const SLOWROADS_SKY_COLOR = 0xc9dcee
 
+/**
+ * Slow Roads 官方视距按约 1km 的世界尺度调参；地面尺寸超过约 3km 后按比例
+ * 扩展雾距，避免大尺度 DEM / 导入地形在近处就被雾色完全吞没。
+ */
+export const SLOWROADS_SCENE_VIEW_DISTANCE_BASE_METERS = 3000
+export const SLOWROADS_SCENE_VIEW_DISTANCE_MAX_SCALE = 16
+
+/**
+ * 把场景水平覆盖距离换算为 Slow Roads 视距倍率。
+ *
+ * `horizontalSizeMeters` 可以是地形包围盒的最长边或水平对角线。调用方应根据
+ * 场景语义选择：程序化地形沿用最长边；导入资源用对角线可覆盖斜向观察。
+ */
+export function resolveSceneViewDistanceScale(horizontalSizeMeters: number): number {
+  if (!Number.isFinite(horizontalSizeMeters) || horizontalSizeMeters <= 0) {
+    return 1
+  }
+  return Math.min(
+    SLOWROADS_SCENE_VIEW_DISTANCE_MAX_SCALE,
+    Math.max(1, horizontalSizeMeters / SLOWROADS_SCENE_VIEW_DISTANCE_BASE_METERS),
+  )
+}
+
 export interface ResolvedFogParams {
   near: number
   far: number

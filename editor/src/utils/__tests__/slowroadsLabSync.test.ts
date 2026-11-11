@@ -21,6 +21,7 @@ import {
   resolveCameraFarForFogDistance,
   resolveFogDepthBlend,
   resolveFogParams,
+  resolveSceneViewDistanceScale,
   resolveSkyFogParams,
 } from '@schema/slowroads/core/environment'
 import { SEASON_PARAMS } from '@schema/slowroads/core/seasonParams'
@@ -330,6 +331,14 @@ describe('procedural landscape props (full refactor)', () => {
     expect(manuallyCapped.surface.viewDistanceScale).toBe(16)
   })
 
+  it('large imported scenes share the same bounded view-distance scale', () => {
+    expect(resolveSceneViewDistanceScale(0)).toBe(1)
+    expect(resolveSceneViewDistanceScale(Number.NaN)).toBe(1)
+    expect(resolveSceneViewDistanceScale(3000)).toBe(1)
+    expect(resolveSceneViewDistanceScale(42000)).toBeCloseTo(14, 6)
+    expect(resolveSceneViewDistanceScale(200000)).toBe(16)
+  })
+
   it('camera far follows the scene fog distance so fog saturates before clipping', () => {
     const base = { fallbackFar: 2000, maxFar: 30000 }
     // 环境运行时未生效（雾距 0）/无效值：退回兜底 far，小场景观感不变。
@@ -348,6 +357,17 @@ describe('procedural landscape props (full refactor)', () => {
     // 雾尺度上限 12×（雾远端 24km）仍在上限余量内；超限夹紧。
     expect(resolveCameraFarForFogDistance({ ...base, fogFar: 24000 })).toBe(30000)
     expect(resolveCameraFarForFogDistance({ ...base, fogFar: 40000 })).toBe(30000)
+    // 视点自己的 far 作为下限参与计算，不会被普通预览的 2000m 基准覆盖。
+    expect(resolveCameraFarForFogDistance({
+      ...base,
+      fallbackFar: 5000,
+      fogFar: 14000,
+    })).toBeCloseTo(17500, 6)
+    expect(resolveCameraFarForFogDistance({
+      ...base,
+      fallbackFar: 20000,
+      fogFar: 0,
+    })).toBe(20000)
     // 小程序端兜底 1000m：无地形场景 far 仍是 1250m（≈ 现状），只有大地形才放大。
     const viewerBase = { fallbackFar: 1000, maxFar: 30000 }
     expect(resolveCameraFarForFogDistance({ ...viewerBase, fogFar: 0 })).toBe(1000)

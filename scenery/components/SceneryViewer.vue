@@ -1206,10 +1206,12 @@ import {
 import {
   createSlowroadsEnvironmentRuntime,
   getSlowroadsSceneFogFar,
+  setSlowroadsSceneViewDistanceScale,
   type SlowroadsEnvironmentRuntime,
 } from '@harmony/schema/slowroads/render/environmentRuntime';
 import {
   resolveCameraFarForFogDistance,
+  resolveSceneViewDistanceScale,
   TIME_OF_DAY_LABELS,
   TIME_OF_DAY_ORDER,
   WEATHER_LABELS,
@@ -2415,6 +2417,54 @@ function applyNominateOverridesForCurrentScene(): void {
     externalStateMap,
   );
   syncInstancedProxyVisibilityAfterNominate();
+}
+
+/**
+ * 大尺度 GLB 环境没有 proceduralLandscape 组件来下发雾尺度。按顶层资源根的
+ * 世界水平对角线自动扩展视距；有程序化地形时仍由该组件管理。
+ */
+function applySceneSourceAssetViewDistanceScale(document: SceneJsonExportDocument): void {
+  if (collectActiveProceduralLandscapeNodeIdsFromNodes(document.nodes).length > 0) {
+    return;
+  }
+  let maxHorizontalDiagonal = 0;
+  const bounds = new THREE.Box3();
+  const size = new THREE.Vector3();
+  for (const node of document.nodes) {
+    const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+    if (!sourceAssetId) {
+      continue;
+    }
+    const visited = new Set<string>();
+    let parentId = resolveParentNodeId(node.id);
+    let nestedInSameAsset = false;
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      const parentNode = resolveNodeById(parentId);
+      const parentSourceAssetId = typeof parentNode?.sourceAssetId === 'string'
+        ? parentNode.sourceAssetId.trim()
+        : '';
+      if (parentSourceAssetId === sourceAssetId) {
+        nestedInSameAsset = true;
+        break;
+      }
+      parentId = resolveParentNodeId(parentId);
+    }
+    if (nestedInSameAsset) {
+      continue;
+    }
+    const object = nodeObjectMap.get(node.id) ?? null;
+    if (!object) {
+      continue;
+    }
+    bounds.setFromObject(object);
+    if (bounds.isEmpty()) {
+      continue;
+    }
+    bounds.getSize(size);
+    maxHorizontalDiagonal = Math.max(maxHorizontalDiagonal, Math.hypot(size.x, size.z));
+  }
+  setSlowroadsSceneViewDistanceScale(resolveSceneViewDistanceScale(maxHorizontalDiagonal));
 }
 
 /**
@@ -26101,6 +26151,9 @@ async function mountGraphAndSyncSubsystems(
     active: true,
   });
   indexSceneObjects(root);
+  applySceneSourceAssetViewDistanceScale(payload.document);
+  ensureSlowroadsEnvironmentRuntime();
+  slowroadsEnvironment?.update(0);
   applyWeChatShadowPolicy(root);
   refreshMultiuserNodeReferences(payload.document);
   collectNetworkSyncNodeEntries(payload.document);
@@ -26830,6 +26883,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     preferLocalFileTextures: isWeChatMiniProgram,
   });
   latestControlNodeRestoreSnapshot = null;
+  setSlowroadsSceneViewDistanceScale(1);
   refreshDynamicGroundCache(currentDocument);
   setActiveMultiuserRuntimeBridge(multiuserRuntimeBridge);
   setActiveMultiuserSceneId(payload.document.id ?? null);
