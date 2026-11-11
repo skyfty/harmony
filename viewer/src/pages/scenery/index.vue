@@ -8,6 +8,7 @@
       :nominate-state-map="nominateStateMap"
       :create-physics-bridge="createSceneryPhysicsBridge"
       :default-steer-identifier="selectedVehicleIdentifier"
+      :actor-resolution-mode="actorResolutionMode"
       :controllable-assets="controllableAssets"
       :server-asset-base-url="serverAssetBaseUrl"
       :initial-punched-node-ids="initialPunchedNodeIds"
@@ -50,6 +51,7 @@ const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const resolvedPhysicsEngine = ref<'ammo' | 'cannon' | 'auto' | undefined>(undefined);
 const loadError = ref<string>('');
 const pageReady = ref(false);
+const actorResolutionMode = ref<'player' | 'local-debug'>('local-debug');
 
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
@@ -157,11 +159,11 @@ async function loadControllableAssets(): Promise<void> {
     const assets = await listControllableAssets({ ownedOnly: true });
     controllableAssets.value = assets as ExternalControllableAsset[];
     if (!controllableAssets.value.length) {
-      loadError.value = '未找到可实例化资产，请先确认当前账号已拥有 vehicle 或 character 资产';
+      loadError.value = '未找到玩家可实例化资产；如需无账号调试，请使用 actorMode=local-debug。';
     }
   } catch {
     controllableAssets.value = [];
-    loadError.value = '可实例化资产加载失败，无法进入场景';
+    loadError.value = '可实例化资产加载失败；如需无账号调试，请使用 actorMode=local-debug。';
   }
 }
 
@@ -177,10 +179,15 @@ onLoad((query: Record<string, unknown> | undefined) => {
     sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
     selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string' ? record.vehicleIdentifier : 'car1';
     resolvedPhysicsEngine.value = resolvePhysicsEngineFromQuery(record.physicsEngine);
+    actorResolutionMode.value = record.actorMode === 'player' ? 'player' : 'local-debug';
 
-    await loadControllableAssets();
-    if (loadError.value) {
-      return;
+    if (actorResolutionMode.value === 'player') {
+      await loadControllableAssets();
+      if (loadError.value) {
+        return;
+      }
+    } else {
+      controllableAssets.value = [];
     }
 
     await loadPunchProgress();

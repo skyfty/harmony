@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import { orientCompiledStaticMeshTrianglesTowardPositiveZ } from '@schema/compiledStaticMesh'
+import { applyMaterialOverrides } from '@schema/material'
+import type { SceneNodeMaterial } from '@schema/core'
 import {
   buildSurfaceImageDecalGeometry,
   markSurfaceImageRuntimeOwnership,
@@ -283,6 +285,73 @@ describe('surface image decal geometry', () => {
 
     const normalNode = { userData: {}, materials: [] } as unknown as typeof surfaceNode
     expect(resolvePreviewSurfaceMaterialOptions(normalNode, baseOptions)).toBe(baseOptions)
+  })
+
+  it('keeps authored transparent and physical-transmission node materials visible', () => {
+    const baseOptions = { hideTransparentMaterials: true }
+    const transparentNode = {
+      userData: {},
+      materials: [{ transparent: true }],
+    } as unknown as Parameters<typeof resolvePreviewSurfaceMaterialOptions>[0]
+    const transmissionNode = {
+      userData: {},
+      materials: [{
+        type: 'MeshPhysicalMaterial',
+        transparent: false,
+        transmission: 0.85,
+      }],
+    } as unknown as Parameters<typeof resolvePreviewSurfaceMaterialOptions>[0]
+
+    expect(resolvePreviewSurfaceMaterialOptions(transparentNode, baseOptions)).toEqual({
+      hideTransparentMaterials: false,
+    })
+    expect(resolvePreviewSurfaceMaterialOptions(transmissionNode, baseOptions)).toEqual({
+      hideTransparentMaterials: false,
+    })
+  })
+
+  it('renders a physical glass mesh through the Preview override path', () => {
+    const glass: SceneNodeMaterial = {
+      id: 'glass-material',
+      name: 'Glass',
+      type: 'MeshPhysicalMaterial',
+      color: '#f4fbff',
+      transparent: true,
+      opacity: 0.42,
+      side: 'double',
+      wireframe: false,
+      metalness: 0,
+      roughness: 0.08,
+      transmission: 0.85,
+      thickness: 0.08,
+      ior: 1.45,
+      clearcoat: 0.1,
+      clearcoatRoughness: 0.04,
+      attenuationColor: '#ffffff',
+      attenuationDistance: 4,
+      emissive: '#000000',
+      emissiveIntensity: 0,
+      aoStrength: 1,
+      envMapIntensity: 0.65,
+      textures: {},
+    }
+    const node = {
+      userData: {},
+      materials: [glass],
+    } as Parameters<typeof resolvePreviewSurfaceMaterialOptions>[0]
+    const options = resolvePreviewSurfaceMaterialOptions(node, {
+      hideTransparentMaterials: true,
+    })
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshStandardMaterial({ transparent: true }),
+    )
+
+    applyMaterialOverrides(mesh, [glass], options)
+
+    expect(mesh.visible).toBe(true)
+    expect(mesh.material).toBeInstanceOf(THREE.MeshPhysicalMaterial)
+    expect((mesh.material as THREE.MeshPhysicalMaterial).transmission).toBe(0.85)
   })
 
   it('attaches to the target, nearest capable ancestor, or world with deterministic fallback', () => {

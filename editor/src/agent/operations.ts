@@ -2,8 +2,14 @@ import * as THREE from 'three'
 import {
   createPrimitiveMesh,
   isGeometryType,
+  type FloorDynamicMesh,
+  type FloorVertex2D,
+  type SceneMaterialProps,
+  type SceneMaterialTextureSlot,
+  type SceneMaterialType,
   type SceneNode,
   type SceneNodeComponentState,
+  type SceneNodeMaterial,
   type Vector3Like,
 } from '@schema/core'
 import { componentManager } from '@schema/components'
@@ -39,6 +45,78 @@ export type AgentOperationContext = {
   captureScreenshot?: () => Promise<Blob | null>
 }
 
+const HARMONY_MATERIAL_TYPES: readonly SceneMaterialType[] = [
+  'MeshBasicMaterial',
+  'MeshNormalMaterial',
+  'MeshLambertMaterial',
+  'MeshMatcapMaterial',
+  'MeshPhongMaterial',
+  'MeshToonMaterial',
+  'MeshStandardMaterial',
+  'MeshPhysicalMaterial',
+]
+const HARMONY_MATERIAL_TYPE_SET = new Set<string>(HARMONY_MATERIAL_TYPES)
+const HARMONY_MATERIAL_SIDES = new Set<string>(['front', 'back', 'double'])
+const HARMONY_MATERIAL_TEXTURE_SLOTS: readonly SceneMaterialTextureSlot[] = [
+  'albedo',
+  'normal',
+  'metalness',
+  'roughness',
+  'ao',
+  'emissive',
+  'displacement',
+]
+const HARMONY_MATERIAL_TEXTURE_SLOT_SET = new Set<string>(HARMONY_MATERIAL_TEXTURE_SLOTS)
+const HARMONY_MATERIAL_PATCH_KEYS = new Set<string>([
+  'color',
+  'transparent',
+  'opacity',
+  'alphaTest',
+  'side',
+  'wireframe',
+  'metalness',
+  'roughness',
+  'specular',
+  'shininess',
+  'transmission',
+  'thickness',
+  'ior',
+  'clearcoat',
+  'clearcoatRoughness',
+  'attenuationColor',
+  'attenuationDistance',
+  'emissive',
+  'emissiveIntensity',
+  'aoStrength',
+  'envMapIntensity',
+  'textures',
+  'textureOverrides',
+])
+const HARMONY_MATERIAL_BOOLEAN_KEYS = new Set<string>(['transparent', 'wireframe'])
+const HARMONY_MATERIAL_COLOR_KEYS = new Set<string>([
+  'color',
+  'specular',
+  'attenuationColor',
+  'emissive',
+])
+const HARMONY_MATERIAL_UNIT_RANGE_KEYS = new Set<string>([
+  'opacity',
+  'alphaTest',
+  'metalness',
+  'roughness',
+  'transmission',
+  'clearcoat',
+  'clearcoatRoughness',
+])
+const HARMONY_MATERIAL_NON_NEGATIVE_KEYS = new Set<string>([
+  'shininess',
+  'thickness',
+  'attenuationDistance',
+  'emissiveIntensity',
+  'aoStrength',
+  'envMapIntensity',
+])
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
@@ -60,6 +138,118 @@ function toVector3(value: Vector3Like): THREE.Vector3 {
 
 function toPlainVector(value: THREE.Vector3): Vector3Like {
   return { x: value.x, y: value.y, z: value.z }
+}
+
+function validateMaterialType(value: unknown, label: string): asserts value is SceneMaterialType {
+  if (typeof value !== 'string' || !HARMONY_MATERIAL_TYPE_SET.has(value)) {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      `${label} must be one of: ${HARMONY_MATERIAL_TYPES.join(', ')}`,
+    )
+  }
+}
+
+function validateMaterialTextureMap(value: unknown, label: string): void {
+  if (!isRecord(value)) {
+    throw new AgentBridgeError('VALIDATION_FAILED', `${label} must be an object`)
+  }
+  Object.entries(value).forEach(([slot, texture]) => {
+    if (!HARMONY_MATERIAL_TEXTURE_SLOT_SET.has(slot)) {
+      throw new AgentBridgeError('VALIDATION_FAILED', `${label}.${slot} is not a texture slot`)
+    }
+    if (texture === null) {
+      return
+    }
+    if (!isRecord(texture) || typeof texture.assetId !== 'string' || !texture.assetId.trim()) {
+      throw new AgentBridgeError(
+        'VALIDATION_FAILED',
+        `${label}.${slot} must be null or a texture reference with a non-empty assetId`,
+      )
+    }
+    if (texture.settings !== undefined && !isRecord(texture.settings)) {
+      throw new AgentBridgeError('VALIDATION_FAILED', `${label}.${slot}.settings must be an object`)
+    }
+  })
+}
+
+function validateMaterialPatch(
+  value: unknown,
+  label: string,
+): asserts value is Partial<SceneMaterialProps> & {
+  textureOverrides?: SceneMaterialTextureSlot[]
+} {
+  if (!isRecord(value)) {
+    throw new AgentBridgeError('VALIDATION_FAILED', `${label} must be an object`)
+  }
+  Object.entries(value).forEach(([key, entry]) => {
+    if (!HARMONY_MATERIAL_PATCH_KEYS.has(key)) {
+      throw new AgentBridgeError('VALIDATION_FAILED', `${label}.${key} is not a supported material property`)
+    }
+    if (HARMONY_MATERIAL_BOOLEAN_KEYS.has(key)) {
+      if (typeof entry !== 'boolean') {
+        throw new AgentBridgeError('VALIDATION_FAILED', `${label}.${key} must be a boolean`)
+      }
+      return
+    }
+    if (HARMONY_MATERIAL_COLOR_KEYS.has(key)) {
+      if (typeof entry !== 'string' || !entry.trim()) {
+        throw new AgentBridgeError('VALIDATION_FAILED', `${label}.${key} must be a non-empty color string`)
+      }
+      return
+    }
+    if (key === 'side') {
+      if (typeof entry !== 'string' || !HARMONY_MATERIAL_SIDES.has(entry)) {
+        throw new AgentBridgeError('VALIDATION_FAILED', `${label}.side must be front, back, or double`)
+      }
+      return
+    }
+    if (key === 'textures') {
+      validateMaterialTextureMap(entry, `${label}.textures`)
+      return
+    }
+    if (key === 'textureOverrides') {
+      if (!Array.isArray(entry)) {
+        throw new AgentBridgeError('VALIDATION_FAILED', `${label}.textureOverrides must be an array`)
+      }
+      entry.forEach((slot, index) => {
+        if (typeof slot !== 'string' || !HARMONY_MATERIAL_TEXTURE_SLOT_SET.has(slot)) {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            `${label}.textureOverrides[${index}] is not a texture slot`,
+          )
+        }
+      })
+      return
+    }
+    if (typeof entry !== 'number' || !Number.isFinite(entry)) {
+      throw new AgentBridgeError('VALIDATION_FAILED', `${label}.${key} must be a finite number`)
+    }
+    if (HARMONY_MATERIAL_UNIT_RANGE_KEYS.has(key) && (entry < 0 || entry > 1)) {
+      throw new AgentBridgeError('VALIDATION_FAILED', `${label}.${key} must be between 0 and 1`)
+    }
+    if (HARMONY_MATERIAL_NON_NEGATIVE_KEYS.has(key) && entry < 0) {
+      throw new AgentBridgeError('VALIDATION_FAILED', `${label}.${key} must be non-negative`)
+    }
+    if (key === 'ior' && (entry < 1 || entry > 3)) {
+      throw new AgentBridgeError('VALIDATION_FAILED', `${label}.ior must be between 1 and 3`)
+    }
+  })
+}
+
+function findNodeMaterialOrThrow(
+  store: SceneStore,
+  nodeId: string,
+  nodeMaterialId: string,
+): SceneNodeMaterial {
+  const node = findNodeOrThrow(store, nodeId)
+  const material = node.materials?.find((entry) => entry.id === nodeMaterialId)
+  if (!material) {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      `Node ${nodeId} does not have material slot ${nodeMaterialId}`,
+    )
+  }
+  return material
 }
 
 function findNodeOrThrow(store: SceneStore, nodeId: string): SceneNode {
@@ -219,6 +409,115 @@ function readOptionalNumber(
     )
   }
   return value
+}
+
+function readFloorVertices(value: unknown): FloorVertex2D[] {
+  if (!Array.isArray(value) || value.length < 3 || value.length > 512) {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      'vertices must be an array containing between 3 and 512 points',
+    )
+  }
+  const vertices = value.map((entry, index) => {
+    if (!Array.isArray(entry) || entry.length !== 2) {
+      throw new AgentBridgeError(
+        'VALIDATION_FAILED',
+        `vertices[${index}] must be an [x, z] pair`,
+      )
+    }
+    const x = entry[0]
+    const z = entry[1]
+    if (typeof x !== 'number' || !Number.isFinite(x)
+      || typeof z !== 'number' || !Number.isFinite(z)) {
+      throw new AgentBridgeError(
+        'VALIDATION_FAILED',
+        `vertices[${index}] must contain finite x and z coordinates`,
+      )
+    }
+    return [x, z] as FloorVertex2D
+  })
+
+  const epsilon = 1e-7
+  for (let index = 0; index < vertices.length; index += 1) {
+    const current = vertices[index]!
+    for (let otherIndex = index + 1; otherIndex < vertices.length; otherIndex += 1) {
+      const other = vertices[otherIndex]!
+      if (Math.hypot(current[0] - other[0], current[1] - other[1]) <= epsilon) {
+        throw new AgentBridgeError(
+          'VALIDATION_FAILED',
+          `vertices[${index}] and vertices[${otherIndex}] are duplicate points`,
+        )
+      }
+    }
+  }
+
+  let doubleArea = 0
+  for (let index = 0; index < vertices.length; index += 1) {
+    const current = vertices[index]!
+    const next = vertices[(index + 1) % vertices.length]!
+    doubleArea += current[0] * next[1] - next[0] * current[1]
+  }
+  if (Math.abs(doubleArea) <= epsilon) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'vertices define a degenerate polygon')
+  }
+
+  const cross = (a: FloorVertex2D, b: FloorVertex2D, c: FloorVertex2D) =>
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+  const segmentsIntersect = (
+    a: FloorVertex2D,
+    b: FloorVertex2D,
+    c: FloorVertex2D,
+    d: FloorVertex2D,
+  ) => {
+    const abC = cross(a, b, c)
+    const abD = cross(a, b, d)
+    const cdA = cross(c, d, a)
+    const cdB = cross(c, d, b)
+    return ((abC > epsilon && abD < -epsilon) || (abC < -epsilon && abD > epsilon))
+      && ((cdA > epsilon && cdB < -epsilon) || (cdA < -epsilon && cdB > epsilon))
+  }
+  for (let first = 0; first < vertices.length; first += 1) {
+    const firstNext = (first + 1) % vertices.length
+    for (let second = first + 1; second < vertices.length; second += 1) {
+      const secondNext = (second + 1) % vertices.length
+      if (
+        first === second
+        || first === secondNext
+        || firstNext === second
+        || firstNext === secondNext
+      ) {
+        continue
+      }
+      if (segmentsIntersect(
+        vertices[first]!,
+        vertices[firstNext]!,
+        vertices[second]!,
+        vertices[secondNext]!,
+      )) {
+        throw new AgentBridgeError('VALIDATION_FAILED', 'vertices define a self-intersecting polygon')
+      }
+    }
+  }
+  return vertices
+}
+
+function readOptionalSideUvScale(
+  args: Record<string, unknown>,
+): { x: number; y: number } | undefined {
+  const value = args.sideUvScale
+  if (value === undefined) {
+    return undefined
+  }
+  if (!isRecord(value)) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'sideUvScale must be an object with x and y')
+  }
+  const x = value.x
+  const y = value.y
+  if (typeof x !== 'number' || !Number.isFinite(x) || x < 0
+    || typeof y !== 'number' || !Number.isFinite(y) || y < 0) {
+    throw new AgentBridgeError('VALIDATION_FAILED', 'sideUvScale x and y must be finite and non-negative')
+  }
+  return { x, y }
 }
 
 function analyzeTerrainTransition(
@@ -386,6 +685,37 @@ async function executeDomainOperation(
   }
   switch (operation.domain) {
     case 'builder': {
+      if (operation.action === 'update_floor_geometry') {
+        const nodeId = readString(args, 'nodeId')
+        const node = findNodeOrThrow(store, nodeId)
+        if (node.dynamicMesh?.type !== 'Floor') {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            `Node ${nodeId} is not a Floor`,
+          )
+        }
+        const vertices = readFloorVertices(args.vertices)
+        const thickness = readOptionalNumber(args, 'thickness', 0, 10)
+        const smooth = readOptionalNumber(args, 'smooth', 0, 1)
+        const sideUvScale = readOptionalSideUvScale(args)
+        const current = node.dynamicMesh as FloorDynamicMesh
+        const nextMesh: FloorDynamicMesh = {
+          ...current,
+          vertices,
+          ...(thickness !== undefined ? { thickness } : {}),
+          ...(smooth !== undefined ? { smooth } : {}),
+          ...(sideUvScale !== undefined ? { sideUvScale } : {}),
+        }
+        store.updateNodeDynamicMesh(nodeId, nextMesh)
+        return {
+          nodeId,
+          changed: true,
+          vertices,
+          thickness: nextMesh.thickness ?? 0,
+          smooth: nextMesh.smooth ?? 0,
+          sideUvScale: nextMesh.sideUvScale ?? { x: 1, y: 1 },
+        }
+      }
       if (operation.action === 'create') {
         const builderType = readString(args, 'builderType')
         switch (builderType) {
@@ -686,14 +1016,70 @@ async function executeOperation(
       })
       return { nodeId: result.node.id, assetId: result.asset.id }
     }
-    case 'material.create':
+    case 'material.create': {
+      if (operation.type !== undefined) {
+        validateMaterialType(operation.type, 'material.create.type')
+      }
+      if (operation.props !== undefined) {
+        validateMaterialPatch(operation.props, 'material.create.props')
+      }
       return store.createMaterial({
         name: operation.name,
+        type: operation.type,
         props: operation.props,
       })
-    case 'material.update':
-      store.updateNodeMaterialProps(operation.nodeId, operation.nodeMaterialId, operation.patch)
-      return { nodeId: operation.nodeId, nodeMaterialId: operation.nodeMaterialId }
+    }
+    case 'material.update': {
+      if (operation.type === undefined && operation.patch === undefined) {
+        throw new AgentBridgeError(
+          'VALIDATION_FAILED',
+          'material.update requires a type, a non-empty patch, or both',
+        )
+      }
+      if (operation.type !== undefined) {
+        validateMaterialType(operation.type, 'material.update.type')
+      }
+      if (operation.patch !== undefined) {
+        validateMaterialPatch(operation.patch, 'material.update.patch')
+        if (!operation.type && Object.keys(operation.patch).length === 0) {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            'material.update requires a non-empty patch when type is omitted',
+          )
+        }
+      }
+      findNodeMaterialOrThrow(store, operation.nodeId, operation.nodeMaterialId)
+
+      if (operation.type !== undefined) {
+        const changedType = store.updateNodeMaterialType(
+          operation.nodeId,
+          operation.nodeMaterialId,
+          operation.type,
+        )
+        if (!changedType) {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            `Material slot ${operation.nodeMaterialId} could not change type`,
+          )
+        }
+      }
+      if (operation.patch !== undefined) {
+        store.updateNodeMaterialProps(
+          operation.nodeId,
+          operation.nodeMaterialId,
+          operation.patch,
+        )
+      }
+      return {
+        nodeId: operation.nodeId,
+        nodeMaterialId: operation.nodeMaterialId,
+        type: operation.type ?? findNodeMaterialOrThrow(
+          store,
+          operation.nodeId,
+          operation.nodeMaterialId,
+        ).type,
+      }
+    }
     case 'material.apply_asset':
       return store.applyMaterialAssetToNodeMaterialSlot(
         operation.nodeId,

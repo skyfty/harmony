@@ -461,6 +461,10 @@ import {
   type GuideRouteActorCandidate,
 } from '@schema/guideRouteActorSelection'
 import {
+  ensureGuideRouteDebugActors,
+  GUIDE_ROUTE_ACTOR_SOURCE_USER_DATA_KEY,
+} from '@schema/guideRouteActorRoster'
+import {
 	ensureSceneActorAutoTourComponents,
 	findFirstSceneActorNode,
 	resolveAutoTourActorNodeId,
@@ -2164,6 +2168,8 @@ type ActiveGuideRouteJourney = {
 	spanIndex: number
 }
 let activeGuideRouteJourney: ActiveGuideRouteJourney | null = null
+let guideRouteJourneyActivationTimer: number | null = null
+let guideRouteJourneyActivationRetryCount = 0
 const guideWaypointMenuActorNodeId = computed<string | null>(() => (
 	guideWaypointMenuContextRevision.value,
 	resolveCurrentGuideWaypointActorNodeId()
@@ -4653,6 +4659,18 @@ async function activateActiveGuideRouteJourneySpan(spanIndex: number): Promise<v
 		appendWarningMessage('Guide Route 导览换乘段不可用。')
 		return
 	}
+	if (vehicleDrivePromptBusy.value) {
+		if (guideRouteJourneyActivationRetryCount >= 120) {
+			activeGuideRouteJourney = null
+			guideRouteJourneyActivationRetryCount = 0
+			appendWarningMessage('等待控制节点切换超时，导览未能继续。')
+			return
+		}
+		guideRouteJourneyActivationRetryCount += 1
+		scheduleActiveGuideRouteJourneySpan(journey, spanIndex)
+		return
+	}
+	guideRouteJourneyActivationRetryCount = 0
 	const travelWindow = buildGuideRouteJourneySpanWindow(journey.plan, spanIndex)
 	if (!travelWindow) {
 		activeGuideRouteJourney = null
@@ -4671,6 +4689,42 @@ async function activateActiveGuideRouteJourneySpan(spanIndex: number): Promise<v
 		destinationStopId: travelWindow.destinationStopId,
 		travelWindow,
 	})
+}
+
+function scheduleActiveGuideRouteJourneySpan(
+	journey: ActiveGuideRouteJourney,
+	spanIndex: number,
+): void {
+	if (guideRouteJourneyActivationTimer !== null) {
+		window.clearTimeout(guideRouteJourneyActivationTimer)
+	}
+	guideRouteJourneyActivationTimer = window.setTimeout(() => {
+		guideRouteJourneyActivationTimer = null
+		if (activeGuideRouteJourney !== journey) {
+			return
+		}
+		void activateActiveGuideRouteJourneySpan(spanIndex)
+	}, 50)
+}
+
+function handleActiveGuideRouteJourneyTerminal(nodeId: string, reason: string): boolean {
+	const journey = activeGuideRouteJourney
+	const span = journey?.plan.controlSpans[journey.spanIndex]
+	if (
+		!journey
+		|| reason !== 'guide-route-complete'
+		|| !span
+		|| span.actorNodeId !== nodeId
+	) {
+		return false
+	}
+	const nextSpanIndex = journey.spanIndex + 1
+	if (nextSpanIndex >= journey.plan.controlSpans.length) {
+		return false
+	}
+	guideRouteJourneyActivationRetryCount = 0
+	scheduleActiveGuideRouteJourneySpan(journey, nextSpanIndex)
+	return true
 }
 
 function handleActiveGuideRouteJourneyStop(
@@ -4713,7 +4767,9 @@ function guideWaypointTravelModeLabel(item: GuideWaypointMenuItem): string {
 	if (targetActorId === currentActorId) {
 		return `${item.routeName} · 点击前往`
 	}
-	return `${item.routeName} · 将切换到 ${targetLabel}`
+	return item.travelMode === 'character'
+		? `${item.routeName} · 驾车至换乘点后步行`
+		: `${item.routeName} · 将切换到 ${targetLabel}`
 }
 
 function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): {
@@ -4792,7 +4848,10 @@ const autoTourRuntime = createAutoTourRuntime({
 	nodeObjectMap,
 	resolveObjectBounds: (object) => setBoundingBoxFromObject(object, new THREE.Box3()),
 	isManualDriveActive: () => vehicleDriveState.active,
-	onTerminalStop: (nodeId) => {
+	onTerminalStop: (nodeId, reason) => {
+		if (handleActiveGuideRouteJourneyTerminal(nodeId, reason)) {
+			return
+		}
 		const pendingEvent = pendingVehicleDriveEvent.value
 		const shouldResumeManualDrive = guideWaypointRouteOverrideByNodeId.has(nodeId)
 			|| (
@@ -10632,8 +10691,12 @@ async function buildPreviewRuntimeDocument(
 		attachGroundScatterRuntimeToNode(runtimeDocument.id, groundNode)
 	}
 	attachRoadCollisionCompiledExportToDocument(runtimeDocument)
-	ensureSceneActorAutoTourComponents(runtimeDocument)
-	return runtimeDocument
+	const actorRuntimeDocument = typeof structuredClone === 'function'
+		? structuredClone(runtimeDocument)
+		: JSON.parse(JSON.stringify(runtimeDocument)) as SceneJsonExportDocument
+	ensureGuideRouteDebugActors(actorRuntimeDocument)
+	ensureSceneActorAutoTourComponents(actorRuntimeDocument)
+	return actorRuntimeDocument
 }
 
 async function switchToProjectScene(sceneId: string): Promise<void> {
@@ -11657,6 +11720,7 @@ async function startAutoTourForActor(
 
 async function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): Promise<void> {
 	activeGuideRouteJourney = null
+	guideRouteJourneyActivationRetryCount = 0
 	const actorNodeId = guideWaypointMenuActorNodeId.value
 	if (!actorNodeId) {
 		appendWarningMessage('没有可用的 Auto Tour 控制节点。')
@@ -14843,7 +14907,11 @@ async function loadScenePreviewPhysicsBridgeScene(
 			if (!node) {
 				continue
 			}
-			if (resolveCharacterControllerComponent(node) && !physicsBridgeCharacterIdByNodeId.has(node.id)) {
+			if (
+				resolveCharacterControllerComponent(node)
+				&& !physicsBridgeCharacterIdByNodeId.has(node.id)
+				&& node.userData?.[GUIDE_ROUTE_ACTOR_SOURCE_USER_DATA_KEY] !== 'debug-proxy'
+			) {
 				missingCharacterControllers.push(node.name?.trim() || node.id)
 			}
 			if (Array.isArray(node.children) && node.children.length) {

@@ -1142,6 +1142,15 @@ import {
   type GuideRouteDestination,
 } from '@harmony/schema/guideRouteDestinations';
 import {
+  collectGuideRouteActorRequirements,
+  ensureGuideRouteDebugActors,
+  GUIDE_ROUTE_ACTOR_KIND_USER_DATA_KEY,
+  GUIDE_ROUTE_ACTOR_SOURCE_USER_DATA_KEY,
+  resolveGuideRouteActorSpawnPosition,
+  selectGuideRoutePlayerActorAsset,
+  type GuideRouteActorResolutionMode,
+} from '@harmony/schema/guideRouteActorRoster';
+import {
   selectNearestGuideRouteActorNodeId,
   type GuideRouteActorCandidate,
 } from '@harmony/schema/guideRouteActorSelection';
@@ -1160,6 +1169,7 @@ import {
   resolveAutoTourActorNodeId,
   resolveSceneActorKind,
   transferSceneActorAutoTourComponent,
+  type SceneActorKind,
 } from '@harmony/schema/sceneActorAutoTour';
 import {
   sceneStateAnchorComponentDefinition,
@@ -1422,6 +1432,7 @@ type SceneryProps = {
   createPhysicsBridge?: (engine?: PhysicsBackendPreference) => Promise<PhysicsBridge> | PhysicsBridge;
   defaultSteerIdentifier?: string;
   defaultSteerTargetType?: SteerControllableTargetType;
+  actorResolutionMode?: GuideRouteActorResolutionMode;
   controllableAssets?: ExternalControllableAsset[];
   skins?: ExternalSkin[];
   multiuserIdentity?: MultiuserIdentity | null;
@@ -4322,6 +4333,7 @@ const autoTourTelemetryUiVisible = computed(() => vehicleDriveUi.value.visible |
 const characterControlUi = computed(() => {
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   const motionNodeId = resolveControlledCharacterMotionNodeId();
+  const controlledNode = controlledNodeId ? resolveNodeById(controlledNodeId) : null;
   const activeVehicleTourNodeId = activeAutoTourNodeIds.values().next().value;
   const physicsReady = physicsEnvironmentEnabled.value
     && physicsBridgeCharacterBindingsReady.value
@@ -4329,10 +4341,15 @@ const characterControlUi = computed(() => {
       (controlledNodeId ? physicsBridgeCharacterIdByNodeId.has(controlledNodeId) : false)
       || (motionNodeId ? physicsBridgeCharacterIdByNodeId.has(motionNodeId) : false)
     );
+  const localControllerReady = Boolean(
+    controlledNode
+    && resolveCharacterControllerComponent(controlledNode)
+    && !resolveRigidbodyComponent(controlledNode),
+  );
   const visible = !activeVehicleTourNodeId
     && !vehicleDriveUi.value.visible
     && Boolean(controlledNodeId)
-    && physicsReady;
+    && (physicsReady || localControllerReady);
   if (!visible) {
     return {
       visible: false,
@@ -4345,6 +4362,7 @@ const characterControlUi = computed(() => {
     label: node?.name?.trim() || controlledNodeId || 'Character',
   } as const;
 });
+
 const characterActionButtons = computed<CharacterActionButtonEntry[]>(() => {
   if (!characterControlUi.value.visible) {
     return [];
@@ -4411,6 +4429,8 @@ type ActiveGuideRouteJourney = {
   spanIndex: number;
 };
 let activeGuideRouteJourney: ActiveGuideRouteJourney | null = null;
+let guideRouteJourneyActivationTimer: ReturnType<typeof setTimeout> | null = null;
+let guideRouteJourneyActivationRetryCount = 0;
 const guideWaypointMenuActorNodeId = computed(() => {
   guideWaypointMenuContextRevision.value;
   return resolveGuideWaypointActorNodeId();
@@ -6843,7 +6863,7 @@ async function prepareRenderPayloadForSceneEntry(
   runtimePrefabPreloadContext: RuntimePrefabPreloadContext | null,
 ): Promise<ScenePreviewPayload> {
   const renderPayload = buildRenderPayloadWithRuntimePrefabContext(payload, runtimePrefabPreloadContext);
-  const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
+  const steerPreparedPayload = await prepareRenderPayloadForGuideRouteActors(renderPayload);
   const runtimeGroundPrepared = await prepareRuntimeGroundSceneDocument(steerPreparedPayload.document);
   applySceneryGroundTilingBudget(runtimeGroundPrepared.document);
   ensureSceneActorAutoTourComponents(runtimeGroundPrepared.document);
@@ -7186,74 +7206,167 @@ function findRuntimePrefabRequestByVehicleNode(
   return null;
 }
 
-async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload): Promise<ScenePreviewPayload> {
+function markGuideRouteActorSource(
+  node: SceneNode,
+  kind: SceneActorKind,
+  source: 'player' | 'debug-proxy',
+  identifier: string | null,
+): void {
+  node.userData = {
+    ...(node.userData ?? {}),
+    [GUIDE_ROUTE_ACTOR_SOURCE_USER_DATA_KEY]: source,
+    [GUIDE_ROUTE_ACTOR_KIND_USER_DATA_KEY]: kind,
+    controllableIdentifier: identifier,
+  };
+}
+
+function documentHasSceneActorKind(
+  document: SceneJsonExportDocument,
+  kind: SceneActorKind,
+): boolean {
+  for (const root of document.nodes ?? []) {
+    if (findFirstSceneActorNode(root, kind)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function appendPlayerGuideRouteActor(
+  document: SceneJsonExportDocument,
+  kind: SceneActorKind,
+  asset: ExternalControllableAsset,
+): Promise<string> {
+  const baseRequest = buildControllableAssetSpawnRequest(asset);
+  if (!baseRequest) {
+    throw new Error(`可实例化资产 "${asset.identifier?.trim() || asset.id}" 缺少 prefabUrl 或 assetId`);
+  }
+  const request: RuntimePrefabSpawnRequest = {
+    ...baseRequest,
+    position: resolveGuideRouteActorSpawnPosition(document, kind),
+    placement: { alignment: 'origin', offset: null },
+  };
+  const source = await resolveRuntimePrefabSource(request, runtimePrefabSourceResolverOptions);
+  if (!source) {
+    throw new Error(`无法加载可实例化资产 "${asset.identifier?.trim() || asset.id}" 的预制体资源`);
+  }
+  const cloned = cloneRuntimePrefabNode(source.prefab);
+  applyRuntimePrefabTransform(cloned.root, request);
+  const actor = findFirstSteerTargetNode(cloned.root, kind);
+  if (!actor) {
+    throw new Error(`资产 "${asset.identifier?.trim() || asset.id}" 不包含 ${kind} 可控节点`);
+  }
+  markGuideRouteActorSource(
+    actor,
+    kind,
+    'player',
+    asset.identifier?.trim() || asset.id,
+  );
+  mergeRuntimePrefabAssetRegistry(document, source.prefab);
+  document.nodes = [...(document.nodes ?? []), cloned.root];
+  appliedRuntimePrefabSpawnKeys.add(buildRuntimePrefabRequestKey(request));
+  return actor.id;
+}
+
+async function prepareRenderPayloadForGuideRouteActors(payload: ScenePreviewPayload): Promise<ScenePreviewPayload> {
   pendingDefaultSteerDriveEvent.value = null;
   const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
     ? props.defaultSteerIdentifier.trim() || null
     : null;
-  const binding = props.controllableAssets?.length
-    ? resolveSceneAutoEnterSteerBinding(payload.document)
-    : resolveDefaultSteerBinding(payload.document, defaultSteerIdentifier, resolveDefaultSteerTargetType());
-  if (!binding) {
-    return payload;
-  }
+  const resolutionMode: GuideRouteActorResolutionMode = props.actorResolutionMode === 'local-debug'
+    ? 'local-debug'
+    : 'player';
+  const binding = resolveDefaultSteerBinding(
+    payload.document,
+    defaultSteerIdentifier,
+    resolveDefaultSteerTargetType(),
+  );
 
-  let finalTargetNodeId = binding.targetNodeId;
-  let nextPayload = payload;
-  const selectedAsset = resolveSelectedControllableAsset(binding.steerProps.targetType);
-  if (!selectedAsset) {
-    throw new Error(`未找到与 Steer targetType="${binding.steerProps.targetType}" 匹配的已选可实例化资产`);
-  }
+  const nextDocument = JSON.parse(JSON.stringify(payload.document)) as SceneJsonExportDocument;
+  let finalTargetNodeId = binding?.targetNodeId ?? null;
 
-  const matchedRequest = buildControllableAssetSpawnRequest(selectedAsset);
-  if (!matchedRequest) {
-    throw new Error(`可实例化资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 缺少 prefabUrl 或 assetId`);
-  }
+  if (binding && resolutionMode === 'player') {
+    const targetKind = binding.steerProps.targetType === 'character'
+      ? 'character'
+      : binding.steerProps.targetType === 'vehicle'
+        ? 'vehicle'
+        : null;
+    const selectedAsset = targetKind
+      ? selectGuideRoutePlayerActorAsset(props.controllableAssets, targetKind)
+      : resolveSelectedControllableAsset(binding.steerProps.targetType);
+    if (selectedAsset && targetKind) {
+      const matchedRequest = buildControllableAssetSpawnRequest(selectedAsset);
+      if (!matchedRequest) {
+        throw new Error(`可实例化资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 缺少 prefabUrl 或 assetId`);
+      }
 
-  const source = await resolveRuntimePrefabSource(matchedRequest, runtimePrefabSourceResolverOptions);
-  if (!source) {
-    throw new Error(`无法加载可实例化资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 的预制体资源`);
-  }
+      const source = await resolveRuntimePrefabSource(matchedRequest, runtimePrefabSourceResolverOptions);
+      if (!source) {
+        throw new Error(`无法加载可实例化资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 的预制体资源`);
+      }
 
-  const nextDocument = JSON.parse(JSON.stringify(payload.document));
-  const documentNodeMap = new Map<string, SceneNode>();
-  const documentParentMap = new Map<string, string | null>();
-  rebuildSceneNodeIndex(nextDocument.nodes ?? null, documentNodeMap, documentParentMap);
-  const targetNode = resolveSceneNodeById(documentNodeMap, binding.targetNodeId);
-  const steerHostNode = resolveSceneNodeById(documentNodeMap, binding.steerNodeId);
-  const steerHostComponent = steerHostNode
-    ? resolveEnabledComponentState<SteerComponentProps>(steerHostNode, STEER_COMPONENT_TYPE)
-    : null;
-  if (targetNode && steerHostNode && steerHostComponent) {
-    const cloned = cloneRuntimePrefabNode(source.prefab);
-    applySteerTargetTransform(targetNode, cloned.root);
-    const replacementTargetNode = findFirstSteerTargetNode(cloned.root, binding.steerProps.targetType);
-    const replacementTargetNodeId = replacementTargetNode?.id ?? cloned.root.id ?? null;
-    if (!replacementTargetNodeId) {
-      throw new Error(`资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 不包含 targetType="${binding.steerProps.targetType}" 的可控节点`);
+      const documentNodeMap = new Map<string, SceneNode>();
+      const documentParentMap = new Map<string, string | null>();
+      rebuildSceneNodeIndex(nextDocument.nodes ?? null, documentNodeMap, documentParentMap);
+      const targetNode = resolveSceneNodeById(documentNodeMap, binding.targetNodeId);
+      const steerHostNode = resolveSceneNodeById(documentNodeMap, binding.steerNodeId);
+      const steerHostComponent = steerHostNode
+        ? resolveEnabledComponentState<SteerComponentProps>(steerHostNode, STEER_COMPONENT_TYPE)
+        : null;
+      if (targetNode && steerHostNode && steerHostComponent) {
+        const cloned = cloneRuntimePrefabNode(source.prefab);
+        applySteerTargetTransform(targetNode, cloned.root);
+        const replacementTargetNode = findFirstSteerTargetNode(cloned.root, binding.steerProps.targetType);
+        const replacementTargetNodeId = replacementTargetNode?.id ?? cloned.root.id ?? null;
+        if (!replacementTargetNodeId) {
+          throw new Error(`资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 不包含 targetType="${binding.steerProps.targetType}" 的可控节点`);
+        }
+        if (replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
+          mergeRuntimePrefabAssetRegistry(nextDocument, source.prefab);
+          transferSceneActorAutoTourComponent(targetNode, replacementTargetNode ?? cloned.root);
+          markGuideRouteActorSource(
+            replacementTargetNode ?? cloned.root,
+            targetKind,
+            'player',
+            selectedAsset.identifier?.trim() || selectedAsset.id,
+          );
+          steerHostComponent.props = clampSteerComponentProps({
+            ...(steerHostComponent.props ?? {}),
+            targetNodeId: replacementTargetNodeId,
+            defaultIdentifier: defaultSteerIdentifier ?? binding.steerProps.defaultIdentifier ?? null,
+          });
+          nextDocument.updatedAt = new Date().toISOString();
+          finalTargetNodeId = replacementTargetNodeId;
+          appliedRuntimePrefabSpawnKeys.add(buildRuntimePrefabRequestKey(matchedRequest));
+        }
+      }
     }
-    if (replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
-      mergeRuntimePrefabAssetRegistry(nextDocument, source.prefab);
-      transferSceneActorAutoTourComponent(targetNode, replacementTargetNode ?? cloned.root);
-      steerHostComponent.props = clampSteerComponentProps({
-        ...(steerHostComponent.props ?? {}),
-        targetNodeId: replacementTargetNodeId,
-        defaultIdentifier: defaultSteerIdentifier ?? binding.steerProps.defaultIdentifier ?? null,
-      });
-      nextDocument.updatedAt = new Date().toISOString();
-      finalTargetNodeId = replacementTargetNodeId;
-      nextPayload = {
-        ...payload,
-        document: nextDocument,
-      };
-      appliedRuntimePrefabSpawnKeys.add(buildRuntimePrefabRequestKey(matchedRequest));
+  }
+
+  if (resolutionMode === 'local-debug') {
+    ensureGuideRouteDebugActors(nextDocument);
+  } else {
+    const requirements = collectGuideRouteActorRequirements(nextDocument.nodes ?? []);
+    for (const requirement of requirements) {
+      if (documentHasSceneActorKind(nextDocument, requirement.kind)) {
+        continue;
+      }
+      const asset = selectGuideRoutePlayerActorAsset(props.controllableAssets, requirement.kind);
+      if (!asset) {
+        throw new Error(`未找到路线所需的${requirement.kind === 'character' ? '角色' : '车辆'}资产`);
+      }
+      await appendPlayerGuideRouteActor(nextDocument, requirement.kind, asset);
     }
   }
+  ensureSceneActorAutoTourComponents(nextDocument);
 
   if (finalTargetNodeId) {
     pendingDefaultSteerDriveEvent.value = buildFloatingAutoTourDriveEvent(finalTargetNodeId, null);
   }
-  return nextPayload;
+  return {
+    ...payload,
+    document: nextDocument,
+  };
 }
 
 function clearSpawnedRuntimePrefabRoots(): void {
@@ -8068,6 +8181,11 @@ function resolveControlledCharacterMotionNodeId(): string | null {
   return resolveCharacterControllerBindingNodeId(controlledNodeId) ?? controlledNodeId;
 }
 
+function shouldApplyCharacterPathWorldTransform(nodeId: string): boolean {
+  return !physicsBridgeCharacterIdByNodeId.has(nodeId)
+    || activeCharacterAutoTourNodeIds.has(nodeId);
+}
+
 function resolveDefaultControlledCharacterComponentProps(): CharacterControllerComponentProps | null {
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   if (!controlledNodeId) {
@@ -8808,7 +8926,7 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
     iterNodes: () => previewNodeMap.entries(),
     resolveNode: (nodeId) => resolveNodeById(nodeId),
     nodeObjectMap,
-    shouldApplyWorldTransform: (nodeId) => !physicsBridgeCharacterIdByNodeId.has(nodeId),
+    shouldApplyWorldTransform: shouldApplyCharacterPathWorldTransform,
     onNodeObjectTransformUpdated: (_nodeId, object) => {
       syncInstancedTransform(object);
     },
@@ -8877,7 +8995,7 @@ function updateCharacterPathFollow(deltaSeconds: number): void {
     iterNodes: () => previewNodeMap.entries(),
     resolveNode: (nodeId) => resolveNodeById(nodeId),
     nodeObjectMap,
-    shouldApplyWorldTransform: (nodeId) => !physicsBridgeCharacterIdByNodeId.has(nodeId),
+    shouldApplyWorldTransform: shouldApplyCharacterPathWorldTransform,
     onNodeObjectTransformUpdated: (_nodeId, object) => {
       syncInstancedTransform(object);
     },
@@ -10988,6 +11106,18 @@ function activateActiveGuideRouteJourneySpan(spanIndex: number): void {
     uni.showToast({ title: 'Guide Route 导览换乘段不可用', icon: 'none' });
     return;
   }
+  if (vehicleDrivePromptBusy.value) {
+    if (guideRouteJourneyActivationRetryCount >= 120) {
+      activeGuideRouteJourney = null;
+      guideRouteJourneyActivationRetryCount = 0;
+      uni.showToast({ title: '等待控制节点切换超时', icon: 'none' });
+      return;
+    }
+    guideRouteJourneyActivationRetryCount += 1;
+    scheduleActiveGuideRouteJourneySpan(journey, spanIndex);
+    return;
+  }
+  guideRouteJourneyActivationRetryCount = 0;
   const travelWindow = buildGuideRouteJourneySpanWindow(journey.plan, spanIndex);
   if (!travelWindow) {
     activeGuideRouteJourney = null;
@@ -11006,6 +11136,42 @@ function activateActiveGuideRouteJourneySpan(spanIndex: number): void {
     destinationStopId: travelWindow.destinationStopId,
     travelWindow,
   }, pendingVehicleDriveEvent.value);
+}
+
+function scheduleActiveGuideRouteJourneySpan(
+  journey: ActiveGuideRouteJourney,
+  spanIndex: number,
+): void {
+  if (guideRouteJourneyActivationTimer !== null) {
+    clearTimeout(guideRouteJourneyActivationTimer);
+  }
+  guideRouteJourneyActivationTimer = setTimeout(() => {
+    guideRouteJourneyActivationTimer = null;
+    if (activeGuideRouteJourney !== journey) {
+      return;
+    }
+    activateActiveGuideRouteJourneySpan(spanIndex);
+  }, 50);
+}
+
+function handleActiveGuideRouteJourneyTerminal(nodeId: string, reason: string): boolean {
+  const journey = activeGuideRouteJourney;
+  const span = journey?.plan.controlSpans[journey.spanIndex];
+  if (
+    !journey
+    || reason !== 'guide-route-complete'
+    || !span
+    || span.actorNodeId !== nodeId
+  ) {
+    return false;
+  }
+  const nextSpanIndex = journey.spanIndex + 1;
+  if (nextSpanIndex >= journey.plan.controlSpans.length) {
+    return false;
+  }
+  guideRouteJourneyActivationRetryCount = 0;
+  scheduleActiveGuideRouteJourneySpan(journey, nextSpanIndex);
+  return true;
 }
 
 function handleActiveGuideRouteJourneyStop(
@@ -11047,8 +11213,11 @@ function guideWaypointTravelModeLabel(item: GuideWaypointMenuItem): string {
     return '没有兼容的 Auto Tour 载体';
   }
   const targetLabel = resolveNodeById(targetActorId)?.name?.trim() || targetActorId;
-  return targetActorId === currentActorId
-    ? `${item.routeName} · 点击前往`
+  if (targetActorId === currentActorId) {
+    return `${item.routeName} · 点击前往`;
+  }
+  return item.travelMode === 'character'
+    ? `${item.routeName} · 驾车至换乘点后步行`
     : `${item.routeName} · 将切换到 ${targetLabel}`;
 }
 
@@ -11061,8 +11230,11 @@ const autoTourRuntime = createAutoTourRuntime({
   onNodeObjectTransformUpdated: (_nodeId, object) => {
     syncInstancedTransform(object);
   },
-  onTerminalStop: (nodeId) => {
+  onTerminalStop: (nodeId, reason) => {
     if (!nodeId) {
+      return;
+    }
+    if (handleActiveGuideRouteJourneyTerminal(nodeId, reason)) {
       return;
     }
     if (!vehicleDriveActive.value) {
@@ -12441,6 +12613,9 @@ function updateCharacterPhysicsBridgeVisuals(deltaSeconds: number): void {
   const interpolationAlpha = THREE.MathUtils.clamp(1 - Math.exp(-18 * Math.max(0, deltaSeconds)), 0, 1);
   physicsBridgeFrameUpdatedParents = new WeakSet<THREE.Object3D>();
   characterPhysicsBridgeVisualStateByNodeId.forEach((visualState, nodeId) => {
+    if (activeCharacterAutoTourNodeIds.has(nodeId)) {
+      return;
+    }
     const object = resolveCharacterPhysicsBridgeVisualObject(nodeId);
     if (!object) {
       return;
@@ -12475,6 +12650,13 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
   }
   physicsBridgeFrameUpdatedParents = new WeakSet<THREE.Object3D>();
   physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
+    const activeCharacterControllerNodeId = physicsBridgeCharacterControllerNodeIdByBodyNodeId.get(nodeId) ?? null;
+    if (
+      activeCharacterAutoTourNodeIds.has(nodeId)
+      || (activeCharacterControllerNodeId && activeCharacterAutoTourNodeIds.has(activeCharacterControllerNodeId))
+    ) {
+      return;
+    }
     if (hasPendingManualDrivePoseHandoff(nodeId)) {
       return;
     }
@@ -12789,7 +12971,10 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
         // (250ms) would apply the accumulated interpolation lag in one frame
         // and cause a visible stutter, so only fall back to a direct snap when
         // the interpolated visual-state path is not tracking this node.
-        if (!characterPhysicsBridgeVisualStateByNodeId.has(nodeId)) {
+        if (
+          !activeCharacterAutoTourNodeIds.has(nodeId)
+          && !characterPhysicsBridgeVisualStateByNodeId.has(nodeId)
+        ) {
           applySceneryPhysicsBridgeTransformToObject(
             entry.object,
             frameState.position,
@@ -20737,11 +20922,13 @@ function isAutoTourTakeoverCanvasTarget(
   ) {
     candidate = document.elementFromPoint(clientX!, clientY!);
   }
-  return Boolean(
-    candidate
-    && typeof candidate.closest === 'function'
-    && candidate.closest('.viewer-canvas'),
-  );
+  if (!candidate || typeof candidate.closest !== 'function') {
+    return false;
+  }
+  if (candidate.closest('button, uni-button, input, textarea, select, [role="button"], [data-control-skip]')) {
+    return false;
+  }
+  return Boolean(candidate.closest('.viewer-canvas-wrapper, .viewer-canvas'));
 }
 
 function isAutoTourPointerTakeoverBlocked(): boolean {
@@ -20810,6 +20997,32 @@ function tryTakeOverAutoTourFromPointer(params: {
     takeoverBlocked: isAutoTourPointerTakeoverBlocked(),
   });
   return kind ? requestAutoTourManualTakeover(kind) : false;
+}
+
+function handleWindowAutoTourTakeoverPointerDown(event: PointerEvent): void {
+  if (event.defaultPrevented || controlNodeSwitchBusy.value) {
+    return;
+  }
+  tryTakeOverAutoTourFromPointer({
+    target: event.target,
+    primaryPointer: event.isPrimary !== false,
+    primaryButton: event.pointerType !== 'mouse' || isPrimaryControlPadButton(event),
+    clientX: event.clientX,
+    clientY: event.clientY,
+  });
+}
+
+function handleWindowAutoTourTakeoverMouseDown(event: MouseEvent): void {
+  if (event.defaultPrevented || controlNodeSwitchBusy.value) {
+    return;
+  }
+  tryTakeOverAutoTourFromPointer({
+    target: event.target,
+    primaryPointer: true,
+    primaryButton: isPrimaryControlPadButton(event),
+    clientX: event.clientX,
+    clientY: event.clientY,
+  });
 }
 
 function releaseDrivePadPointerCapture(pointerId: number): void {
@@ -22704,6 +22917,46 @@ function handleCharacterAutoTourComplete(nodeId: string): void {
   void completeAutoTourTargetManualDriveTakeover(nodeId);
 }
 
+function syncCharacterBodyToCurrentObjectPose(nodeId: string): void {
+  const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(nodeId) ?? nodeId;
+  const bodyId = physicsBridgeBodyIdByNodeId.get(bodyNodeId);
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (typeof bodyId !== 'number' || !object) {
+    return;
+  }
+  object.updateWorldMatrix(true, false);
+  const position = object.getWorldPosition(new THREE.Vector3());
+  const quaternion = object.getWorldQuaternion(new THREE.Quaternion()).normalize();
+  const rigidbodyEntry = rigidbodyInstances.get(bodyNodeId) ?? null;
+  if (rigidbodyEntry?.body) {
+    rigidbodyEntry.body.position.x = position.x;
+    rigidbodyEntry.body.position.y = position.y;
+    rigidbodyEntry.body.position.z = position.z;
+    rigidbodyEntry.body.quaternion.x = quaternion.x;
+    rigidbodyEntry.body.quaternion.y = quaternion.y;
+    rigidbodyEntry.body.quaternion.z = quaternion.z;
+    rigidbodyEntry.body.quaternion.w = quaternion.w;
+  }
+  physicsBridgeFrameBodiesByNodeId.set(bodyNodeId, {
+    position: position.clone(),
+    quaternion: quaternion.clone(),
+    motionState: 0,
+  });
+  characterPhysicsBridgeVisualStateByNodeId.delete(bodyNodeId);
+  physicsBridgeCharacterInputSnapshotByNodeId.delete(nodeId);
+  if (physicsBridge && physicsBridgeSceneLoaded) {
+    void physicsBridge.setBodyTransform({
+      bodyId,
+      transform: {
+        position: [position.x, position.y, position.z],
+        rotation: [quaternion.x, quaternion.y, quaternion.z, quaternion.w],
+      },
+    }).catch((error) => {
+      console.warn('[SceneryViewer] Failed to sync character pose after manual takeover', error);
+    });
+  }
+}
+
 function stopCharacterAutoTourAndResumePlayerControl(
   nodeId: string,
   options: { preserveInput?: boolean; targetPose?: AutoTourTargetPose | null } = {},
@@ -22723,6 +22976,7 @@ function stopCharacterAutoTourAndResumePlayerControl(
     characterInputYawNodeId = null;
     characterDesiredInputYaw = null;
   }
+  syncCharacterBodyToCurrentObjectPose(nodeId);
   resetProtagonistPoseState();
   setCameraCaging(false);
   applyAutoTourCameraInputPolicy();
@@ -22772,11 +23026,14 @@ function startCharacterAutoTourFromPrompt(
   }
   characterPlayerControlNodeIdOverride.value = nodeId;
   characterAutoTourRuntime.activate(nodeId, target);
-  refreshCharacterPathFollowRuntimeEntries();
   activeCharacterAutoTourNodeIds.add(nodeId);
+  characterPhysicsBridgeVisualStateByNodeId.delete(nodeId);
+  refreshCharacterPathFollowRuntimeEntries();
   resetCharacterControlInputs();
   resetProtagonistPoseState();
   setCameraCaging(false);
+  clearVehicleDriveCameraHandoff();
+  characterCameraFollowNodeId = null;
   updateCharacterFollowCamera(0, { immediate: true });
   const driveEvent = buildFloatingAutoTourDriveEvent(nodeId, sourceEvent);
   pendingVehicleDriveEvent.value = driveEvent;
@@ -23019,6 +23276,9 @@ function startGuideWaypointAutoTour(
           renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
         );
       }
+      // stopDrive can stage a fresh vehicle-camera handoff after the route-level
+      // clear. Character control owns the camera from this point onward.
+      clearVehicleDriveCameraHandoff();
       resetVehicleDriveInputs();
       setVehicleDriveUiOverride('hide');
       if (!startCharacterAutoTourFromPrompt(targetNodeId, sourceEvent, waypointTarget)) {
@@ -23098,6 +23358,7 @@ function startGuideWaypointAutoTour(
 
 function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): void {
   activeGuideRouteJourney = null;
+  guideRouteJourneyActivationRetryCount = 0;
   const actorNodeId = guideWaypointMenuActorNodeId.value;
   if (!actorNodeId) {
     uni.showToast({ title: '没有可用的 Auto Tour 控制节点', icon: 'none' });
@@ -26944,6 +27205,8 @@ onMounted(() => {
     window.addEventListener('keydown', handleWindowKeyDown, { passive: false });
     window.addEventListener('keyup', handleWindowKeyUp, { passive: true });
     window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('mousedown', handleWindowAutoTourTakeoverMouseDown, true)
+    window.addEventListener('pointerdown', handleWindowAutoTourTakeoverPointerDown, true)
     window.addEventListener('pointerdown', handleGuideWaypointNativePointerDown, true)
     window.addEventListener('pointermove', handleGuideWaypointNativePointerMove, {
       capture: true,
@@ -27080,6 +27343,8 @@ onUnmounted(() => {
     window.removeEventListener('keydown', handleWindowKeyDown);
     window.removeEventListener('keyup', handleWindowKeyUp);
     window.removeEventListener('blur', handleWindowBlur);
+    window.removeEventListener('mousedown', handleWindowAutoTourTakeoverMouseDown, true)
+    window.removeEventListener('pointerdown', handleWindowAutoTourTakeoverPointerDown, true)
     window.removeEventListener('pointerdown', handleGuideWaypointNativePointerDown, true)
     window.removeEventListener('pointermove', handleGuideWaypointNativePointerMove, true)
     window.removeEventListener('pointerup', handleGuideWaypointNativePointerEnd, true)

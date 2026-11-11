@@ -29,6 +29,7 @@
       :create-physics-bridge="createSceneryPhysicsBridge"
       :default-steer-identifier="selectedVehicleIdentifier"
       :default-steer-target-type="selectedControllableType"
+      actor-resolution-mode="player"
       :controllable-assets="controllableAssets"
       :skins="selectedSkins"
       :runtime-prefab-spawns="runtimePrefabSpawns"

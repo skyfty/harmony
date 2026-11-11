@@ -80,7 +80,7 @@ const AGENT_TOOL_BY_DOMAIN: Record<HarmonyAgentDomain, string> = {
 const AGENT_ACTIONS_BY_DOMAIN: Record<HarmonyAgentDomain, string[]> = {
   actor: ['add_character', 'add_vehicle', 'patch', 'patch_component'],
   behavior: ['replace', 'patch_component'],
-  builder: ['create', 'apply_preset', 'patch_component'],
+  builder: ['create', 'apply_preset', 'update_floor_geometry', 'patch_component'],
   guideRoute: [
     'create',
     'update_waypoints',

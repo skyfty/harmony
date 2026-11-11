@@ -180,6 +180,84 @@ describe('Guide Route branch-tree planning', () => {
     expect(secondSpan?.destinationStopId).toBe('stop2')
   })
 
+  it('keeps a short initial vehicle span instead of skipping to the handoff', () => {
+    const root = createRouteNode({
+      id: 'root',
+      points: [{ x: 0, z: 0 }, { x: 10, z: 0 }],
+      travelMode: 'vehicle',
+      stop: createStop('branch', 'root-leg', 10, 0),
+    })
+    const child = createRouteNode({
+      id: 'child',
+      points: [{ x: 10, z: 0 }, { x: 10, z: 100 }],
+      travelMode: 'character',
+      stop: createStop('target', 'child-leg', 10, 100),
+      branchOrigin: {
+        routeNodeId: 'root',
+        stopId: 'branch',
+      },
+    })
+    const plan = planGuideRouteJourney({
+      iterNodes: () => [root, child] as any,
+      nodeObjectMap: new Map([
+        ['root', new THREE.Object3D()],
+        ['child', new THREE.Object3D()],
+      ]),
+      targetRouteNodeId: 'child',
+      destinationStopId: 'target',
+      startActorNodeId: 'vehicle-1',
+      startPosition: new THREE.Vector3(9, 0, 1),
+      actors: [
+        { nodeId: 'vehicle-1', kind: 'vehicle', position: { x: 9, y: 0, z: 1 } },
+        { nodeId: 'character-1', kind: 'character', position: { x: 9, y: 0, z: 1 } },
+      ],
+    })
+
+    expect(plan).not.toBeNull()
+    expect(plan?.controlSpans[0]?.actorKind).toBe('vehicle')
+    expect(plan?.controlSpans[0]?.endDistance).toBeCloseTo(1)
+  })
+
+  it('prefers a drivable vehicle route over an immediate walking shortcut', () => {
+    const root = createRouteNode({
+      id: 'root',
+      points: [{ x: 0, z: 0 }, { x: 1000, z: 0 }],
+      travelMode: 'vehicle',
+      stop: createStop('parking', 'root-leg', 1000, 0),
+    })
+    const child = createRouteNode({
+      id: 'child',
+      points: [{ x: 500, z: 0 }, { x: 700, z: 0 }],
+      travelMode: 'character',
+      stop: createStop('target', 'child-leg', 700, 0),
+      branchOrigin: {
+        routeNodeId: 'root',
+        stopId: 'parking',
+      },
+    })
+    const plan = planGuideRouteJourney({
+      iterNodes: () => [root, child] as any,
+      nodeObjectMap: new Map([
+        ['root', new THREE.Object3D()],
+        ['child', new THREE.Object3D()],
+      ]),
+      targetRouteNodeId: 'child',
+      destinationStopId: 'target',
+      startActorNodeId: 'vehicle-1',
+      startPosition: new THREE.Vector3(500, 0, 1),
+      actors: [
+        { nodeId: 'vehicle-1', kind: 'vehicle', position: { x: 500, y: 0, z: 1 } },
+        { nodeId: 'character-1', kind: 'character', position: { x: 500, y: 0, z: 0 } },
+      ],
+    })
+
+    expect(plan).not.toBeNull()
+    expect(plan?.switchCount).toBe(1)
+    expect(plan?.controlSpans.map((span) => span.actorKind)).toEqual(['vehicle', 'character'])
+    expect(plan!.controlSpans[0]!.endDistance - plan!.controlSpans[0]!.startDistance).toBeGreaterThan(0)
+    expect(plan?.handoffs[0]?.position.distanceTo(new THREE.Vector3(500, 0, 0))).toBeLessThan(1e-5)
+  })
+
   it('trades a longer snap for a route that keeps the current actor', () => {
     const root = createRouteNode({
       id: 'root',

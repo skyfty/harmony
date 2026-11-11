@@ -1,4 +1,11 @@
-import type { GeometryType, Vector3Like } from './core'
+import type {
+  FloorVertex2D,
+  GeometryType,
+  SceneMaterialProps,
+  SceneMaterialTextureSlot,
+  SceneMaterialType,
+  Vector3Like,
+} from './core'
 
 export const HARMONY_AGENT_PROTOCOL_VERSION = 1 as const
 export const HARMONY_AGENT_DEFAULT_PORT = 8790
@@ -152,6 +159,7 @@ export interface HarmonySceneQuery {
   assetId?: string
   includeComponents?: boolean
   includeMaterials?: boolean
+  includeGeometry?: boolean
   depth?: number
   limit?: number
   cursor?: string
@@ -171,7 +179,34 @@ export interface HarmonyNodeSummary {
   componentTypes: string[]
   sourceAssetId?: string
   components?: HarmonyComponentSnapshot[]
-  materials?: Array<Record<string, unknown>>
+  materials?: HarmonyMaterialSummary[]
+  geometry?: HarmonyGeometrySnapshot
+}
+
+export interface HarmonyBounds {
+  min: Vector3Like
+  max: Vector3Like
+  center: Vector3Like
+  size: Vector3Like
+}
+
+export interface HarmonyGeometrySnapshot {
+  localBounds: HarmonyBounds | null
+  worldBounds: HarmonyBounds | null
+  floorVertices?: FloorVertex2D[]
+  worldFloorVertices?: Vector3Like[]
+}
+
+export interface HarmonyMaterialSummary {
+  id: string
+  name: string | null
+  type: SceneMaterialType | null
+  color: string | null
+  sourceMaterialAssetId: string | null
+  textureAssetIds: string[]
+  props: SceneMaterialProps
+  textureOverrides?: SceneMaterialTextureSlot[]
+  deviceProfileId?: string | null
 }
 
 export interface HarmonyComponentSnapshot {
@@ -291,13 +326,17 @@ export type HarmonyOperation =
   | {
       op: 'material.create'
       name?: string
-      props?: Record<string, unknown>
+      type?: SceneMaterialType
+      props?: Partial<SceneMaterialProps>
     }
   | {
       op: 'material.update'
       nodeId: string
       nodeMaterialId: string
-      patch: Record<string, unknown>
+      type?: SceneMaterialType
+      patch?: Partial<SceneMaterialProps> & {
+        textureOverrides?: SceneMaterialTextureSlot[]
+      }
     }
   | {
       op: 'material.apply_asset'

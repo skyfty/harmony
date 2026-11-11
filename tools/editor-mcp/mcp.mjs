@@ -113,7 +113,7 @@ async function main() {
     HARMONY_AGENT_TOOLS.sceneQuery,
     {
       title: 'Query Harmony scene',
-      description: 'Query scene nodes by ID, parent, type, component, asset, or text. Results are paginated and contain serializable DTOs only.',
+      description: 'Query scene nodes by ID, parent, type, component, asset, or text. Optional geometry returns serializable local/world bounds and Floor vertices.',
       inputSchema: z.object({
         text: z.string().optional(),
         parentId: z.string().nullable().optional(),
@@ -123,6 +123,7 @@ async function main() {
         assetId: z.string().optional(),
         includeComponents: z.boolean().default(false),
         includeMaterials: z.boolean().default(false),
+        includeGeometry: z.boolean().default(false),
         depth: z.number().int().min(0).optional(),
         limit: z.number().int().min(1).max(100).default(50),
         cursor: z.string().optional(),
@@ -225,7 +226,7 @@ async function main() {
     HARMONY_AGENT_TOOLS.builder,
     'builder',
     'Edit Harmony builders',
-    'Create or configure walls, floors, roads, landforms, water, and their presets through existing editor builders.',
+    'Create or configure walls, floors, roads, landforms, water, and their presets through existing editor builders. Floor polygons can be updated semantically with update_floor_geometry.',
   )
   domainTool(
     HARMONY_AGENT_TOOLS.behavior,

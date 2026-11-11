@@ -1107,6 +1107,42 @@ describe('Guide Route playback events', () => {
     expect(onTerminalStop).toHaveBeenCalledOnce()
   })
 
+  it('does not fire a targeted stop before the route window reaches it', () => {
+    const playback = createPlayback({
+      stops: [{
+        id: 'target-stop',
+        name: 'Target stop',
+        thumbnailAssetId: null,
+        anchor: { x: 8, y: 20, z: 0 },
+        legId: 'path-1',
+        behavior: null,
+      }],
+    })
+    const target = {
+      routeNodeId: playback.routeNode.id,
+      destinationStopId: 'target-stop',
+    }
+    const onGuideStop = vi.fn()
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+      onGuideStop,
+    })
+    const snap = runtime.resolveRouteSnap(playback.vehicleNode.id, target)
+    runtime.startTour(playback.vehicleNode.id, target)
+    runtime.seedTourPlaybackState(playback.vehicleNode.id, snap!)
+
+    runtime.update(1)
+    expect(onGuideStop).not.toHaveBeenCalled()
+    expect(playback.vehicleObject.position.x).toBeGreaterThan(0)
+    expect(playback.vehicleObject.position.x).toBeLessThan(8)
+
+    runtime.update(1)
+    expect(onGuideStop).toHaveBeenCalledOnce()
+  })
+
   it('fires intermediate stop behavior without delaying the selected destination', () => {
     const playback = createPlayback({
       stops: [

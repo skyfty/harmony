@@ -795,6 +795,9 @@ export interface ExternalControllableAsset {
   prefabUrl?: string | null
   assetId?: string | null
   isSelected?: boolean
+  isActive?: boolean
+  isDefault?: boolean
+  owned?: boolean
   sortOrder?: number
   [key: string]: unknown
 }

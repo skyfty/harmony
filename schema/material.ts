@@ -321,6 +321,21 @@ export function resolveNodeMaterialTextureAssignmentOptions<
   options: T,
   importedModelOverride = false,
 ): T {
+  const hasAuthoredTransparency = Array.isArray(node.materials)
+    && node.materials.some((material) => (
+      material?.transparent === true
+      || (
+        material?.type === 'MeshPhysicalMaterial'
+        && typeof material.transmission === 'number'
+        && material.transmission > 0
+      )
+    ));
+  if (hasAuthoredTransparency) {
+    return {
+      ...options,
+      hideTransparentMaterials: false,
+    };
+  }
   if (node.userData?.__surfaceImage) {
     return {
       ...options,

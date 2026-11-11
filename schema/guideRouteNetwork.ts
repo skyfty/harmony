@@ -149,6 +149,7 @@ type EntryCandidate = {
   offset: number
   point: THREE.Vector3
   snapDistanceM: number
+  leadingActorDistanceM: number
   state: SearchState
 }
 
@@ -604,6 +605,20 @@ function compareState(left: SearchState, right: SearchState): number {
   )
 }
 
+function resolveLeadingActorDistanceM(
+  path: SearchPath,
+  startActorKind: GuideRouteActorKind,
+): number {
+  let distance = 0
+  for (const step of path.steps) {
+    if (step.actorKind !== startActorKind) {
+      break
+    }
+    distance += Math.abs(step.toOffset - step.fromOffset)
+  }
+  return distance
+}
+
 function searchFromEntry(
   graph: NetworkGraph,
   edge: NetworkEdge,
@@ -665,7 +680,10 @@ function searchFromEntry(
 
   pushStart(startActorKind, 0)
   const other = otherActorKind(startActorKind)
-  if (availableKinds.has(other)) {
+  if (
+    !guideRouteModeSupportsActor(edge.mode, startActorKind)
+    && availableKinds.has(other)
+  ) {
     pushStart(other, 1)
   }
 
@@ -999,7 +1017,7 @@ export function planGuideRouteJourney(
     }
   }
 
-  let best: EntryCandidate | null = null
+  const candidates: EntryCandidate[] = []
   for (const edge of graph.edges.values()) {
     const projection = projectToEdge(edge, options.startPosition)
     if (!Number.isFinite(projection.distanceSq)) {
@@ -1015,35 +1033,27 @@ export function planGuideRouteJourney(
     if (!state) {
       continue
     }
-    const candidate: EntryCandidate = {
+    candidates.push({
       edge,
       offset: projection.offset,
       point: projection.point,
       snapDistanceM: Math.sqrt(Math.max(0, projection.distanceSq)),
+      leadingActorDistanceM: resolveLeadingActorDistanceM(state.path, startActor.kind),
       state,
-    }
-    if (
-      !best
-      || candidate.state.switches < best.state.switches
-      || (
-        candidate.state.switches === best.state.switches
-        && candidate.snapDistanceM < best.snapDistanceM - EPSILON
-      )
-      || (
-        candidate.state.switches === best.state.switches
-        && Math.abs(candidate.snapDistanceM - best.snapDistanceM) <= EPSILON
-        && candidate.state.distance < best.state.distance - EPSILON
-      )
-      || (
-        candidate.state.switches === best.state.switches
-        && Math.abs(candidate.snapDistanceM - best.snapDistanceM) <= EPSILON
-        && Math.abs(candidate.state.distance - best.state.distance) <= EPSILON
-        && candidate.edge.id.localeCompare(best.edge.id) < 0
-      )
-    ) {
-      best = candidate
-    }
+    })
   }
+  const drivableCandidates = candidates.filter((candidate) => (
+    candidate.leadingActorDistanceM > EPSILON
+  ))
+  const eligibleCandidates = drivableCandidates.length ? drivableCandidates : candidates
+  eligibleCandidates.sort((left, right) => (
+    left.state.switches - right.state.switches
+    || left.snapDistanceM - right.snapDistanceM
+    || right.leadingActorDistanceM - left.leadingActorDistanceM
+    || left.state.distance - right.state.distance
+    || left.edge.id.localeCompare(right.edge.id)
+  ))
+  const best = eligibleCandidates[0] ?? null
   if (!best) {
     return null
   }

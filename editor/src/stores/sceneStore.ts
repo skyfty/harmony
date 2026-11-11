@@ -2298,12 +2298,13 @@ function createNodeMaterial(
     deviceProfileId?: string | null
   } = {},
 ): SceneNodeMaterial {
+  const source = props as Partial<SceneNodeMaterial>
   return {
-    id: options.id ?? generateUuid(),
-    name: options.name,
-    type: options.type ?? 'MeshStandardMaterial',
-    thumbnail: options.thumbnail ?? undefined,
     ...cloneMaterialProps(props),
+    id: options.id ?? source.id ?? generateUuid(),
+    name: options.name ?? source.name,
+    type: options.type ?? source.type ?? 'MeshStandardMaterial',
+    thumbnail: options.thumbnail !== undefined ? options.thumbnail : source.thumbnail,
     // Applied last: the caller's explicit list wins over anything carried by the
     // source props (e.g. when editing an existing node material).
     ...(options.textureOverrides ? { textureOverrides: Array.from(new Set(options.textureOverrides)) } : {}),
@@ -13160,8 +13161,16 @@ export const useSceneStore = defineStore('scene', {
       this.queueSceneNodePatch(nodeId, ['materials'])
       commitSceneSnapshot(this)
     },
-    createMaterial(payload: { name?: string; props?: Partial<SceneMaterialProps> | null } = {}) {
-      const material = createSceneMaterial(payload.name ?? 'New Material', payload.props ?? undefined)
+    createMaterial(payload: {
+      name?: string
+      type?: SceneMaterialType
+      props?: Partial<SceneMaterialProps> | null
+    } = {}) {
+      const material = createSceneMaterial(
+        payload.name ?? 'New Material',
+        payload.props ?? undefined,
+        { type: payload.type },
+      )
       this.materials = [...this.materials, material]
       commitSceneSnapshot(this, { updateNodes: false })
       return material
