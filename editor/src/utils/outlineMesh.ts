@@ -74,15 +74,20 @@ export function buildOutlineMeshFromObject(
     (value) => quantizeOutlineValue(value, quantizeFactor),
   )
   const indices = geometry.index ? Array.from(geometry.index.array as ArrayLike<number>) : []
+  const sourceBounds = new THREE.Box3().setFromObject(object)
+  const sourceSphere = sourceBounds.isEmpty()
+    ? null
+    : sourceBounds.getBoundingSphere(new THREE.Sphere())
   geometry.computeBoundingSphere()
-  const boundingSphere = geometry.boundingSphere
+  const resolvedSphere = sourceSphere ?? geometry.boundingSphere
+  const boundingSphere = resolvedSphere
     ? {
         center: {
-          x: quantizeOutlineValue(geometry.boundingSphere.center.x, quantizeFactor),
-          y: quantizeOutlineValue(geometry.boundingSphere.center.y, quantizeFactor),
-          z: quantizeOutlineValue(geometry.boundingSphere.center.z, quantizeFactor),
+          x: quantizeOutlineValue(resolvedSphere.center.x, quantizeFactor),
+          y: quantizeOutlineValue(resolvedSphere.center.y, quantizeFactor),
+          z: quantizeOutlineValue(resolvedSphere.center.z, quantizeFactor),
         },
-        radius: quantizeOutlineValue(geometry.boundingSphere.radius, quantizeFactor),
+        radius: quantizeOutlineValue(resolvedSphere.radius, quantizeFactor),
       }
     : null
   const vertexCount = positionAttr.count
@@ -106,10 +111,11 @@ export function collectOutlinePoints(
 ): THREE.Vector3[] {
   const points: THREE.Vector3[] = []
   const scratch = new THREE.Vector3()
+  const sources: Array<{
+    position: THREE.BufferAttribute
+    matrixWorld: THREE.Matrix4
+  }> = []
   root.traverse((child) => {
-    if (points.length >= maxPoints) {
-      return
-    }
     const mesh = child as THREE.Object3D & { geometry?: THREE.BufferGeometry }
     const meta = mesh as unknown as { isMesh?: boolean; isSkinnedMesh?: boolean; isPoints?: boolean; isLine?: boolean }
     const isMesh = Boolean(meta.isMesh || meta.isSkinnedMesh)
@@ -126,13 +132,48 @@ export function collectOutlinePoints(
     if (!positionAttr) {
       return
     }
-    const stride = Math.max(1, Math.floor(positionAttr.count / perMeshSample))
-    for (let index = 0; index < positionAttr.count && points.length < maxPoints; index += stride) {
-      scratch.fromBufferAttribute(positionAttr, index)
-      scratch.applyMatrix4(mesh.matrixWorld)
+    sources.push({
+      position: positionAttr,
+      matrixWorld: mesh.matrixWorld.clone(),
+    })
+  })
+
+  if (!sources.length || maxPoints <= 0) {
+    return points
+  }
+
+  // Sample across the whole model instead of exhausting the point budget on
+  // the first few meshes. Large imported terrains commonly contain hundreds of
+  // spatially separated patches; stopping at the first mesh makes their lazy
+  // placeholder bounding sphere reject the actual camera position.
+  const meshCount = sources.length
+  const selectedSources = meshCount > maxPoints
+    ? Array.from({ length: maxPoints }, (_, index) => (
+        sources[Math.min(meshCount - 1, Math.floor((index * meshCount) / maxPoints))]
+      ))
+    : sources
+  const samplesPerMesh = Math.max(
+    1,
+    Math.min(perMeshSample, Math.ceil(maxPoints / selectedSources.length)),
+  )
+  for (let round = 0; round < samplesPerMesh && points.length < maxPoints; round += 1) {
+    for (let sourceIndex = 0; sourceIndex < selectedSources.length && points.length < maxPoints; sourceIndex += 1) {
+      const source = selectedSources[sourceIndex]
+      if (!source) {
+        continue
+      }
+      const count = source.position.count
+      if (count <= 0) {
+        continue
+      }
+      const sampleIndex = samplesPerMesh === 1
+        ? Math.floor(count / 2)
+        : Math.min(count - 1, Math.round((round * (count - 1)) / (samplesPerMesh - 1)))
+      scratch.fromBufferAttribute(source.position, sampleIndex)
+      scratch.applyMatrix4(source.matrixWorld)
       points.push(scratch.clone())
     }
-  })
+  }
   return points
 }
 
