@@ -20,6 +20,7 @@
     "test:monotonic-clock": "node --experimental-strip-types --test tests/monotonicClock.test.mts",
     "test:waypoint-carousel": "node --experimental-strip-types --test tests/waypointCarouselScroll.test.mts",
     "test:waypoint-thumbnail": "node --experimental-strip-types --test tests/waypointThumbnailSource.test.mts",
+    "test:wechat-watch-snapshot": "node --experimental-strip-types --test tests/wechatWatchSnapshot.test.mts",
     "lint": "eslint --ext .ts,.vue common components",
     "lint:fix": "eslint --ext .ts,.vue common components --fix",
     "check": "pnpm run type-check && pnpm run lint",
@@ -44,6 +45,7 @@
     "@harmony/utils": "file:../utils",
     "@minisheep/mini-program-polyfill-core": "^1.1.4",
     "@msgpack/msgpack": "^3.1.3",
+    "fflate": "0.8.2",
     "three-mesh-bvh": "^0.9.15",
     "three-player-controller": "0.6.2"
   },

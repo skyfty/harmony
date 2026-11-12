@@ -27,3 +27,16 @@ test('controllable asset links remain unique when present', () => {
   assert.equal(index[1].unique, true)
   assert.equal(index[1].sparse, true)
 })
+
+test('character gender is unique and only accepts male or female', () => {
+  const field = ProductModel.schema.path('characterGender')
+  assert.deepEqual(field.options.enum, ['male', 'female'])
+
+  const index = ProductModel.schema
+    .indexes()
+    .find(([fields]) => fields.characterGender === 1)
+
+  assert.ok(index)
+  assert.equal(index[1].unique, true)
+  assert.equal(index[1].sparse, true)
+})

@@ -4,6 +4,7 @@ import { OrderModel } from '@/models/Order'
 import { AppUserModel } from '@/models/AppUser'
 import { ProductModel } from '@/models/Product'
 import { UserProductModel } from '@/models/UserProduct'
+import { isCharacterProduct } from '@/services/characterProductPolicy'
 import { createOrderRefund } from '@/services/paymentService'
 import { generateRefundRequestNumber } from '@/utils/orderNumber'
 import { isFreeOrderRecord } from '@/utils/commerce'
@@ -207,6 +208,16 @@ export async function createOrder(ctx: Context): Promise<void> {
       quantity,
     }
   })
+  const orderedProducts = await ProductModel.find({
+    _id: { $in: items.map((item) => item.productId) },
+    isDeleted: { $ne: true },
+  })
+    .select({ _id: 1, controllableType: 1, characterGender: 1 })
+    .lean()
+    .exec()
+  if (orderedProducts.some(isCharacterProduct)) {
+    ctx.throw(409, '角色商品由玩家性别自动关联，不能创建订单')
+  }
   const totalAmount = items.reduce((sum, item) => sum + item.price * item.quantity, 0)
   const metadata: Record<string, unknown> = { ...(body.metadata ?? {}) }
   if (body.scenicId) {

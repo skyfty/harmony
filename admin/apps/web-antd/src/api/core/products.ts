@@ -17,6 +17,8 @@ export interface ProductItem {
   name: string;
   slug: string;
   categoryId: null | string;
+  controllableType: 'aircraft' | 'character' | 'ship' | 'vehicle' | null;
+  characterGender: 'female' | 'male' | null;
   coverUrl?: null | string;
   validityDays: number | null;
   applicableSceneTags: string[];
@@ -32,12 +34,14 @@ export interface ListProductsParams {
   page?: number;
   pageSize?: number;
   categoryId?: string;
+  characterGender?: 'female' | 'male';
 }
 
 export interface CreateProductPayload {
   name: string;
   slug: string;
   categoryId?: null | string;
+  characterGender?: 'female' | 'male' | null;
   coverUrl?: null | string;
   validityDays?: number | null;
   applicableSceneTags?: string[];
@@ -50,6 +54,7 @@ export interface UpdateProductPayload {
   name?: string;
   slug?: string;
   categoryId?: null | string;
+  characterGender?: 'female' | 'male' | null;
   coverUrl?: null | string;
   validityDays?: number | null;
   applicableSceneTags?: string[];

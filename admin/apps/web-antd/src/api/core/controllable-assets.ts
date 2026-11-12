@@ -8,6 +8,7 @@ interface ServerPageResult<T> {
 }
 
 export type ControllableType = 'aircraft' | 'character' | 'ship' | 'vehicle';
+export type CharacterGender = 'female' | 'male';
 
 export interface ControllableAssetItem {
   id: string;
@@ -22,6 +23,7 @@ export interface ControllableAssetItem {
   productId: null | string;
   product?: {
     categoryId: null | string;
+    characterGender?: CharacterGender | null;
     id: string;
     name: string;
     price: number;
@@ -51,6 +53,7 @@ export interface ControllableAssetPayload {
   isActive?: boolean;
   isDefault?: boolean;
   categoryId?: string;
+  characterGender?: CharacterGender;
   runtimeConfig?: null | Record<string, unknown>;
   metadata?: null | Record<string, unknown>;
 }

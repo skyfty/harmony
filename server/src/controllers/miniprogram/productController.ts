@@ -15,6 +15,13 @@ import { UserSkinSelectionModel } from '@/models/UserSkinSelection'
 import { ProductCategoryModel } from '@/models/ProductCategory'
 import { settleFreeOrder } from '@/services/orderSettlementService'
 import { isFreeProductPrice } from '@/utils/commerce'
+import {
+  buildMiniProductVisibilityFilter,
+  isCharacterProduct,
+  isProductAvailableForCharacterGender,
+  resolveUserCharacterGender,
+} from '@/services/characterProductPolicy'
+import { ensureDefaultControllableSelections } from '@/services/miniAuthService'
 
 function computeUserProductState(entry: {
   state?: UserProductState
@@ -99,6 +106,7 @@ interface ProductLean {
   updatedAt: Date
   controllableAssetId?: Types.ObjectId | null
   controllableType?: string | null
+  characterGender?: 'male' | 'female' | null
   skinId?: Types.ObjectId | null
 }
 
@@ -108,7 +116,9 @@ function buildProductResponse(product: ProductLean, userEntry?: {
   expiresAt?: Date | null
   usedAt?: Date | null
 } | null, controllableAsset?: any | null, selected = false, skin?: any | null, skinSelected = false): ProductResponse {
-  const purchased = Boolean(userEntry)
+  const purchased = Boolean(userEntry) || (
+    isCharacterProduct(product) && controllableAsset?.isDefault === true
+  )
   const state = computeUserProductState(userEntry ?? null)
   const locked = (product.metadata as any)?.locked === true
   return {
@@ -198,6 +208,10 @@ async function buildCurrentProductResponse(product: ProductLean, userId: string)
 export async function listProducts(ctx: Context): Promise<void> {
   const userId = getOptionalUserId(ctx)
   const { keyword, categoryId } = ctx.query as Record<string, string>
+  const effectiveGender = await resolveUserCharacterGender(userId)
+  if (userId && Types.ObjectId.isValid(userId)) {
+    await ensureDefaultControllableSelections(new Types.ObjectId(userId), effectiveGender).catch(() => undefined)
+  }
   const visibleCategories = await ProductCategoryModel.find({
     enabled: { $ne: false },
     purchasable: { $ne: false },
@@ -205,19 +219,33 @@ export async function listProducts(ctx: Context): Promise<void> {
     .select({ _id: 1 })
     .lean()
     .exec()
-  const visibleCategoryIds = visibleCategories.map((row: any) => row._id)
+  const populatedCategoryIds = await ProductModel.distinct('categoryId', {
+    isDeleted: { $ne: true },
+    controllableType: { $ne: 'character' },
+    categoryId: { $ne: null },
+  }).exec()
+  const populatedCategoryIdSet = new Set(
+    populatedCategoryIds
+      .filter((value) => value != null)
+      .map((value) => value.toString()),
+  )
+  const visibleCategoryIds = visibleCategories
+    .filter((row: any) => populatedCategoryIdSet.has(row._id.toString()))
+    .map((row: any) => row._id)
   const filter: Record<string, unknown> = {
     isDeleted: { $ne: true },
-    categoryId: { $in: visibleCategoryIds },
+    $and: [buildMiniProductVisibilityFilter(effectiveGender, visibleCategoryIds)],
   }
   if (keyword?.trim()) {
     const pattern = new RegExp(keyword.trim(), 'i')
-    filter.$or = [
+    ;(filter.$and as Array<Record<string, unknown>>).push({
+      $or: [
       { name: pattern },
       { slug: pattern },
       { description: pattern },
       { tags: pattern },
-    ]
+      ],
+    })
   }
   if (categoryId && Types.ObjectId.isValid(categoryId)) {
     const selectedCategoryId = new Types.ObjectId(categoryId)
@@ -234,8 +262,10 @@ export async function listProducts(ctx: Context): Promise<void> {
   const products = (await ProductModel.find(filter).sort({ createdAt: -1 }).lean().exec()) as ProductLean[]
   const controllableAssets = await ControllableAssetModel.find({ productId: { $in: products.map((product) => product._id) }, isActive: true }).lean().exec()
   const controllableByProductId = new Map(controllableAssets.map((asset: any) => [asset.productId.toString(), asset]))
-  const controllableTypeByProductId = new Map(controllableAssets.map((asset: any) => [asset.productId.toString(), asset.type]))
-  const skins = await SkinModel.find({ productId: { $in: products.map((product) => product._id) }, isActive: true }).lean().exec()
+  const availableProducts = products.filter((product) => (
+    !isCharacterProduct(product) || controllableByProductId.has(product._id.toString())
+  ))
+  const skins = await SkinModel.find({ productId: { $in: availableProducts.map((product) => product._id) }, isActive: true }).lean().exec()
   const skinCategoryIds = Array.from(new Set(skins.map((skin: any) => skin.categoryId?.toString?.()).filter(Boolean)))
   const skinCategories = skinCategoryIds.length
     ? await SkinCategoryModel.find({ _id: { $in: skinCategoryIds } }).lean().exec()
@@ -246,9 +276,9 @@ export async function listProducts(ctx: Context): Promise<void> {
   const entriesByProductId = new Map<string, { acquiredAt: Date; state: UserProductState; expiresAt?: Date | null; usedAt?: Date | null }>()
   const selectedProductIds = new Set<string>()
   const selectedSkinByCategory = new Map<string, string>()
-  if (userId && products.length) {
+  if (userId && availableProducts.length) {
     const [entries, selectedRows] = await Promise.all([
-      UserProductModel.find({ userId, productId: { $in: products.map((product) => product._id) } }).lean().exec(),
+      UserProductModel.find({ userId, productId: { $in: availableProducts.map((product) => product._id) } }).lean().exec(),
       UserControllableSelectionModel.find({
         userId,
         controllableType: { $in: Array.from(new Set(controllableAssets.map((asset: any) => asset.type))) },
@@ -285,8 +315,8 @@ export async function listProducts(ctx: Context): Promise<void> {
     }
   }
   ctx.body = {
-    total: products.length,
-    products: products.map((product: ProductLean) => {
+    total: availableProducts.length,
+    products: availableProducts.map((product: ProductLean) => {
       const productId = product._id.toString()
       const skin = skinByProductId.get(productId) ?? null
       return buildProductResponse(
@@ -309,12 +339,21 @@ export async function getProduct(ctx: Context): Promise<void> {
     ctx.throw(404, 'Product not found')
     return
   }
+  const effectiveGender = await resolveUserCharacterGender(userId)
+  if (!isProductAvailableForCharacterGender(product, effectiveGender)) {
+    ctx.throw(404, 'Product not found')
+    return
+  }
 
   let userEntry: any | null = null
   if (userId) {
     userEntry = await UserProductModel.findOne({ userId, productId: product._id }).lean().exec()
   }
   const controllableAsset = await ControllableAssetModel.findOne({ productId: product._id, isActive: true }).lean().exec()
+  if (isCharacterProduct(product) && !controllableAsset) {
+    ctx.throw(404, 'Product not found')
+    return
+  }
   const selectedRow = userId && controllableAsset
     ? await UserControllableSelectionModel.findOne({ userId, controllableType: controllableAsset.type, controllableAssetId: controllableAsset._id }).lean().exec()
     : null
@@ -343,7 +382,13 @@ export async function getProduct(ctx: Context): Promise<void> {
 }
 
 export async function listProductCategories(ctx: Context): Promise<void> {
+  const populatedCategoryIds = await ProductModel.distinct('categoryId', {
+    isDeleted: { $ne: true },
+    controllableType: { $ne: 'character' },
+    categoryId: { $ne: null },
+  }).exec()
   const rows = await ProductCategoryModel.find({
+    _id: { $in: populatedCategoryIds },
     enabled: { $ne: false },
     purchasable: { $ne: false },
   })
@@ -375,6 +420,10 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
   const product = await ProductModel.findOne({ _id: id, isDeleted: { $ne: true } }).exec()
   if (!product) {
     ctx.throw(404, 'Product not found')
+    return
+  }
+  if (isCharacterProduct(product.toObject())) {
+    ctx.throw(409, '角色商品由性别自动关联，不能购买')
     return
   }
 

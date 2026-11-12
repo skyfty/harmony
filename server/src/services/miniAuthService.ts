@@ -5,7 +5,12 @@ import { signMiniAuthToken } from '@/utils/domainJwt'
 import { hashPassword, verifyPassword } from '@/utils/password'
 import { Types } from 'mongoose'
 import { ControllableAssetModel } from '@/models/ControllableAsset'
+import { ProductModel } from '@/models/Product'
 import { UserControllableSelectionModel } from '@/models/UserControllableSelection'
+import {
+  isProductAvailableForCharacterGender,
+  resolveEffectiveCharacterGender,
+} from './characterProductPolicy'
 
 type AuthProvider = 'wechat-mini-program' | 'password'
 type MiniPlatform = 'wechat' | 'douyin' | 'xiaohongshu'
@@ -45,6 +50,7 @@ type AppUserLean = {
 type ControllableAssetLean = {
   _id: Types.ObjectId
   type: 'vehicle' | 'character' | 'ship' | 'aircraft'
+  productId: Types.ObjectId
 }
 
 export interface MiniSessionUser {
@@ -79,13 +85,16 @@ export interface MiniSessionUser {
   updatedAt: string
 }
 
-async function ensureDefaultControllableSelections(userId: Types.ObjectId): Promise<void> {
+export async function ensureDefaultControllableSelections(
+  userId: Types.ObjectId,
+  gender?: 'male' | 'female' | 'other' | null,
+): Promise<void> {
   const defaultAssets = await ControllableAssetModel.find({
     isActive: true,
     isDefault: true,
   })
     .sort({ type: 1, sortOrder: 1, createdAt: -1 })
-    .select({ _id: 1, type: 1 })
+    .select({ _id: 1, type: 1, productId: 1 })
     .lean()
     .exec() as ControllableAssetLean[]
 
@@ -93,8 +102,21 @@ async function ensureDefaultControllableSelections(userId: Types.ObjectId): Prom
     return
   }
 
+  const products = await ProductModel.find({
+    _id: { $in: defaultAssets.map((asset) => asset.productId) },
+    isDeleted: { $ne: true },
+  })
+    .select({ _id: 1, controllableType: 1, characterGender: 1 })
+    .lean()
+    .exec()
+  const productsById = new Map(products.map((product) => [product._id.toString(), product]))
+  const effectiveGender = resolveEffectiveCharacterGender(gender)
   const defaultAssetByType = new Map<ControllableAssetLean['type'], ControllableAssetLean>()
   for (const asset of defaultAssets) {
+    const product = productsById.get(asset.productId?.toString?.() ?? '')
+    if (!product || !isProductAvailableForCharacterGender(product, effectiveGender)) {
+      continue
+    }
     if (!defaultAssetByType.has(asset.type)) {
       defaultAssetByType.set(asset.type, asset)
     }
@@ -257,7 +279,7 @@ export async function miniRegisterWithPassword(input: {
     status: 'active',
   })
 
-  await ensureDefaultControllableSelections(created._id).catch((error) => {
+  await ensureDefaultControllableSelections(created._id, created.gender).catch((error) => {
     console.warn('[mini-auth] failed to ensure default controllable selections after register', {
       userId: created._id.toString(),
       error,
@@ -292,6 +314,13 @@ export async function miniLoginWithPassword(username: string, password: string):
   user.authProvider = 'password'
   markLogin(user)
   await user.save()
+
+  await ensureDefaultControllableSelections(user._id, user.gender).catch((error) => {
+    console.warn('[mini-auth] failed to ensure default controllable selections after password login', {
+      userId: user._id.toString(),
+      error,
+    })
+  })
 
   const sessionUser = buildMiniUser(user.toObject() as AppUserLean)
   return {
@@ -386,12 +415,6 @@ export async function miniLoginWithOpenId(input: {
         identity = existingIdentity
         user = createdUser
 
-        await ensureDefaultControllableSelections(createdUser._id).catch((error) => {
-          console.warn('[mini-auth] failed to ensure default controllable selections after wechat register', {
-            userId: createdUser._id.toString(),
-            error,
-          })
-        })
       }
     }
 
@@ -422,6 +445,13 @@ export async function miniLoginWithOpenId(input: {
   if (user.status !== 'active') {
     throw new Error('Account disabled')
   }
+
+  await ensureDefaultControllableSelections(user._id, user.gender).catch((error) => {
+    console.warn('[mini-auth] failed to ensure default controllable selections after wechat login', {
+      userId: user._id.toString(),
+      error,
+    })
+  })
 
   const sessionUser = buildMiniUser(user.toObject() as AppUserLean)
   return {

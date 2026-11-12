@@ -12,6 +12,7 @@ import {
   type ControllableAssetItem,
   type ControllableAssetPayload,
   type ControllableType,
+  type CharacterGender,
   updateControllableAssetApi,
 } from '#/api'
 import { listProductCategoriesApi } from '#/api'
@@ -30,10 +31,20 @@ const typeOptions: Array<{ label: string; value: ControllableType }> = [
 ]
 
 const typeLabel = (value: ControllableType) => typeOptions.find((item) => item.value === value)?.label || value
+const characterGenderOptions: Array<{ label: string; value: CharacterGender }> = [
+  { label: '男角色', value: 'male' },
+  { label: '女角色', value: 'female' },
+]
+const characterGenderLabel = (value?: CharacterGender | null) =>
+  characterGenderOptions.find((item) => item.value === value)?.label || '-'
 
-type ControllableAssetFormModel = Omit<ControllableAssetPayload, 'prefabUrl' | 'categoryId'> & {
+type ControllableAssetFormModel = Omit<
+  ControllableAssetPayload,
+  'prefabUrl' | 'categoryId' | 'characterGender'
+> & {
   prefabUrl: string
   categoryId: string
+  characterGender?: CharacterGender
 }
 
 const formModel = reactive<ControllableAssetFormModel>({
@@ -46,6 +57,7 @@ const formModel = reactive<ControllableAssetFormModel>({
   isActive: true,
   isDefault: false,
   categoryId: '',
+  characterGender: 'male',
   runtimeConfig: null,
   metadata: null,
 })
@@ -63,6 +75,7 @@ function resetForm() {
     isActive: true,
     isDefault: false,
     categoryId: '',
+    characterGender: 'male',
     runtimeConfig: null,
     metadata: null,
   })
@@ -87,10 +100,25 @@ async function openEdit(row: ControllableAssetItem) {
     isActive: item.isActive !== false,
     isDefault: item.isDefault === true,
     categoryId: item.product?.categoryId ?? '',
+    characterGender: item.product?.characterGender ?? undefined,
     runtimeConfig: item.runtimeConfig ?? null,
     metadata: item.metadata ?? null,
   })
   modalOpen.value = true
+}
+
+function handleTypeChange(value: unknown) {
+  const type = value as ControllableType | undefined
+  if (!type) {
+    return
+  }
+  if (type === 'character') {
+    formModel.categoryId = ''
+    formModel.isDefault = true
+    formModel.characterGender ||= 'male'
+    return
+  }
+  formModel.characterGender = undefined
 }
 
 async function submit() {
@@ -108,8 +136,9 @@ async function submit() {
       description: formModel.description?.trim() || '',
       prefabUrl: formModel.prefabUrl?.trim() || '',
       isActive: formModel.isActive !== false,
-      isDefault: formModel.isDefault === true,
-      categoryId: formModel.categoryId || undefined,
+      isDefault: formModel.type === 'character' || formModel.isDefault === true,
+      categoryId: formModel.type === 'character' ? undefined : formModel.categoryId || undefined,
+      characterGender: formModel.type === 'character' ? formModel.characterGender : undefined,
       runtimeConfig: formModel.runtimeConfig ?? null,
       metadata: formModel.metadata ?? null,
     }
@@ -176,6 +205,12 @@ const [AssetGrid, gridApi] = useVbenVxeGrid<ControllableAssetItem>({
         formatter: ({ cellValue }: { cellValue: ControllableType }) => typeLabel(cellValue),
       },
       { field: 'product.name', title: '关联商品', minWidth: 180 },
+      {
+        field: 'product.characterGender',
+        title: '角色性别',
+        minWidth: 100,
+        formatter: ({ cellValue }: { cellValue?: CharacterGender | null }) => characterGenderLabel(cellValue),
+      },
       { field: 'product.price', title: '价格', minWidth: 100 },
       { field: 'isDefault', title: '默认', minWidth: 90, slots: { default: 'isDefault' } },
       { field: 'isActive', title: '启用', minWidth: 90, slots: { default: 'isActive' } },
@@ -259,7 +294,15 @@ onMounted(async () => {
     >
       <Form ref="formRef" :model="formModel" :label-col="{ span: 6 }" :wrapper-col="{ span: 17 }">
         <Form.Item label="类型" name="type" :rules="[{ required: true, message: '请选择类型' }]">
-          <Select v-model:value="formModel.type" :options="typeOptions" />
+          <Select v-model:value="formModel.type" :options="typeOptions" @change="handleTypeChange" />
+        </Form.Item>
+        <Form.Item
+          v-if="formModel.type === 'character'"
+          label="角色性别"
+          name="characterGender"
+          :rules="[{ required: true, message: '请选择角色性别' }]"
+        >
+          <Select v-model:value="formModel.characterGender" :options="characterGenderOptions" />
         </Form.Item>
         <Form.Item label="标识" name="identifier" :rules="[{ required: true, message: '请输入标识' }]">
           <Input v-model:value="formModel.identifier" />
@@ -270,7 +313,7 @@ onMounted(async () => {
         <Form.Item label="排序">
           <InputNumber v-model:value="formModel.sortOrder" :min="0" style="width: 100%" />
         </Form.Item>
-        <Form.Item label="商品分类">
+        <Form.Item v-if="formModel.type !== 'character'" label="商品分类">
           <Select v-model:value="formModel.categoryId" :options="categoryOptions" allow-clear />
         </Form.Item>
         <Form.Item label="Prefab URL">
@@ -279,7 +322,10 @@ onMounted(async () => {
         <Form.Item label="描述">
           <Input.TextArea v-model:value="formModel.description" :rows="4" />
         </Form.Item>
-        <Form.Item label="默认使用">
+        <Form.Item v-if="formModel.type === 'character'" label="角色归属">
+          <span>按玩家性别自动拥有并使用</span>
+        </Form.Item>
+        <Form.Item v-else label="默认使用">
           <Switch v-model:checked="formModel.isDefault" />
         </Form.Item>
         <Form.Item label="启用">

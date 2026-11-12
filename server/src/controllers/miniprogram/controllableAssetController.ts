@@ -6,6 +6,10 @@ import { UserProductModel } from '@/models/UserProduct'
 import { UserControllableSelectionModel } from '@/models/UserControllableSelection'
 import { ensureUserId, getOptionalUserId } from './utils'
 import type { ControllableAssetType } from '@/types/models'
+import {
+  isProductAvailableForCharacterGender,
+  resolveUserCharacterGender,
+} from '@/services/characterProductPolicy'
 
 const TYPES: ControllableAssetType[] = ['vehicle', 'character', 'ship', 'aircraft']
 
@@ -38,6 +42,7 @@ function mapAsset(row: any, owned: boolean, selected: boolean, product?: any) {
 export async function listControllableAssets(ctx: Context): Promise<void> {
   const userId = getOptionalUserId(ctx)
   const { keyword, type, ownedOnly } = ctx.query as Record<string, string>
+  const effectiveGender = await resolveUserCharacterGender(userId)
   const filter: Record<string, unknown> = { isActive: true }
   if (type && TYPES.includes(type as ControllableAssetType)) {
     filter.type = type
@@ -57,7 +62,10 @@ export async function listControllableAssets(ctx: Context): Promise<void> {
   const selectedByType = new Map(selectedRows.map((entry: any) => [entry.controllableType, entry.controllableAssetId.toString()]))
 
   const data = rows
-    .filter((row: any) => productsById.has(row.productId?.toString?.() ?? ''))
+    .filter((row: any) => {
+      const product = productsById.get(row.productId?.toString?.() ?? '')
+      return Boolean(product) && isProductAvailableForCharacterGender(product as any, effectiveGender)
+    })
     .map((row: any) => {
       const product = productsById.get(row.productId.toString())
       const owned = ownedProductIds.has(row.productId.toString()) || row.isDefault === true
@@ -71,11 +79,27 @@ export async function listControllableAssets(ctx: Context): Promise<void> {
 export async function listUserControllableSelections(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const rows = await UserControllableSelectionModel.find({ userId }).populate('controllableAssetId').lean().exec()
+  const effectiveGender = await resolveUserCharacterGender(userId)
+  const productIds = rows
+    .map((row: any) => row.controllableAssetId?.productId)
+    .filter(Boolean)
+  const products = productIds.length
+    ? await ProductModel.find({ _id: { $in: productIds }, isDeleted: { $ne: true } }).lean().exec()
+    : []
+  const productsById = new Map(products.map((product: any) => [product._id.toString(), product]))
+
   ctx.body = {
-    selections: rows.map((row: any) => ({
-      type: row.controllableType,
-      asset: row.controllableAssetId ? mapAsset(row.controllableAssetId, true, true) : null,
-    })),
+    selections: rows
+      .filter((row: any) => {
+        const product = productsById.get(row.controllableAssetId?.productId?.toString?.() ?? '')
+        return row.controllableAssetId
+          && product
+          && isProductAvailableForCharacterGender(product, effectiveGender)
+      })
+      .map((row: any) => ({
+        type: row.controllableType,
+        asset: mapAsset(row.controllableAssetId, true, true),
+      })),
   }
 }
 
@@ -87,6 +111,10 @@ export async function setCurrentControllableAsset(ctx: Context): Promise<void> {
     ctx.throw(404, 'Controllable asset not found')
   }
   const product = asset?.productId ? await ProductModel.findById(asset.productId).lean().exec() : null
+  const effectiveGender = await resolveUserCharacterGender(userId)
+  if (product && !isProductAvailableForCharacterGender(product, effectiveGender)) {
+    ctx.throw(403, 'Character asset is not available for the current player gender')
+  }
   const owned = asset?.isDefault === true || Boolean(await UserProductModel.exists({ userId, productId: asset?.productId }))
   if (!owned) {
     ctx.throw(403, 'Controllable asset not owned')

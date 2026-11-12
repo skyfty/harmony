@@ -613,6 +613,8 @@ export interface WarehouseDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export type CharacterGender = 'male' | 'female'
+
 export interface ProductDocument extends Document<Types.ObjectId> {
   /** 中文：商品名称 */
   name: string
@@ -624,6 +626,8 @@ export interface ProductDocument extends Document<Types.ObjectId> {
   controllableAssetId?: Types.ObjectId | null
   /** 中文：关联的可控对象类型（可选） */
   controllableType?: ControllableAssetType | null
+  /** 中文：角色商品适用性别（仅人物角色使用） */
+  characterGender?: CharacterGender | null
   /** 中文：关联的皮肤 ID（可选） */
   skinId?: Types.ObjectId | null
   /** 中文：商品价格 */

@@ -5,6 +5,7 @@ import { nanoid } from 'nanoid'
 import { AppUserModel } from '@/models/AppUser'
 import { appConfig } from '@/config/env'
 import {
+  ensureDefaultControllableSelections,
   miniBindPhone,
   miniGetProfile,
   miniLoginWithOpenId,
@@ -380,6 +381,12 @@ export async function miniUpdateProfile(ctx: Context): Promise<void> {
   if (!updated) {
     ctx.throw(404, 'User not found')
   }
+  await ensureDefaultControllableSelections(updated._id, updated.gender).catch((error) => {
+    console.warn('[mini-auth] failed to ensure default controllable selections after profile update', {
+      userId: updated._id.toString(),
+      error,
+    })
+  })
   const session = await miniGetProfile(userId)
   ctx.body = session
 }

@@ -5,17 +5,23 @@ import { ProductCategoryModel } from '@/models/ProductCategory'
 import { VehicleModel } from '@/models/Vehicle'
 import { ControllableAssetModel } from '@/models/ControllableAsset'
 import { SkinModel } from '@/models/Skin'
+import type { CharacterGender } from '@/types/models'
 
 type ProductPayload = {
   name?: string
   slug?: string
   categoryId?: string | null
+  characterGender?: CharacterGender | null
   validityDays?: number | null
   applicableSceneTags?: string[]
   description?: string | null
   coverUrl?: string | null
   price?: number
   metadata?: Record<string, unknown> | null
+}
+
+function resolveCharacterGender(value: unknown): CharacterGender | null {
+  return value === 'male' || value === 'female' ? value : null
 }
 
 function toStringValue(value: unknown): string | null {
@@ -44,6 +50,8 @@ function mapProduct(row: any) {
     name: row.name,
     slug: row.slug,
     categoryId: row.categoryId?.toString?.() ?? null,
+    controllableType: row.controllableType ?? null,
+    characterGender: row.characterGender ?? null,
     skinId: row.skinId?.toString?.() ?? null,
     coverUrl: row.coverUrl ?? null,
     validityDays: row.validityDays ?? null,
@@ -77,7 +85,7 @@ async function resolveCategoryPayload(payload: ProductPayload, fallback: { categ
 }
 
 export async function listProducts(ctx: Context): Promise<void> {
-  const { page = '1', pageSize = '10', keyword, categoryId } = ctx.query as Record<string, string>
+  const { page = '1', pageSize = '10', keyword, categoryId, characterGender } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
   const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
   const skip = (pageNumber - 1) * limit
@@ -90,6 +98,9 @@ export async function listProducts(ctx: Context): Promise<void> {
 
   if (categoryId && Types.ObjectId.isValid(categoryId)) {
     filter.categoryId = new Types.ObjectId(categoryId)
+  }
+  if (characterGender === 'male' || characterGender === 'female') {
+    filter.characterGender = characterGender
   }
 
   const [rows, total] = await Promise.all([
@@ -119,6 +130,10 @@ export async function getProduct(ctx: Context): Promise<void> {
 
 export async function createProduct(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as ProductPayload
+  if (body.characterGender !== undefined && body.characterGender !== null) {
+    ctx.throw(400, '角色商品请通过可控资产创建')
+    return
+  }
   const name = toStringValue(body.name)
   const slug = toStringValue(body.slug)?.toLowerCase()
   let categoryPayload: { categoryId: Types.ObjectId | null }
@@ -175,13 +190,29 @@ export async function updateProduct(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as ProductPayload
   const nextName = toStringValue(body.name) ?? current.name
   const nextSlug = toStringValue(body.slug)?.toLowerCase() ?? current.slug
-  let nextCategory: { categoryId: Types.ObjectId | null }
-  try {
-    nextCategory = await resolveCategoryPayload(body, {
-      categoryId: current.categoryId ?? null,
-    })
-  } catch (error) {
-    ctx.throw(400, (error as Error).message)
+  const isCharacter = current.controllableType === 'character'
+  let nextCategory: { categoryId: Types.ObjectId | null } = {
+    categoryId: current.categoryId ?? null,
+  }
+  if (!isCharacter) {
+    try {
+      nextCategory = await resolveCategoryPayload(body, {
+        categoryId: current.categoryId ?? null,
+      })
+    } catch (error) {
+      ctx.throw(400, (error as Error).message)
+      return
+    }
+    if (!nextCategory.categoryId) {
+      ctx.throw(400, 'categoryId is required')
+      return
+    }
+  }
+  const nextCharacterGender = isCharacter
+    ? resolveCharacterGender(body.characterGender === undefined ? current.characterGender : body.characterGender)
+    : null
+  if (isCharacter && !nextCharacterGender) {
+    ctx.throw(400, 'characterGender is required for character products')
     return
   }
   const nextValidityDays =
@@ -204,13 +235,24 @@ export async function updateProduct(ctx: Context): Promise<void> {
       ctx.throw(409, 'slug already exists')
     }
   }
+  if (isCharacter && nextCharacterGender) {
+    const duplicateCharacter = await ProductModel.exists({
+      _id: { $ne: id },
+      controllableType: 'character',
+      characterGender: nextCharacterGender,
+      isDeleted: { $ne: true },
+    })
+    if (duplicateCharacter) {
+      ctx.throw(409, '该性别角色已存在')
+      return
+    }
+  }
 
-  const updated = await ProductModel.findByIdAndUpdate(
-    id,
-    {
+  const update: Record<string, unknown> = {
+    $set: {
       name: nextName,
       slug: nextSlug,
-      categoryId: nextCategory.categoryId ?? null,
+      categoryId: isCharacter ? null : nextCategory.categoryId ?? null,
       validityDays: nextValidityDays,
       applicableSceneTags:
         body.applicableSceneTags === undefined ? current.applicableSceneTags : toStringArray(body.applicableSceneTags),
@@ -218,11 +260,21 @@ export async function updateProduct(ctx: Context): Promise<void> {
       coverUrl: body.coverUrl === undefined ? current.coverUrl : (toStringValue(body.coverUrl) ?? ''),
       price: nextPrice,
       metadata: body.metadata === undefined ? current.metadata : body.metadata,
+      ...(isCharacter ? { characterGender: nextCharacterGender, price: 0, validityDays: null } : {}),
     },
-    { new: true },
-  )
-    .lean()
-    .exec()
+  }
+  if (!isCharacter) {
+    update.$unset = { characterGender: 1 }
+  }
+  let updated
+  try {
+    updated = await ProductModel.findByIdAndUpdate(id, update, { new: true }).lean().exec()
+  } catch (error) {
+    if ((error as { code?: number }).code === 11000) {
+      ctx.throw(409, '该性别角色已存在')
+    }
+    throw error
+  }
   ctx.body = mapProduct(updated)
 }
 
@@ -247,7 +299,13 @@ export async function deleteProduct(ctx: Context): Promise<void> {
     ctx.throw(409, `该商品已关联皮肤“${skin.name ?? '未知'}”，请先删除皮肤`)
   }
 
-  await ProductModel.findByIdAndUpdate(id, { isDeleted: true, deletedAt: new Date() }).exec()
+  await ProductModel.findByIdAndUpdate(
+    id,
+    {
+      $set: { isDeleted: true, deletedAt: new Date(), categoryId: null },
+      $unset: { characterGender: 1 },
+    },
+  ).exec()
   ctx.status = 200
   ctx.body = {}
 }

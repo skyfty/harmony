@@ -2,11 +2,15 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { ControllableAssetModel } from '@/models/ControllableAsset'
 import { ProductModel } from '@/models/Product'
-import { UserModel } from '@/models/User'
+import { AppUserModel } from '@/models/AppUser'
 import { UserControllableSelectionModel } from '@/models/UserControllableSelection'
 import { UserProductModel } from '@/models/UserProduct'
-import type { ControllableAssetType } from '@/types/models'
+import type { CharacterGender, ControllableAssetType } from '@/types/models'
 import { getTransportProductCategory } from '@/services/productCategoryService'
+import {
+  isProductAvailableForCharacterGender,
+  resolveEffectiveCharacterGender,
+} from '@/services/characterProductPolicy'
 
 const TYPES: ControllableAssetType[] = ['vehicle', 'character', 'ship', 'aircraft']
 
@@ -20,6 +24,7 @@ type Payload = {
   isActive?: boolean
   isDefault?: boolean
   categoryId?: string
+  characterGender?: CharacterGender
   runtimeConfig?: Record<string, unknown> | null
   metadata?: Record<string, unknown> | null
 }
@@ -46,6 +51,7 @@ function mapAsset(row: any, product?: any) {
           name: product.name,
           slug: product.slug,
           categoryId: product.categoryId?.toString?.() ?? null,
+          characterGender: product.characterGender ?? null,
           price: product.price,
         }
       : undefined,
@@ -56,23 +62,67 @@ function mapAsset(row: any, product?: any) {
   }
 }
 
+function resolveCharacterGender(value: unknown): CharacterGender | null {
+  return value === 'male' || value === 'female' ? value : null
+}
+
 async function createProductForAsset(body: Payload, current?: any) {
+  const nextType = body.type ?? current?.type
+  const characterGender = resolveCharacterGender(body.characterGender)
+  if (nextType === 'character' && !characterGender) {
+    throw new Error('characterGender is required for character assets')
+  }
+
   if (current?.productId) {
     const product = await ProductModel.findById(current.productId).exec()
     if (product) {
-      return await ProductModel.findByIdAndUpdate(
-        product._id,
-        {
+      let nextCategoryId = product.categoryId
+      if (nextType !== 'character') {
+        const explicitCategoryId = text(body.categoryId)
+        if (explicitCategoryId && Types.ObjectId.isValid(explicitCategoryId)) {
+          nextCategoryId = new Types.ObjectId(explicitCategoryId)
+        }
+        if (!nextCategoryId) {
+          const fallbackCategory = await getTransportProductCategory()
+          nextCategoryId = fallbackCategory ? new Types.ObjectId(fallbackCategory.id) : null
+        }
+        if (!nextCategoryId) {
+          throw new Error('categoryId is required')
+        }
+      }
+      const update: Record<string, unknown> = {
+        $set: {
           name: text(body.name) || product.name,
           slug: product.slug,
-          categoryId: body.categoryId && Types.ObjectId.isValid(body.categoryId)
-            ? new Types.ObjectId(body.categoryId)
-            : product.categoryId,
+          categoryId: nextType === 'character' ? null : nextCategoryId,
           description: body.description === undefined ? product.description : text(body.description),
+          ...(nextType === 'character' ? { characterGender, price: 0 } : {}),
         },
-        { new: true },
-      ).exec()
+      }
+      if (nextType !== 'character') {
+        update.$unset = { characterGender: 1 }
+      }
+      return await ProductModel.findByIdAndUpdate(product._id, update, { new: true }).exec()
     }
+  }
+
+  if (nextType === 'character') {
+    const slugBase = `${text(body.type) || 'character'}-${text(body.identifier) || Date.now()}`
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+    let slug = slugBase || `character-${Date.now()}`
+    let suffix = 1
+    while (await ProductModel.exists({ slug })) {
+      slug = `${slugBase}-${suffix++}`
+    }
+    return await ProductModel.create({
+      name: text(body.name),
+      slug,
+      categoryId: null,
+      characterGender,
+      price: 0,
+      description: text(body.description),
+    })
   }
 
   const categoryId = text(body.categoryId)
@@ -156,6 +206,10 @@ export async function createControllableAsset(ctx: Context): Promise<void> {
   try {
     product = await createProductForAsset(body)
   } catch (error) {
+    if ((error as { code?: number }).code === 11000) {
+      ctx.throw(409, '该性别角色已存在')
+      return
+    }
     ctx.throw(400, (error as Error).message)
     return
   }
@@ -163,19 +217,28 @@ export async function createControllableAsset(ctx: Context): Promise<void> {
     ctx.throw(400, 'Unable to resolve product')
   }
 
-  const created = await ControllableAssetModel.create({
-    identifier,
-    name,
-    type,
-    sortOrder: Number(body.sortOrder) || 0,
-    description: text(body.description),
-    prefabUrl: text(body.prefabUrl),
-    isActive: body.isActive !== false,
-    isDefault: body.isDefault === true,
-    productId: product!._id,
-    runtimeConfig: body.runtimeConfig ?? null,
-    metadata: body.metadata ?? null,
-  })
+  let created
+  try {
+    created = await ControllableAssetModel.create({
+      identifier,
+      name,
+      type,
+      sortOrder: Number(body.sortOrder) || 0,
+      description: text(body.description),
+      prefabUrl: text(body.prefabUrl),
+      isActive: body.isActive !== false,
+      isDefault: type === 'character' ? true : body.isDefault === true,
+      productId: product!._id,
+      runtimeConfig: body.runtimeConfig ?? null,
+      metadata: body.metadata ?? null,
+    })
+  } catch (error) {
+    await ProductModel.deleteOne({ _id: product!._id }).exec().catch(() => undefined)
+    if ((error as { code?: number }).code === 11000) {
+      ctx.throw(409, 'identifier already exists for this type')
+    }
+    throw error
+  }
   await ProductModel.findByIdAndUpdate(product!._id, { controllableAssetId: created._id, controllableType: type }).exec()
   ctx.status = 201
   ctx.body = mapAsset(created.toObject(), await ProductModel.findById(product!._id).lean().exec())
@@ -200,6 +263,42 @@ export async function updateControllableAsset(ctx: Context): Promise<void> {
     ctx.throw(409, 'identifier already exists for this type')
   }
 
+  const nextCharacterGender = resolveCharacterGender(body.characterGender)
+  if (nextType === 'character' && !nextCharacterGender) {
+    ctx.throw(400, 'characterGender is required for character assets')
+  }
+
+  const currentProduct = current.productId
+    ? await ProductModel.findById(current.productId).lean().exec()
+    : null
+  let nextCategoryId = currentProduct?.categoryId ?? null
+  if (nextType === 'character') {
+    if (await ProductModel.exists({
+      _id: { $ne: current.productId },
+      controllableType: 'character',
+      characterGender: nextCharacterGender,
+      isDeleted: { $ne: true },
+    })) {
+      ctx.throw(409, '该性别角色已存在')
+    }
+    nextCategoryId = null
+  } else {
+    const requestedCategoryId = text(body.categoryId)
+    if (requestedCategoryId) {
+      if (!Types.ObjectId.isValid(requestedCategoryId)) {
+        ctx.throw(400, 'Invalid category id')
+      }
+      nextCategoryId = new Types.ObjectId(requestedCategoryId)
+    }
+    if (!nextCategoryId) {
+      const fallbackCategory = await getTransportProductCategory()
+      nextCategoryId = fallbackCategory ? new Types.ObjectId(fallbackCategory.id) : null
+    }
+    if (!nextCategoryId) {
+      ctx.throw(400, 'categoryId is required')
+    }
+  }
+
   const updated = await ControllableAssetModel.findByIdAndUpdate(
     current._id,
     {
@@ -210,7 +309,11 @@ export async function updateControllableAsset(ctx: Context): Promise<void> {
       description: body.description === undefined ? current.description : text(body.description),
       prefabUrl: body.prefabUrl === undefined ? current.prefabUrl : text(body.prefabUrl),
       isActive: body.isActive === undefined ? current.isActive : body.isActive === true,
-      isDefault: body.isDefault === undefined ? current.isDefault : body.isDefault === true,
+      isDefault: nextType === 'character'
+        ? true
+        : body.isDefault === undefined
+          ? current.isDefault
+          : body.isDefault === true,
       runtimeConfig: body.runtimeConfig === undefined ? current.runtimeConfig : body.runtimeConfig,
       metadata: body.metadata === undefined ? current.metadata : body.metadata,
     },
@@ -221,14 +324,27 @@ export async function updateControllableAsset(ctx: Context): Promise<void> {
 
   if (updated?.productId) {
     const productUpdate: Record<string, unknown> = {
-      name: updated.name,
-      description: updated.description,
-      controllableType: updated.type,
+      $set: {
+        name: updated.name,
+        description: updated.description,
+        controllableType: updated.type,
+        categoryId: nextType === 'character' ? null : nextCategoryId,
+        ...(nextType === 'character'
+          ? { characterGender: nextCharacterGender, price: 0, validityDays: null }
+          : {}),
+      },
     }
-    if (body.categoryId && Types.ObjectId.isValid(body.categoryId)) {
-      productUpdate.categoryId = new Types.ObjectId(body.categoryId)
+    if (nextType !== 'character') {
+      productUpdate.$unset = { characterGender: 1 }
     }
-    await ProductModel.findByIdAndUpdate(updated.productId, productUpdate).exec()
+    try {
+      await ProductModel.findByIdAndUpdate(updated.productId, productUpdate).exec()
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) {
+        ctx.throw(409, '该性别角色已存在')
+      }
+      throw error
+    }
   }
 
   ctx.body = mapAsset(updated, updated?.productId ? await ProductModel.findById(updated.productId).lean().exec() : null)
@@ -245,10 +361,12 @@ export async function deleteControllableAsset(ctx: Context): Promise<void> {
       $set: {
         isDeleted: true,
         deletedAt: new Date(),
+        categoryId: null,
       },
       $unset: {
         controllableAssetId: 1,
         controllableType: 1,
+        characterGender: 1,
       },
     }).exec()
   }
@@ -361,7 +479,7 @@ export async function listUserControllableAssets(ctx: Context): Promise<void> {
       orParts.push({ productId: { $in: productIds } })
     }
     if (keywordText) {
-      const userRows = await UserModel.find({
+      const userRows = await AppUserModel.find({
         $or: [{ username: new RegExp(keywordText, 'i') }, { displayName: new RegExp(keywordText, 'i') }],
       })
         .select({ _id: 1 })
@@ -450,7 +568,7 @@ export async function createUserControllableAsset(ctx: Context): Promise<void> {
   }
 
   const [user, asset] = await Promise.all([
-    UserModel.findById(userId).select({ _id: 1 }).lean().exec(),
+    AppUserModel.findById(userId).select({ _id: 1, gender: 1 }).lean().exec(),
     ControllableAssetModel.findById(controllableAssetId)
       .select({ _id: 1, type: 1, productId: 1, isActive: 1 })
       .lean()
@@ -467,6 +585,13 @@ export async function createUserControllableAsset(ctx: Context): Promise<void> {
   }
   if (!asset.productId) {
     ctx.throw(400, 'Controllable asset has no linked product')
+  }
+  const product = await ProductModel.findById(asset.productId).lean().exec()
+  if (!product) {
+    ctx.throw(404, 'Linked product not found')
+  }
+  if (!isProductAvailableForCharacterGender(product, resolveEffectiveCharacterGender(user.gender))) {
+    ctx.throw(403, '角色商品与玩家性别不匹配')
   }
 
   const existing = await UserProductModel.findOne({ userId: user._id, productId: asset.productId })

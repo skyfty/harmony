@@ -656,6 +656,16 @@ import LanternImageFrame from './LanternImageFrame.vue';
 import DriveCompass from './DriveCompass.vue';
 import SpeedReadout from './SpeedReadout.vue';
 import SceneLoadOverlay from './SceneLoadOverlay.vue';
+import {
+  captureWechatWatchSnapshotPixels,
+  encodeWechatWatchSnapshotPng,
+  prepareWechatWatchSnapshotImage,
+  promptWechatWatchSnapshotShare,
+  removeWechatWatchSnapshotFile,
+  resolveWechatWatchSnapshotRuntime,
+  resolveWechatWatchSnapshotEntrancePath,
+  writeWechatWatchSnapshotPngFile,
+} from '../common/utils/wechatWatchSnapshot';
 import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
 import { loadTextureFromSourceUrl } from '@harmony/schema/textureSourceLoader';
 import {
@@ -4065,6 +4075,7 @@ const watchSnapshotBusy = ref(false);
 // Watch 进入/离开的过渡动画进行中，此时不允许拍照，避免保存过渡中间帧。
 const watchTransitionBusy = ref(false);
 const watchSnapshotActionDisabled = computed(() => watchSnapshotBusy.value || watchTransitionBusy.value);
+let lastWechatWatchSnapshotFilePath = '';
 
 const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
   hasSnapshot: false,
@@ -5845,7 +5856,7 @@ function resolveWatchSnapshotBaseName(): string {
 function buildWatchSnapshotFileName(): string {
   const now = new Date();
   const pad = (value: number) => String(value).padStart(2, '0');
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${String(now.getMilliseconds()).padStart(3, '0')}`;
   return `${resolveWatchSnapshotBaseName()}-${stamp}.png`;
 }
 
@@ -5928,33 +5939,33 @@ async function captureWatchSnapshotBlob(): Promise<Blob | null> {
   return await canvasToBlob(canvas, 'image/png');
 }
 
-async function captureWatchSnapshotTempFilePath(): Promise<string | null> {
+async function captureWatchSnapshotTempFilePath(fileName: string): Promise<string | null> {
   const context = renderContext;
-  const canvas = canvasResult?.canvas ?? null;
-  const componentInstance = canvasResult?.componentInstance ?? null;
-  if (!context || !canvas || !componentInstance) {
+  const runtime = resolveWechatWatchSnapshotRuntime();
+  if (!context || !runtime) {
     return null;
   }
 
-  try {
-    context.renderer.render(context.scene, context.camera);
-  } catch (error) {
-    console.warn('[SceneryViewer] Failed to render frame before capture', error);
-  }
-
-  await yieldToMainThread();
-
-  return await new Promise<string | null>((resolve, reject) => {
-    uni.canvasToTempFilePath(
-      {
-        canvasId,
-        fileType: 'png',
-        success: (result: { tempFilePath: string }) => resolve(result.tempFilePath),
-        fail: reject,
-      },
-      componentInstance,
-    );
+  const frame = captureWechatWatchSnapshotPixels(
+    context.renderer,
+    context.scene,
+    context.camera,
+  );
+  const snapshot = prepareWechatWatchSnapshotImage({
+    pixels: frame.pixels,
+    sourceWidth: frame.width,
+    sourceHeight: frame.height,
   });
+  const png = encodeWechatWatchSnapshotPng(snapshot);
+  return await writeWechatWatchSnapshotPngFile({
+    runtime,
+    fileName,
+    png,
+  });
+}
+
+async function cleanupWechatWatchSnapshotFile(filePath: string | null | undefined): Promise<void> {
+  await removeWechatWatchSnapshotFile(resolveWechatWatchSnapshotRuntime(), filePath);
 }
 
 function triggerWatchSnapshotDownload(blob: Blob, fileName: string): void {
@@ -6031,46 +6042,65 @@ async function handleWatchSnapshotTap(): Promise<void> {
   }
 
   watchSnapshotBusy.value = true;
+  let pendingWechatSnapshotPath = '';
+  let committedWechatSnapshotPath = '';
+  let savedWechatSnapshotPath = '';
   try {
     const fileName = buildWatchSnapshotFileName();
     if (isWeChatMiniProgram) {
-      const filePath = await captureWatchSnapshotTempFilePath();
+      const filePath = await captureWatchSnapshotTempFilePath(fileName);
       if (!filePath) {
         uni.showToast({ title: '当前画面暂时无法保存', icon: 'none' });
         return;
       }
+      pendingWechatSnapshotPath = filePath;
 
       await saveWatchSnapshotToMiniProgram(filePath);
+      committedWechatSnapshotPath = filePath;
+      const previousFilePath = lastWechatWatchSnapshotFilePath;
+      lastWechatWatchSnapshotFilePath = filePath;
       emit('watch-snapshot-saved', {
         fileName,
         platform: 'wechat-mini-program',
         source: 'watch-snapshot',
         tempFilePath: filePath,
       });
-      uni.showToast({ title: '已保存到相册', icon: 'success' });
-      return;
-    }
+      savedWechatSnapshotPath = filePath;
+      if (previousFilePath && previousFilePath !== filePath) {
+        void cleanupWechatWatchSnapshotFile(previousFilePath);
+      }
+    } else {
+      const blob = await captureWatchSnapshotBlob();
+      if (!blob) {
+        uni.showToast({ title: '当前画面暂时无法保存', icon: 'none' });
+        return;
+      }
 
-    const blob = await captureWatchSnapshotBlob();
-    if (!blob) {
-      uni.showToast({ title: '当前画面暂时无法保存', icon: 'none' });
-      return;
+      triggerWatchSnapshotDownload(blob, fileName);
+      emit('watch-snapshot-saved', {
+        fileName,
+        platform: 'web',
+        source: 'watch-snapshot',
+        blob,
+      });
+      uni.showToast({ title: '截图已下载', icon: 'success' });
     }
-
-    triggerWatchSnapshotDownload(blob, fileName);
-    emit('watch-snapshot-saved', {
-      fileName,
-      platform: 'web',
-      source: 'watch-snapshot',
-      blob,
-    });
-    uni.showToast({ title: '截图已下载', icon: 'success' });
   } catch (error) {
     console.warn('[SceneryViewer] Failed to save watch snapshot', error);
     const message = error instanceof Error ? error.message : '截图保存失败';
     uni.showToast({ title: message || '截图保存失败', icon: 'none' });
   } finally {
+    if (pendingWechatSnapshotPath && pendingWechatSnapshotPath !== committedWechatSnapshotPath) {
+      await cleanupWechatWatchSnapshotFile(pendingWechatSnapshotPath);
+    }
     watchSnapshotBusy.value = false;
+  }
+
+  if (savedWechatSnapshotPath) {
+    await promptWechatWatchSnapshotShare({
+      filePath: savedWechatSnapshotPath,
+      entrancePath: resolveWechatWatchSnapshotEntrancePath(),
+    });
   }
 }
 
@@ -27383,6 +27413,11 @@ onUnmounted(() => {
   viewerEnvironmentSwitchToken += 1;
   viewerEnvironmentSwitchPhase.value = 'idle';
   guideWaypointMenuRefreshRevision += 1;
+  const snapshotFilePath = lastWechatWatchSnapshotFilePath;
+  lastWechatWatchSnapshotFilePath = '';
+  if (snapshotFilePath) {
+    void cleanupWechatWatchSnapshotFile(snapshotFilePath);
+  }
   clearWechatWaypointThumbnailFiles(wechatWaypointThumbnailRuntime);
   guideWaypointThumbnailUrlCache.clear();
   closeGuideWaypointMenu();

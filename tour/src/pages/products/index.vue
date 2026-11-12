@@ -30,7 +30,8 @@
           </view>
 
           <view class="meta-row">
-            <text class="category-tag">{{ displayCategoryName(product) }}</text>
+            <text v-if="displayCategoryName(product)" class="category-tag">{{ displayCategoryName(product) }}</text>
+            <view v-else />
             <text class="price">¥{{ formatPrice(product.price) }}</text>
           </view>
 
@@ -104,7 +105,11 @@ const products = ref<ProductListItem[]>([])
 const categoryChips = computed(() => [
   { value: '', label: '全部' },
   ...categories.value
-    .filter((item) => item.enabled !== false && item.purchasable !== false)
+    .filter((item) => (
+      item.enabled !== false
+      && item.purchasable !== false
+      && item.name.trim() !== '人物角色'
+    ))
     .map((item) => ({
       value: item.id,
       label: item.name,
@@ -117,12 +122,15 @@ const visibleProducts = computed(() => {
 
 function categoryName(categoryId: string | null | undefined): string {
   if (!categoryId) {
-    return '未分类'
+    return ''
   }
-  return categories.value.find((item) => item.id === categoryId)?.name || '未分类'
+  return categories.value.find((item) => item.id === categoryId)?.name || ''
 }
 
 function displayCategoryName(product: ProductListItem): string {
+  if (product.controllableAsset?.type === 'character') {
+    return ''
+  }
   if (product.skin?.categoryName) {
     return product.skin.categoryName
   }

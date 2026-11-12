@@ -20,6 +20,7 @@ const productSchema = new Schema<ProductDocument>(
     // Sparse unique indexes still include explicit null values, so omit this field when it is not linked.
     controllableAssetId: { type: Schema.Types.ObjectId, ref: 'ControllableAsset', unique: true, sparse: true },
     controllableType: { type: String, enum: ['vehicle', 'character', 'ship', 'aircraft', null], default: null },
+    characterGender: { type: String, enum: ['male', 'female'], unique: true, sparse: true },
     price: { type: Number, required: true, min: 0 },
     coverUrl: { type: String },
     description: { type: String, default: '' },
