@@ -209,7 +209,7 @@ async function reload() {
       }),
     ])
     categories.value = categoryRows
-    products.value = productRows
+    products.value = productRows.filter((product) => product.controllableAsset?.type !== 'character')
   } finally {
     loading.value = false
   }

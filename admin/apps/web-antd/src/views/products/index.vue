@@ -22,7 +22,6 @@ interface ProductFormModel {
   name: string;
   slug: string;
   categoryId: string;
-  characterGender?: 'female' | 'male';
   price?: number;
   validityDays?: number;
   description: string;
@@ -44,15 +43,10 @@ const productFormModel = reactive<ProductFormModel>({
   coverUrl: '',
 });
 
-const editingCharacter = ref(false);
 const categoryOptions = ref<Array<{ label: string; value: string }>>([]);
 const categoryNameById = ref<Record<string, string>>({});
 const imageFileList = ref<UploadFile[]>([]);
 const imagePreview = ref('');
-const characterGenderOptions = [
-  { label: '男角色', value: 'male' },
-  { label: '女角色', value: 'female' },
-];
 
 const imageUploadProps: UploadProps = {
   beforeUpload: () => false,
@@ -67,7 +61,6 @@ function resetForm() {
   productFormModel.name = '';
   productFormModel.slug = '';
   productFormModel.categoryId = '';
-  productFormModel.characterGender = undefined;
   productFormModel.price = undefined;
   productFormModel.validityDays = undefined;
   productFormModel.description = '';
@@ -78,7 +71,6 @@ function resetForm() {
 
 function openCreateModal() {
   editingId.value = null;
-  editingCharacter.value = false;
   resetForm();
   modalOpen.value = true;
 }
@@ -90,8 +82,6 @@ async function openEditModal(row: any) {
     productFormModel.name = data.name || '';
     productFormModel.slug = data.slug || '';
     productFormModel.categoryId = data.categoryId || '';
-    editingCharacter.value = data.controllableType === 'character';
-    productFormModel.characterGender = data.characterGender || undefined;
     productFormModel.price = data.price ?? undefined;
     productFormModel.validityDays = data.validityDays ?? undefined;
     productFormModel.description = data.description ?? '';
@@ -130,8 +120,7 @@ async function submitProduct() {
     const payload = {
       name: productFormModel.name.trim(),
       slug: productFormModel.slug.trim(),
-      categoryId: editingCharacter.value ? null : productFormModel.categoryId || undefined,
-      characterGender: editingCharacter.value ? productFormModel.characterGender : undefined,
+      categoryId: productFormModel.categoryId || undefined,
       price: productFormModel.price ?? undefined,
       validityDays: productFormModel.validityDays ?? undefined,
       description: productFormModel.description.trim() || undefined,
@@ -186,16 +175,6 @@ const [ProductGrid, productGridApi] = useVbenVxeGrid({
           options: categoryOptions,
         },
       },
-      {
-        component: 'Select',
-        fieldName: 'characterGender',
-        label: '角色性别',
-        componentProps: {
-          allowClear: true,
-          options: characterGenderOptions,
-          placeholder: '全部性别',
-        },
-      },
     ],
   },
   gridOptions: {
@@ -205,7 +184,6 @@ const [ProductGrid, productGridApi] = useVbenVxeGrid({
       { field: 'slug', minWidth: 180, title: t('page.products.index.table.slug') },
       { field: 'coverUrl', minWidth: 120, title: t('page.products.index.table.cover'), slots: { default: 'cover' } },
       { field: 'categoryId', minWidth: 140, title: t('page.products.index.table.category'), slots: { default: 'category' } },
-      { field: 'characterGender', minWidth: 100, title: '角色性别', slots: { default: 'characterGender' } },
       { field: 'price', minWidth: 120, title: t('page.products.index.table.price') },
       { field: 'validityDays', minWidth: 120, title: t('page.products.index.table.validityDays') },
       { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: t('page.products.index.table.createdAt') },
@@ -222,7 +200,6 @@ const [ProductGrid, productGridApi] = useVbenVxeGrid({
             page: page.currentPage,
             pageSize: page.pageSize,
             categoryId: formValues.categoryId || undefined,
-            characterGender: formValues.characterGender || undefined,
           };
           return await listProductsApi(params);
         },
@@ -271,10 +248,6 @@ onMounted(() => {
         <span>{{ categoryNameById[row.categoryId] || '-' }}</span>
       </template>
 
-      <template #characterGender="{ row }">
-        <span>{{ row.characterGender === 'male' ? '男' : row.characterGender === 'female' ? '女' : '-' }}</span>
-      </template>
-
       <template #actions="{ row }">
         <Space>
           <Tooltip :title="t('page.products.index.actions.edit')">
@@ -300,21 +273,13 @@ onMounted(() => {
           <Form.Item :label="t('page.products.index.formFields.slug.label')" name="slug" :rules="[{ required: true, message: t('page.products.index.formFields.slug.required') }, { pattern: /^[a-z0-9-]+$/, message: t('page.products.index.formFields.slug.pattern') }]">
             <Input v-model:value="productFormModel.slug" :placeholder="t('page.products.index.formFields.slug.placeholder')" />
           </Form.Item>
-          <Form.Item
-            v-if="editingCharacter"
-            label="角色性别"
-            name="characterGender"
-            :rules="[{ required: true, message: '请选择角色性别' }]"
-          >
-            <Select v-model:value="productFormModel.characterGender" :options="characterGenderOptions" />
-          </Form.Item>
-          <Form.Item v-else :label="t('page.products.index.formFields.categoryId.label')" name="categoryId" :rules="[{ required: true, message: t('page.products.index.formFields.categoryId.required') }]">
+          <Form.Item :label="t('page.products.index.formFields.categoryId.label')" name="categoryId" :rules="[{ required: true, message: t('page.products.index.formFields.categoryId.required') }]">
             <Select v-model:value="productFormModel.categoryId" :options="categoryOptions" allowClear :placeholder="t('page.products.index.formFields.categoryId.placeholder')" />
           </Form.Item>
-          <Form.Item v-if="!editingCharacter" :label="t('page.products.index.formFields.price.label')" name="price" :rules="[{ type: 'number', min: 0, message: t('page.products.index.formFields.price.min') }]">
+          <Form.Item :label="t('page.products.index.formFields.price.label')" name="price" :rules="[{ type: 'number', min: 0, message: t('page.products.index.formFields.price.min') }]">
             <InputNumber v-model:value="productFormModel.price" style="width:100%" min="0" />
           </Form.Item>
-          <Form.Item v-if="!editingCharacter" :label="t('page.products.index.formFields.validityDays.label')" name="validityDays" :rules="[{ type: 'number', min: 1, message: t('page.products.index.formFields.validityDays.min') }]">
+          <Form.Item :label="t('page.products.index.formFields.validityDays.label')" name="validityDays" :rules="[{ type: 'number', min: 1, message: t('page.products.index.formFields.validityDays.min') }]">
             <InputNumber v-model:value="productFormModel.validityDays" style="width:100%" min="1" />
           </Form.Item>
         <Form.Item :label="t('page.products.index.formFields.description.label')" name="description">

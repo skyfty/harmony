@@ -12,10 +12,7 @@ import {
   objectIdString,
 } from './miniDtoUtils'
 import type { ProductDocument, SceneDocument } from '@/types/models'
-import {
-  isProductAvailableForCharacterGender,
-  resolveUserCharacterGender,
-} from '@/services/characterProductPolicy'
+import { isProductListable } from '@/services/characterProductPolicy'
 
 type ProductWithStateDto = {
   id: string
@@ -55,7 +52,6 @@ function buildProductDto(product: ProductDocument, userEntry: { state: string; e
 
 export async function listScenicProducts(ctx: Context): Promise<void> {
   const userId = getOptionalUserId(ctx)
-  const effectiveGender = await resolveUserCharacterGender(userId)
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid scene id')
@@ -80,7 +76,7 @@ export async function listScenicProducts(ctx: Context): Promise<void> {
         isDeleted: { $ne: true },
       }).lean().exec()) as ProductDocument[])
     : ([] as ProductDocument[]))
-    .filter((product) => isProductAvailableForCharacterGender(product, effectiveGender))
+    .filter(isProductListable)
 
   const boundProductIdSet = new Set(boundProducts.map((product) => objectIdString(product._id)))
 
@@ -89,8 +85,7 @@ export async function listScenicProducts(ctx: Context): Promise<void> {
         if (boundProductIdSet.has(objectIdString(product._id))) {
           return false
         }
-        return isProductAvailableForCharacterGender(product, effectiveGender)
-          && isProductApplicableToScene(product, sceneTags)
+        return isProductListable(product) && isProductApplicableToScene(product, sceneTags)
       })
     : ([] as ProductDocument[])
 

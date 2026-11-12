@@ -126,13 +126,21 @@ export async function ensureDefaultControllableSelections(
     Array.from(defaultAssetByType.values()).map((asset) => ({
       updateOne: {
         filter: { userId, controllableType: asset.type },
-        update: {
-          $setOnInsert: {
-            userId,
-            controllableType: asset.type,
-            controllableAssetId: asset._id,
-          },
-        },
+        update: asset.type === 'character'
+          ? {
+              $set: {
+                userId,
+                controllableType: asset.type,
+                controllableAssetId: asset._id,
+              },
+            }
+          : {
+              $setOnInsert: {
+                userId,
+                controllableType: asset.type,
+                controllableAssetId: asset._id,
+              },
+            },
         upsert: true,
       },
     })),

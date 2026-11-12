@@ -18,7 +18,7 @@ import { isFreeProductPrice } from '@/utils/commerce'
 import {
   buildMiniProductVisibilityFilter,
   isCharacterProduct,
-  isProductAvailableForCharacterGender,
+  isProductListable,
   resolveUserCharacterGender,
 } from '@/services/characterProductPolicy'
 import { ensureDefaultControllableSelections } from '@/services/miniAuthService'
@@ -116,9 +116,7 @@ function buildProductResponse(product: ProductLean, userEntry?: {
   expiresAt?: Date | null
   usedAt?: Date | null
 } | null, controllableAsset?: any | null, selected = false, skin?: any | null, skinSelected = false): ProductResponse {
-  const purchased = Boolean(userEntry) || (
-    isCharacterProduct(product) && controllableAsset?.isDefault === true
-  )
+  const purchased = Boolean(userEntry)
   const state = computeUserProductState(userEntry ?? null)
   const locked = (product.metadata as any)?.locked === true
   return {
@@ -234,7 +232,7 @@ export async function listProducts(ctx: Context): Promise<void> {
     .map((row: any) => row._id)
   const filter: Record<string, unknown> = {
     isDeleted: { $ne: true },
-    $and: [buildMiniProductVisibilityFilter(effectiveGender, visibleCategoryIds)],
+    $and: [buildMiniProductVisibilityFilter(visibleCategoryIds)],
   }
   if (keyword?.trim()) {
     const pattern = new RegExp(keyword.trim(), 'i')
@@ -262,9 +260,7 @@ export async function listProducts(ctx: Context): Promise<void> {
   const products = (await ProductModel.find(filter).sort({ createdAt: -1 }).lean().exec()) as ProductLean[]
   const controllableAssets = await ControllableAssetModel.find({ productId: { $in: products.map((product) => product._id) }, isActive: true }).lean().exec()
   const controllableByProductId = new Map(controllableAssets.map((asset: any) => [asset.productId.toString(), asset]))
-  const availableProducts = products.filter((product) => (
-    !isCharacterProduct(product) || controllableByProductId.has(product._id.toString())
-  ))
+  const availableProducts = products.filter(isProductListable)
   const skins = await SkinModel.find({ productId: { $in: availableProducts.map((product) => product._id) }, isActive: true }).lean().exec()
   const skinCategoryIds = Array.from(new Set(skins.map((skin: any) => skin.categoryId?.toString?.()).filter(Boolean)))
   const skinCategories = skinCategoryIds.length
@@ -339,8 +335,7 @@ export async function getProduct(ctx: Context): Promise<void> {
     ctx.throw(404, 'Product not found')
     return
   }
-  const effectiveGender = await resolveUserCharacterGender(userId)
-  if (!isProductAvailableForCharacterGender(product, effectiveGender)) {
+  if (!isProductListable(product)) {
     ctx.throw(404, 'Product not found')
     return
   }
@@ -350,10 +345,6 @@ export async function getProduct(ctx: Context): Promise<void> {
     userEntry = await UserProductModel.findOne({ userId, productId: product._id }).lean().exec()
   }
   const controllableAsset = await ControllableAssetModel.findOne({ productId: product._id, isActive: true }).lean().exec()
-  if (isCharacterProduct(product) && !controllableAsset) {
-    ctx.throw(404, 'Product not found')
-    return
-  }
   const selectedRow = userId && controllableAsset
     ? await UserControllableSelectionModel.findOne({ userId, controllableType: controllableAsset.type, controllableAssetId: controllableAsset._id }).lean().exec()
     : null
@@ -423,7 +414,7 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
     return
   }
   if (isCharacterProduct(product.toObject())) {
-    ctx.throw(409, '角色商品由性别自动关联，不能购买')
+    ctx.throw(409, '角色由玩家性别自动配置，不能购买')
     return
   }
 

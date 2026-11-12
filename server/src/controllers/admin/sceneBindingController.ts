@@ -15,9 +15,15 @@ export async function listBindings(ctx: Context): Promise<void> {
   const rows = await SceneProductBindingModel.find({ sceneId: scenicId }).lean().exec()
   // enrich with product basic info
   const productIds = rows.map((r: any) => r.productId)
-  const products = productIds.length ? await ProductModel.find({ _id: { $in: productIds } }).lean().exec() : []
+  const products = productIds.length
+    ? await ProductModel.find({
+        _id: { $in: productIds },
+        isDeleted: { $ne: true },
+        controllableType: { $ne: 'character' },
+      }).lean().exec()
+    : []
   const prodById = new Map(products.map((p: any) => [String(p._id), p]))
-  ctx.body = (rows || []).map((r: any) => ({
+  ctx.body = (rows || []).filter((r: any) => prodById.has(String(r.productId))).map((r: any) => ({
     id: r._id.toString(),
     productId: String(r.productId),
     enabled: Boolean(r.enabled),
@@ -36,6 +42,14 @@ export async function createBinding(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(scenicId)) ctx.throw(400, 'Invalid scenic id')
   const body = (ctx.request.body ?? {}) as BindingPayload
   if (!body.productId || !Types.ObjectId.isValid(body.productId)) ctx.throw(400, 'Invalid product id')
+  const product = await ProductModel.findOne({
+    _id: body.productId,
+    isDeleted: { $ne: true },
+  }).select({ controllableType: 1 }).lean().exec()
+  if (!product) ctx.throw(404, 'Product not found')
+  if (product.controllableType === 'character') {
+    ctx.throw(409, '角色由玩家性别自动配置，不能绑定为场景商品')
+  }
   // upsert unique binding per scene+product enforced by schema unique index
   const created = await SceneProductBindingModel.findOneAndUpdate(
     { sceneId: scenicId, productId: body.productId },

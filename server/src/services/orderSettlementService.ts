@@ -3,10 +3,7 @@ import type { ClientSession } from 'mongoose'
 import { OrderModel } from '@/models/Order'
 import { ProductModel } from '@/models/Product'
 import { CouponModel } from '@/models/Coupon'
-import {
-  isProductAvailableForCharacterGender,
-  resolveUserCharacterGender,
-} from './characterProductPolicy'
+import { isCharacterProduct } from './characterProductPolicy'
 import { UserProductModel } from '@/models/UserProduct'
 import { UserCouponModel } from '@/models/UserCoupon'
 import { ControllableAssetModel } from '@/models/ControllableAsset'
@@ -91,7 +88,6 @@ function mergeOrderPaymentResult(
 
 async function fulfillOrder(order: any, session?: ClientSession, options: { oneTimeOwnership?: boolean } = {}): Promise<void> {
 	const now = new Date()
-	const effectiveCharacterGender = await resolveUserCharacterGender(String(order.userId))
 	for (const item of order.items ?? []) {
 		if (!item?.productId) {
 			continue
@@ -168,7 +164,7 @@ async function fulfillOrder(order: any, session?: ClientSession, options: { oneT
 			controllableQuery.session(session)
 		}
 		const controllable = await controllableQuery.lean().exec()
-		if (controllable?._id && isProductAvailableForCharacterGender(product, effectiveCharacterGender)) {
+		if (controllable?._id && !isCharacterProduct(product)) {
 			await UserControllableSelectionModel.updateOne(
 				{ userId: order.userId, controllableType: controllable.type },
 				{

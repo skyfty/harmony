@@ -17,6 +17,10 @@ export function isCharacterProduct(product: CharacterProductLike): boolean {
   return product.controllableType === 'character'
 }
 
+export function isProductListable(product: CharacterProductLike): boolean {
+  return !isCharacterProduct(product)
+}
+
 export function isProductAvailableForCharacterGender(
   product: CharacterProductLike,
   effectiveGender: CharacterGender,
@@ -36,19 +40,10 @@ export async function resolveUserCharacterGender(userId?: string | null): Promis
 }
 
 export function buildMiniProductVisibilityFilter(
-  effectiveGender: CharacterGender,
   visibleCategoryIds: Types.ObjectId[],
 ): Record<string, unknown> {
   return {
-    $or: [
-      {
-        controllableType: 'character',
-        characterGender: effectiveGender,
-      },
-      {
-        controllableType: { $ne: 'character' },
-        categoryId: { $in: visibleCategoryIds },
-      },
-    ],
+    controllableType: { $ne: 'character' },
+    categoryId: { $in: visibleCategoryIds },
   }
 }

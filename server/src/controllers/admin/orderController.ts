@@ -216,7 +216,7 @@ export async function createOrder(ctx: Context): Promise<void> {
     .lean()
     .exec()
   if (orderedProducts.some(isCharacterProduct)) {
-    ctx.throw(409, '角色商品由玩家性别自动关联，不能创建订单')
+    ctx.throw(409, '角色由玩家性别自动配置，不能创建订单')
   }
   const totalAmount = items.reduce((sum, item) => sum + item.price * item.quantity, 0)
   const metadata: Record<string, unknown> = { ...(body.metadata ?? {}) }

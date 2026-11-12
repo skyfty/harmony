@@ -239,7 +239,9 @@ async function enterScenery() {
       const assets = await listControllableAssets({ ownedOnly: true });
       const current = assets.find((asset) => asset.isSelected) || assets.find((asset) => asset.isDefault) || assets[0];
       if (current) {
-        await selectControllableAsset(current.id);
+        if (!current.isSelected) {
+          await selectControllableAsset(current.id);
+        }
         setSelectedControllable(current.type as ControllableType, current);
         selectedControllable = current;
       }

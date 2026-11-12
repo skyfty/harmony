@@ -4,6 +4,7 @@ import { Types } from 'mongoose'
 import {
   buildMiniProductVisibilityFilter,
   isProductAvailableForCharacterGender,
+  isProductListable,
   resolveEffectiveCharacterGender,
 } from '../src/services/characterProductPolicy'
 
@@ -15,7 +16,7 @@ test('player gender resolves to the two supported character genders with male fa
   assert.equal(resolveEffectiveCharacterGender('invalid'), 'male')
 })
 
-test('character products are visible only to the matching effective gender', () => {
+test('character products remain available for internal gender checks', () => {
   assert.equal(
     isProductAvailableForCharacterGender(
       { controllableType: 'character', characterGender: 'male' },
@@ -32,12 +33,20 @@ test('character products are visible only to the matching effective gender', () 
   )
 })
 
-test('non-character and legacy unclassified products remain gender-neutral', () => {
+test('character products are never public product-list entries', () => {
   assert.equal(
-    isProductAvailableForCharacterGender({ controllableType: 'vehicle' }, 'female'),
-    true,
+    isProductListable({ controllableType: 'character', characterGender: 'male' }),
+    false,
   )
-  assert.equal(isProductAvailableForCharacterGender({}, 'male'), true)
+  assert.equal(
+    isProductListable({ controllableType: 'character', characterGender: 'female' }),
+    false,
+  )
+})
+
+test('non-character and legacy unclassified products remain listable', () => {
+  assert.equal(isProductListable({ controllableType: 'vehicle' }), true)
+  assert.equal(isProductListable({}), true)
 })
 
 test('character products without a supported role gender are unavailable', () => {
@@ -50,17 +59,11 @@ test('character products without a supported role gender are unavailable', () =>
   )
 })
 
-test('catalog visibility combines the matching role with categorized non-role products', () => {
+test('catalog visibility contains only categorized non-role products', () => {
   const categoryId = new Types.ObjectId()
-  const filter = buildMiniProductVisibilityFilter('female', [categoryId]) as {
-    $or: Array<Record<string, unknown>>
-  }
+  const filter = buildMiniProductVisibilityFilter([categoryId])
 
-  assert.deepEqual(filter.$or[0], {
-    controllableType: 'character',
-    characterGender: 'female',
-  })
-  assert.deepEqual(filter.$or[1], {
+  assert.deepEqual(filter, {
     controllableType: { $ne: 'character' },
     categoryId: { $in: [categoryId] },
   })

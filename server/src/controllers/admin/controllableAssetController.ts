@@ -7,10 +7,7 @@ import { UserControllableSelectionModel } from '@/models/UserControllableSelecti
 import { UserProductModel } from '@/models/UserProduct'
 import type { CharacterGender, ControllableAssetType } from '@/types/models'
 import { getTransportProductCategory } from '@/services/productCategoryService'
-import {
-  isProductAvailableForCharacterGender,
-  resolveEffectiveCharacterGender,
-} from '@/services/characterProductPolicy'
+import { isCharacterProduct } from '@/services/characterProductPolicy'
 
 const TYPES: ControllableAssetType[] = ['vehicle', 'character', 'ship', 'aircraft']
 
@@ -590,8 +587,8 @@ export async function createUserControllableAsset(ctx: Context): Promise<void> {
   if (!product) {
     ctx.throw(404, 'Linked product not found')
   }
-  if (!isProductAvailableForCharacterGender(product, resolveEffectiveCharacterGender(user.gender))) {
-    ctx.throw(403, '角色商品与玩家性别不匹配')
+  if (isCharacterProduct(product)) {
+    ctx.throw(409, '角色由玩家性别自动配置，不能手动分配')
   }
 
   const existing = await UserProductModel.findOne({ userId: user._id, productId: asset.productId })

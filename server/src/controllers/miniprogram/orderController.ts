@@ -9,11 +9,7 @@ import { getMiniPlatformPaymentProvider } from '@/services/miniPlatformProviders
 import { settleFreeOrder, syncOrderWithWechat } from '@/services/orderSettlementService'
 import { generateOrderNumber } from '@/utils/orderNumber'
 import { isFreeOrderRecord } from '@/utils/commerce'
-import {
-  isCharacterProduct,
-  isProductAvailableForCharacterGender,
-  resolveUserCharacterGender,
-} from '@/services/characterProductPolicy'
+import { isCharacterProduct } from '@/services/characterProductPolicy'
 
 type OrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled'
 type PaymentStatus = 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
@@ -428,14 +424,9 @@ export async function createOrder(ctx: Context): Promise<void> {
   const productIds = normalizedItems.map((item) => item.productId)
   const products = await ProductModel.find({ _id: { $in: productIds }, isDeleted: { $ne: true } }).lean().exec()
   if (products.some(isCharacterProduct)) {
-    ctx.throw(409, '角色商品由性别自动关联，不能下单')
+    ctx.throw(409, '角色由玩家性别自动配置，不能下单')
   }
-  const effectiveGender = await resolveUserCharacterGender(userId)
-  const productMap = new Map(
-    products
-      .filter((item) => isProductAvailableForCharacterGender(item, effectiveGender))
-      .map((item) => [item._id.toString(), item]),
-  )
+  const productMap = new Map(products.map((item) => [item._id.toString(), item]))
 
   const missingProduct = normalizedItems.find((item) => !productMap.has(item.productId))
   if (missingProduct) {

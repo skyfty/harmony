@@ -85,11 +85,14 @@ async function resolveCategoryPayload(payload: ProductPayload, fallback: { categ
 }
 
 export async function listProducts(ctx: Context): Promise<void> {
-  const { page = '1', pageSize = '10', keyword, categoryId, characterGender } = ctx.query as Record<string, string>
+  const { page = '1', pageSize = '10', keyword, categoryId } = ctx.query as Record<string, string>
   const pageNumber = Math.max(Number(page) || 1, 1)
   const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
   const skip = (pageNumber - 1) * limit
-  const filter: Record<string, unknown> = { isDeleted: { $ne: true } }
+  const filter: Record<string, unknown> = {
+    isDeleted: { $ne: true },
+    controllableType: { $ne: 'character' },
+  }
 
   if (keyword && keyword.trim()) {
     const pattern = new RegExp(keyword.trim(), 'i')
@@ -99,10 +102,6 @@ export async function listProducts(ctx: Context): Promise<void> {
   if (categoryId && Types.ObjectId.isValid(categoryId)) {
     filter.categoryId = new Types.ObjectId(categoryId)
   }
-  if (characterGender === 'male' || characterGender === 'female') {
-    filter.characterGender = characterGender
-  }
-
   const [rows, total] = await Promise.all([
     ProductModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
     ProductModel.countDocuments(filter),
@@ -131,7 +130,7 @@ export async function getProduct(ctx: Context): Promise<void> {
 export async function createProduct(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as ProductPayload
   if (body.characterGender !== undefined && body.characterGender !== null) {
-    ctx.throw(400, '角色商品请通过可控资产创建')
+    ctx.throw(400, '角色请通过可控资产自动配置')
     return
   }
   const name = toStringValue(body.name)
