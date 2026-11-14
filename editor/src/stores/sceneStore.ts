@@ -5727,7 +5727,7 @@ function reattachRuntimeObjectsForNodes(nodes: SceneNode[]): void {
     if (!node) {
       return
     }
-    componentManager.attachRuntime(node, object)
+    componentManager.ensureRuntimeAttached(node, object)
   })
 }
 
@@ -21753,8 +21753,7 @@ export const useSceneStore = defineStore('scene', {
       if (
         type === HOUSE_RIG_COMPONENT_TYPE
         && (
-          Object.prototype.hasOwnProperty.call(patch, 'dimensions')
-          || Object.prototype.hasOwnProperty.call(patch, 'scriptId')
+          Object.prototype.hasOwnProperty.call(patch, 'scriptId')
           || Object.prototype.hasOwnProperty.call(patch, 'scriptVersion')
           || Object.prototype.hasOwnProperty.call(patch, 'parts')
         )

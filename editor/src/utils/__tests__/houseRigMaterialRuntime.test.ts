@@ -194,6 +194,27 @@ describe('House Rig runtime material seeds', () => {
     expect(standardMaterial.envMapIntensity).toBe(0.7)
   })
 
+  it('does not recompile an already-applied neutral environment', () => {
+    const environmentMap = new THREE.Texture()
+    const standardMaterial = new THREE.MeshStandardMaterial({
+      metalness: 1,
+      envMapIntensity: 1,
+    })
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), standardMaterial)
+    const config = {
+      ...createHouseRigMaterialSeedFromThreeMaterial(standardMaterial, createPart()),
+      editorPreviewEnvironment: 'neutral-pbr' as const,
+      envMapIntensity: 0.7,
+    }
+
+    applyHouseRigMaterialEnvironmentPreview(mesh, config, environmentMap)
+    const versionAfterFirstApplication = standardMaterial.version
+
+    applyHouseRigMaterialEnvironmentPreview(mesh, config, environmentMap)
+
+    expect(standardMaterial.version).toBe(versionAfterFirstApplication)
+  })
+
   it('does not inject environment into unmarked or unlit materials', () => {
     const environmentMap = new THREE.Texture()
     const standardMaterial = new THREE.MeshStandardMaterial()

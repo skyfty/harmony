@@ -127,7 +127,7 @@ describe('Agent House Rig operations', () => {
     })
     expect(changed.afterRevision).toBe(initialRevision + 1)
     expect(store.undoStack).toHaveLength(initialUndo + 1)
-    expect(store.houseRigMaterialRefreshVersion).toBe(initialMaterialRefreshVersion + 1)
+    expect(store.houseRigMaterialRefreshVersion).toBe(initialMaterialRefreshVersion)
     const next = store.getNodeById(node.id)?.components?.[HOUSE_RIG_COMPONENT_TYPE]
       ?.props as HouseRigComponentProps
     expect(next.dimensions.width).toBeCloseTo(targetDimensions.width, 5)

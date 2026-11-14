@@ -543,6 +543,20 @@ export class ComponentManager {
     this.syncNode(node)
   }
 
+  /**
+   * Attaches a runtime object only when the host replaced the object instance.
+   * Property synchronization uses `syncNode`; reattaching an unchanged object
+   * would tear down component runtime resources unnecessarily.
+   */
+  ensureRuntimeAttached(node: SceneNode, runtimeObject: Object3D | null): void {
+    const bundle = this.nodeBundles.get(node.id)
+    if (bundle && bundle.runtimeObject === (runtimeObject ?? null)) {
+      this.syncNode(node)
+      return
+    }
+    this.attachRuntime(node, runtimeObject)
+  }
+
   detachRuntime(nodeId: string): void {
     const bundle = this.nodeBundles.get(nodeId)
     if (!bundle) {

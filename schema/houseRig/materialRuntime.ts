@@ -26,11 +26,21 @@ export function applyHouseRigMaterialEnvironmentPreview(
       envMap?: THREE.Texture | null
       envMapIntensity?: number
     }
-    record.envMap = environmentMap
-    if (typeof materialConfig.envMapIntensity === 'number') {
-      record.envMapIntensity = Math.max(0, materialConfig.envMapIntensity)
+    let changed = false
+    if (record.envMap !== environmentMap) {
+      record.envMap = environmentMap
+      changed = true
     }
-    material.needsUpdate = true
+    if (typeof materialConfig.envMapIntensity === 'number') {
+      const nextIntensity = Math.max(0, materialConfig.envMapIntensity)
+      if (record.envMapIntensity !== nextIntensity) {
+        record.envMapIntensity = nextIntensity
+        changed = true
+      }
+    }
+    if (changed) {
+      material.needsUpdate = true
+    }
   }
   const visit = (object: THREE.Object3D) => {
     const mesh = object as THREE.Mesh

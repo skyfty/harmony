@@ -189,7 +189,10 @@ import {
 } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { createPrimitiveMesh } from '@schema/import'
-import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
+import {
+  canNodeUseRuntimeModelInstancing,
+  hasEnabledHouseRigComponent,
+} from '@schema/runtimeModelInstancing'
 import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
 
 
@@ -1632,6 +1635,12 @@ function refreshGroundRuntimeMaterials(
 }
 
 function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+  if (hasEnabledHouseRigComponent(node)) {
+    // House Rig owns per-part runtime materials. Generic imported-model
+    // synchronization would reset those overrides to the GLB baseline after
+    // transform-only patches such as moving the node with the Select tool.
+    return
+  }
   if (node.dynamicMesh?.type === 'Ground') {
     refreshGroundRuntimeMaterials(node, targetObject)
     return
