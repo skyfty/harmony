@@ -19,6 +19,7 @@ function createGovernorState(): PhysicsVehicleSpeedGovernorState {
     speedGovernorBrakeAssist: 0,
     speedGovernorOverHardCap: false,
     speedGovernorSmoothedForwardSpeedAbs: 0,
+    speedGovernorSteeringAngle: 0,
   }
 }
 

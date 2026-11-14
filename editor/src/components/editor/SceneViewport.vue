@@ -360,6 +360,12 @@ import { canEditLandscapeRoadWaypoints } from './landscapeRoadEditPolicy'
 import { createBoundaryWallLoopRenderer } from './BoundaryWallLoopRenderer'
 import { createModelCollisionFaceOverlayRenderer } from './ModelCollisionFaceOverlayRenderer'
 import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
+import {
+  createHouseRigHandleRenderer,
+  HOUSE_RIG_HANDLE_DIAMETER_PX,
+  type HouseRigHandlePickResult,
+} from './HouseRigHandleRenderer'
+import { projectRayOntoAxisParameter } from './HouseRigDragMath'
 import { createWaterVertexRenderer, type WaterVertexHandlePickResult } from './WaterVertexRenderer'
 import { createWaterCircleHandleRenderer, type WaterCircleHandlePickResult } from './WaterCircleHandleRenderer'
 import {
@@ -421,6 +427,11 @@ import {
   type PlacementSurfaceHit,
 } from '@/utils/placementSurfaceHit'
 import { isProceduralLandscapePlacementArtifact } from '@/utils/proceduralLandscapePlacementArtifact'
+import { applyHouseRigMaterialOverridesToEditorObject } from '@/utils/houseRigMaterialRuntime'
+import {
+  createNeutralPbrEnvironment,
+  type NeutralPbrEnvironment,
+} from '@/utils/neutralPbrEnvironment'
 import {
   SURFACE_IMAGE_DEFAULT_WIDTH_METERS,
   buildSurfaceImageDecalGeometry,
@@ -475,7 +486,21 @@ import {
   resolveViewPointWorldCameraPose,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE,
+  HOUSE_RIG_COMPONENT_TYPE,
+  getHouseRigRuntimeSnapshot,
+  subscribeHouseRigRuntime,
 } from '@schema/components'
+import { computeHouseRigMaterialSignature } from '@schema/houseRig'
+import {
+  applyHouseRigDeformPlan,
+  clampHouseRigDimensions,
+  getHouseRigScript,
+  normalizeHouseRigComponentProps,
+  type HouseRigComponentProps,
+  type HouseRigDimensionKey,
+  type HouseRigDimensions,
+  type HouseRigRestSnapshot,
+} from '@schema/houseRig'
 import { normalizeWallRenderMode } from '@schema/wallRenderMode'
 import { moveGuideRoutePathAnchor as moveGuideRoutePathAnchorInProps } from '@schema/guideRouteEditing'
 import {
@@ -549,6 +574,9 @@ import {
 } from './constants'
 // face/surface snap controllers removed: no alignment hint UI
 import { buildGroundFlatChunkInstanceMatricesInWorker } from '@/utils/groundFlatChunkMatrixWorker'
+import {
+  resolveEditableHouseRigComponent,
+} from '@/utils/houseRigInteraction'
 
 setGroundFlatChunkInstanceMatrixBuilder(buildGroundFlatChunkInstanceMatricesInWorker)
 
@@ -1211,6 +1239,8 @@ let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null
 let slowroadsAmbientLight: THREE.AmbientLight | null = null
 /** 官方三件套之一：半球光（sky = 预设 sun 色、ground = 黑、强度 = 预设 ambient 强度）。 */
 let slowroadsHemisphereLight: THREE.HemisphereLight | null = null
+let neutralPbrEnvironment: NeutralPbrEnvironment | null = null
+const houseRigRuntimeMaterialSubscriptions = new Map<string, () => void>()
 let resizeObserver: ResizeObserver | null = null
 let rigidbodyColliderPreviousSelectionContext: string | null = null
 
@@ -6229,6 +6259,25 @@ type ModelCollisionFaceVertexDragState = {
 
 let modelCollisionFaceVertexDragState: ModelCollisionFaceVertexDragState | null = null
 
+type HouseRigHandleDragState = {
+  pointerId: number
+  nodeId: string
+  componentId: string
+  dimension: HouseRigDimensionKey
+  axisWorld: THREE.Vector3
+  startPointWorld: THREE.Vector3
+  startAxisParameter: number
+  startDimensions: HouseRigDimensions
+  currentDimensions: HouseRigDimensions
+  rest: HouseRigRestSnapshot
+  scriptId: string
+  scriptVersion: string
+  moved: boolean
+}
+
+let houseRigHandleDragState: HouseRigHandleDragState | null = null
+const houseRigEditNodeId = ref<string | null>(null)
+
 type FloorEdgeDragState = {
   pointerId: number
   nodeId: string
@@ -6580,6 +6629,7 @@ const guideRouteVertexRenderer = createGuideRouteVertexRenderer()
 const landscapeRoadPathVertexRenderer = createLandscapeRoadPathVertexRenderer()
 const floorCircleHandleRenderer = createFloorCircleHandleRenderer()
 const displayBoardCornerHandleRenderer = createDisplayBoardCornerHandleRenderer()
+const houseRigHandleRenderer = createHouseRigHandleRenderer()
 const waterVertexRenderer = createWaterVertexRenderer()
 const waterCircleHandleRenderer = createWaterCircleHandleRenderer()
 const waterDragIntersectionHelper = new THREE.Vector3()
@@ -8125,6 +8175,311 @@ function resolveModelCollisionPlacementVertex(event: PointerEvent, targetObject:
     surfaceObject: hit.object,
   }
 }
+
+const houseRigEditModeActive = computed(() => {
+  const nodeId = houseRigEditNodeId.value
+  if (
+    !nodeId
+    || props.activeTool !== 'select'
+    || Boolean(activeBuildTool.value)
+  ) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  return Boolean(resolveEditableHouseRigComponent(
+    node,
+    sceneStore.isNodeSelectionLocked(nodeId),
+  ))
+})
+
+const houseRigEditNodeLabel = computed(() => {
+  const nodeId = houseRigEditNodeId.value
+  if (!nodeId) {
+    return ''
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  return node?.name?.trim() || node?.id || nodeId
+})
+
+function enterHouseRigEditMode(nodeId: string): boolean {
+  if (props.previewActive || activeBuildTool.value) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!resolveEditableHouseRigComponent(
+    node,
+    sceneStore.isNodeSelectionLocked(nodeId),
+  )) {
+    return false
+  }
+  cancelHouseRigHandleDrag()
+  houseRigHandleRenderer.clear()
+  emitSelectionChange([nodeId])
+  if (props.activeTool !== 'select') {
+    emit('changeTool', 'select')
+  }
+  houseRigEditNodeId.value = nodeId
+  void nextTick(() => ensureHouseRigHandlesForSelectedNode({ force: true }))
+  return true
+}
+
+function exitHouseRigEditMode(): boolean {
+  if (!houseRigEditNodeId.value) {
+    return false
+  }
+  cancelHouseRigHandleDrag()
+  houseRigHandleRenderer.clear()
+  houseRigEditNodeId.value = null
+  return true
+}
+
+function ensureHouseRigHandlesForSelectedNode(options?: { force?: boolean }): void {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const node = selectedId ? findSceneNode(sceneStore.nodes, selectedId) : null
+  const editableState = selectedId
+    ? resolveEditableHouseRigComponent(node, sceneStore.isNodeSelectionLocked(selectedId))
+    : null
+  if (
+    houseRigEditNodeId.value
+    && (
+      houseRigEditNodeId.value !== selectedId
+      || !editableState
+      || props.activeTool !== 'select'
+      || Boolean(activeBuildTool.value)
+    )
+  ) {
+    houseRigEditNodeId.value = null
+  }
+  const active =
+    props.activeTool === 'select'
+    && !activeBuildTool.value
+    && houseRigEditNodeId.value === selectedId
+    && Boolean(editableState)
+  const common = {
+    active,
+    selectedNodeId: selectedId,
+    isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
+    resolveNode: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId),
+    resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
+  }
+  if (options?.force) {
+    houseRigHandleRenderer.forceRebuild(common)
+  } else {
+    houseRigHandleRenderer.ensure(common)
+  }
+}
+
+function pickHouseRigHandleAtPointer(event: PointerEvent): HouseRigHandlePickResult | null {
+  return houseRigHandleRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
+function updateRaycasterFromPointerEvent(event: PointerEvent): boolean {
+  const canvas = canvasRef.value
+  if (!canvas || !camera) {
+    return false
+  }
+  const rect = canvas.getBoundingClientRect()
+  if (!rect.width || !rect.height) {
+    return false
+  }
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  return true
+}
+
+function tryBeginHouseRigHandleDrag(event: PointerEvent): boolean {
+  if (event.button !== 0 || props.activeTool !== 'select' || activeBuildTool.value) {
+    return false
+  }
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (
+    !selectedId
+    || houseRigEditNodeId.value !== selectedId
+    || sceneStore.isNodeSelectionLocked(selectedId)
+  ) {
+    return false
+  }
+  const state = resolveEditableHouseRigComponent(
+    findSceneNode(sceneStore.nodes, selectedId),
+    sceneStore.isNodeSelectionLocked(selectedId),
+  )
+  const snapshot = getHouseRigRuntimeSnapshot(selectedId)
+  const runtimeObject = objectMap.get(selectedId) ?? null
+  if (!state || !snapshot?.plan || !snapshot.rest || !runtimeObject || !camera) {
+    return false
+  }
+  ensureHouseRigHandlesForSelectedNode()
+  const hit = pickHouseRigHandleAtPointer(event)
+  if (!hit || hit.nodeId !== selectedId) {
+    return false
+  }
+  if (!updateRaycasterFromPointerEvent(event)) {
+    return false
+  }
+  const localAxis = new THREE.Vector3(
+    hit.dimension === 'width' ? 1 : 0,
+    hit.dimension === 'wallHeight' ? 1 : 0,
+    hit.dimension === 'depth' ? 1 : 0,
+  )
+  const worldQuaternion = runtimeObject.getWorldQuaternion(new THREE.Quaternion())
+  const axisWorld = localAxis.applyQuaternion(worldQuaternion).normalize()
+  const startPointWorld = hit.point.clone()
+  const startAxisParameter = projectRayOntoAxisParameter(
+    raycaster.ray,
+    startPointWorld,
+    axisWorld,
+  )
+  if (startAxisParameter == null) {
+    return false
+  }
+  const selectedNode = findSceneNode(sceneStore.nodes, selectedId)
+  const rawProps = normalizeHouseRigComponentProps(
+    state.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+    selectedNode,
+  )
+  const startDimensions = clampHouseRigDimensions(
+    rawProps.dimensions,
+    snapshot.rest.limits,
+    snapshot.rest.dimensions,
+  )
+  houseRigHandleDragState = {
+    pointerId: event.pointerId,
+    nodeId: selectedId,
+    componentId: state.id,
+    dimension: hit.dimension,
+    axisWorld,
+    startPointWorld,
+    startAxisParameter,
+    startDimensions,
+    currentDimensions: { ...startDimensions },
+    rest: snapshot.rest,
+    scriptId: rawProps.scriptId,
+    scriptVersion: rawProps.scriptVersion,
+    moved: false,
+  }
+  houseRigHandleRenderer.setActive({
+    nodeId: selectedId,
+    dimension: hit.dimension,
+    part: hit.gizmoPart,
+  })
+  pointerInteraction.capture(event.pointerId)
+  event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
+  return true
+}
+
+function updateHouseRigHandleDrag(event: PointerEvent): boolean {
+  const drag = houseRigHandleDragState
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return false
+  }
+  if (!updateRaycasterFromPointerEvent(event)) {
+    return true
+  }
+  const axisParameter = projectRayOntoAxisParameter(
+    raycaster.ray,
+    drag.startPointWorld,
+    drag.axisWorld,
+  )
+  if (axisParameter == null) {
+    return true
+  }
+  const axisDelta = axisParameter - drag.startAxisParameter
+  const multiplier = drag.dimension === 'wallHeight' ? 1 : 2
+  const nextDimensions = clampHouseRigDimensions({
+    ...drag.startDimensions,
+    [drag.dimension]: drag.startDimensions[drag.dimension] + axisDelta * multiplier,
+  }, drag.rest.limits, drag.rest.dimensions)
+  const script = getHouseRigScript(drag.scriptId, drag.scriptVersion)
+  const runtimeObject = objectMap.get(drag.nodeId) ?? null
+  if (!script || !runtimeObject) {
+    return true
+  }
+  try {
+    const plan = script.buildPlan(drag.rest, nextDimensions)
+    applyHouseRigDeformPlan(runtimeObject, drag.rest, plan)
+    drag.currentDimensions = nextDimensions
+    drag.moved =
+      Math.abs(nextDimensions[drag.dimension] - drag.startDimensions[drag.dimension]) > 1e-4
+    houseRigHandleRenderer.updateAnchors(plan.handles, drag.nodeId)
+  } catch (error) {
+    console.warn('[HouseRig] Failed to preview deformation', error)
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
+  return true
+}
+
+function finishHouseRigHandleDrag(event: PointerEvent): boolean {
+  const drag = houseRigHandleDragState
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return false
+  }
+  houseRigHandleDragState = null
+  pointerInteraction.releaseIfCaptured(event.pointerId)
+  houseRigHandleRenderer.setActive(null)
+  if (drag.moved) {
+    sceneStore.updateNodeComponentProps(drag.nodeId, drag.componentId, {
+      dimensions: drag.currentDimensions,
+    })
+  }
+  void nextTick(() => ensureHouseRigHandlesForSelectedNode({ force: true }))
+  event.preventDefault()
+  event.stopPropagation()
+  event.stopImmediatePropagation()
+  return true
+}
+
+function cancelHouseRigHandleDrag(): boolean {
+  const drag = houseRigHandleDragState
+  if (!drag) {
+    return false
+  }
+  houseRigHandleDragState = null
+  pointerInteraction.releaseIfCaptured(drag.pointerId)
+  houseRigHandleRenderer.setActive(null)
+  const script = getHouseRigScript(drag.scriptId, drag.scriptVersion)
+  const runtimeObject = objectMap.get(drag.nodeId) ?? null
+  if (script && runtimeObject) {
+    try {
+      const plan = script.buildPlan(drag.rest, drag.startDimensions)
+      applyHouseRigDeformPlan(runtimeObject, drag.rest, plan)
+      houseRigHandleRenderer.updateAnchors(plan.handles, drag.nodeId)
+    } catch (error) {
+      console.warn('[HouseRig] Failed to restore drag preview', error)
+    }
+  }
+  return true
+}
+
+watch(
+  () => [sceneStore.selectedNodeId, props.activeTool, activeBuildTool.value] as const,
+  () => {
+    cancelHouseRigHandleDrag()
+    if (
+      houseRigEditNodeId.value
+      && (
+        houseRigEditNodeId.value !== sceneStore.selectedNodeId
+        || props.activeTool !== 'select'
+        || Boolean(activeBuildTool.value)
+      )
+    ) {
+      houseRigEditNodeId.value = null
+    }
+    houseRigHandleRenderer.clear()
+    void nextTick(() => ensureHouseRigHandlesForSelectedNode())
+  },
+  { flush: 'post' },
+)
 
 function tryBeginModelCollisionFaceVertexDrag(event: PointerEvent): boolean {
   if (modelCollisionFaceVertexDragState) {
@@ -16482,6 +16837,9 @@ function handleViewportDoubleClickNode(nodeId: string, hitPointWorld: THREE.Vect
   if (sceneStore.isNodeSelectionLocked(nodeId) && toolForNode !== 'landscapeRoad') {
     return
   }
+  if (enterHouseRigEditMode(nodeId)) {
+    return
+  }
   const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === nodeId
 
   // Anchor the transform gizmo on the picked point for expanded imported-model
@@ -17271,6 +17629,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 }
 
 function disposeSkyResources() {
+  neutralPbrEnvironment?.dispose()
+  neutralPbrEnvironment = null
   if (scene) {
     scene.environment = null
     scene.environmentIntensity = 1
@@ -17400,6 +17760,11 @@ function animate() {
   landformVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   regionVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   modelCollisionFaceVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 34 })
+  houseRigHandleRenderer.updateScreenSize({
+    camera,
+    canvas: canvasRef.value,
+    diameterPx: HOUSE_RIG_HANDLE_DIAMETER_PX,
+  })
   boundaryWallVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   guideRouteVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   landscapeRoadPathVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, heightPx: 56 })
@@ -19480,6 +19845,9 @@ async function handlePointerDown(event: PointerEvent) {
     applyPointerDownResult(guard)
     return
   }
+  if (tryBeginHouseRigHandleDrag(event)) {
+    return
+  }
   if (
     event.button === 0
     && !isTemporaryNavigationOverrideActive()
@@ -20274,6 +20642,10 @@ function handlePointerMove(event: PointerEvent) {
     clearShiftOrbitPivotSession(event.pointerId)
   }
 
+  if (updateHouseRigHandleDrag(event)) {
+    return
+  }
+
   if (guideRouteStopDragState || guideRouteVertexDragState) {
     setGuideRouteCanvasCursor('grabbing')
   } else {
@@ -20372,6 +20744,7 @@ function handlePointerMove(event: PointerEvent) {
     !wallJointDragState &&
     !wallHeightDragState &&
     !modelCollisionFaceVertexDragState &&
+    !houseRigHandleDragState &&
     isStrictPointOnCanvas(event.clientX, event.clientY)
 
   if (canHoverGizmos) {
@@ -20387,6 +20760,7 @@ function handlePointerMove(event: PointerEvent) {
     ensureWaterVertexHandlesForSelectedNode()
     ensureWaterCircleHandlesForSelectedNode()
     ensureModelCollisionFaceVertexHandlesForSelectedNode()
+    ensureHouseRigHandlesForSelectedNode()
 
     roadVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     wallEndpointRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
@@ -20402,6 +20776,7 @@ function handlePointerMove(event: PointerEvent) {
     waterVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     waterCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     modelCollisionFaceVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    houseRigHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
   } else {
     roadVertexRenderer.clearHover()
     wallEndpointRenderer.clearHover()
@@ -20416,6 +20791,7 @@ function handlePointerMove(event: PointerEvent) {
     waterVertexRenderer.clearHover()
     waterCircleHandleRenderer.clearHover()
     modelCollisionFaceVertexRenderer.clearHover()
+    houseRigHandleRenderer.clearHover()
   }
 
   const _moveDragCtx: any = {
@@ -21143,6 +21519,9 @@ async function handlePointerUp(event: PointerEvent) {
     mapControls?.flushPendingCameraGesture(event.pointerId)
     const isPointerUpOnCanvas = isStrictPointOnCanvas(event.clientX, event.clientY)
     const isPointerEventFromOverlayUi = isEventFromViewportOverlayUi(event)
+    if (finishHouseRigHandleDrag(event)) {
+      return
+    }
     if (finishGuideRouteStopDrag(event)) {
       pointerInteraction.releaseIfCaptured(event.pointerId)
       event.preventDefault()
@@ -26502,9 +26881,83 @@ function createNodeModelObjectFromCache(assetId: string, node: SceneNode): THREE
   return object
 }
 
+function resolveHouseRigPreviewEnvironment(): THREE.Texture | null {
+  if (scene?.environment) {
+    return scene.environment
+  }
+  if (!renderer) {
+    return null
+  }
+  if (!neutralPbrEnvironment) {
+    neutralPbrEnvironment = createNeutralPbrEnvironment(renderer)
+  }
+  return neutralPbrEnvironment.texture
+}
+
+function refreshHouseRigMaterialOverrides(nodeId: string): void {
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  const object = objectMap.get(nodeId) ?? getRuntimeObject(nodeId)
+  if (!node || !object) {
+    return
+  }
+  void applyHouseRigMaterialOverridesToEditorObject(node, object, {
+    environmentMap: resolveHouseRigPreviewEnvironment(),
+  }).catch((error) => {
+    console.warn('[HouseRig] Failed to refresh part material overrides', error)
+  })
+}
+
+function syncHouseRigRuntimeMaterialSubscriptions(): void {
+  const activeNodeIds = new Set<string>()
+  const stack = [...sceneStore.nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.components?.[HOUSE_RIG_COMPONENT_TYPE]?.enabled !== false
+      && node.components?.[HOUSE_RIG_COMPONENT_TYPE]) {
+      activeNodeIds.add(node.id)
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+
+  activeNodeIds.forEach((nodeId) => {
+    if (!houseRigRuntimeMaterialSubscriptions.has(nodeId)) {
+      houseRigRuntimeMaterialSubscriptions.set(
+        nodeId,
+        subscribeHouseRigRuntime(nodeId, () => {
+          void nextTick(() => refreshHouseRigMaterialOverrides(nodeId))
+        }),
+      )
+    }
+    void nextTick(() => refreshHouseRigMaterialOverrides(nodeId))
+  })
+
+  houseRigRuntimeMaterialSubscriptions.forEach((unsubscribe, nodeId) => {
+    if (activeNodeIds.has(nodeId)) {
+      return
+    }
+    unsubscribe()
+    houseRigRuntimeMaterialSubscriptions.delete(nodeId)
+  })
+}
+
+onBeforeUnmount(() => {
+  houseRigRuntimeMaterialSubscriptions.forEach((unsubscribe) => unsubscribe())
+  houseRigRuntimeMaterialSubscriptions.clear()
+})
+
 /** Mirrors sceneStore's `registerRuntimeForNode` recipe for a rebuilt node. */
 function registerNodeModelObject(node: SceneNode, object: THREE.Object3D): void {
   registerRuntimeObject(node.id, object)
+  void applyHouseRigMaterialOverridesToEditorObject(node, object, {
+    environmentMap: resolveHouseRigPreviewEnvironment(),
+  }).catch((error) => {
+    console.warn('[HouseRig] Failed to apply part material overrides', error)
+  })
   componentManager.attachRuntime(node, object)
   componentManager.syncNode(node)
 }
@@ -26694,6 +27147,17 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   if (Boolean(userData.instancedAssetId) && !canNodeUseRuntimeModelInstancing(node)) {
     return true
   }
+  const houseRigState = node.components?.[HOUSE_RIG_COMPONENT_TYPE] as
+    | { enabled?: boolean; props?: Parameters<typeof computeHouseRigMaterialSignature>[0] }
+    | undefined
+  if (houseRigState && houseRigState.enabled !== false) {
+    const nextMaterialSignature = computeHouseRigMaterialSignature(houseRigState.props)
+    if (userData.__houseRigMaterialSignature !== nextMaterialSignature) {
+      return true
+    }
+  } else if (typeof userData.__houseRigMaterialSignature === 'string') {
+    return true
+  }
   if (node.userData?.source === 'planning-conversion') {
     const nextPlanningConversionInstanceId = typeof node.userData?.planningConversionInstanceId === 'string'
       ? node.userData.planningConversionInstanceId
@@ -26781,6 +27245,9 @@ function disposeNodeObjectRecursive(object: THREE.Object3D) {
 }
 
 function disposeNodeSubtree(nodeId: string) {
+  if (houseRigHandleRenderer.getState()?.nodeId === nodeId) {
+    houseRigHandleRenderer.clear()
+  }
   const target = objectMap.get(nodeId)
   if (!target) {
     return
@@ -26867,6 +27334,7 @@ function syncSceneGraph() {
   terrainGridController.refresh()
   refreshEffectRuntimeTickers()
   updateSelectionHighlights()
+  ensureHouseRigHandlesForSelectedNode({ force: true })
 }
 
 function disposeSceneNodes() {
@@ -27524,8 +27992,13 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     const hasImportedMaterialOverride = isImportedModelOverrideNode(node)
       && Array.isArray(node.materials)
       && node.materials.length > 0
-    let container = hasImportedMaterialOverride ? null : resolveNodeContainerObject(node)
-    if (container === null && hasImportedMaterialOverride && node.sourceAssetId) {
+    const hasHouseRig = Boolean(
+      node.components?.[HOUSE_RIG_COMPONENT_TYPE]
+      && node.components[HOUSE_RIG_COMPONENT_TYPE]?.enabled !== false,
+    )
+    const requiresIsolatedImportedObject = hasImportedMaterialOverride || hasHouseRig
+    let container = requiresIsolatedImportedObject ? null : resolveNodeContainerObject(node)
+    if (container === null && requiresIsolatedImportedObject && node.sourceAssetId) {
       const modelObject = createNodeModelObjectFromCache(node.sourceAssetId, node)
       if (modelObject) {
         const existingRuntime = getRuntimeObject(node.id)
@@ -28182,6 +28655,14 @@ function handleViewportShortcut(event: KeyboardEvent) {
   if (!handled && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
     switch (event.code) {
       case 'Escape':
+        if (cancelHouseRigHandleDrag()) {
+          handled = true
+          break
+        }
+        if (exitHouseRigEditMode()) {
+          handled = true
+          break
+        }
         if (wallDoorSelectionPayload.value || wallDoorRectangleSelectionState) {
           clearWallDoorRectangleSelectionState()
           clearWallDoorSelectionPayload()
@@ -28547,6 +29028,31 @@ watch([sceneGraphStructureVersion, sceneNodePropertyVersion], () => {
   applyPendingScenePatches()
   refreshEffectRuntimeTickers()
 })
+
+watch(
+  sceneGraphStructureVersion,
+  () => {
+    syncHouseRigRuntimeMaterialSubscriptions()
+  },
+  { immediate: true, flush: 'post' },
+)
+
+watch(
+  [
+    () => sceneStore.houseRigMaterialRefreshVersion,
+    () => sceneStore.houseRigMaterialRefreshNodeId,
+  ],
+  ([version, nodeId], [previousVersion]) => {
+    if (version === previousVersion || !nodeId) {
+      return
+    }
+    const targetNodeId: string = nodeId
+    void nextTick(() => {
+      refreshHouseRigMaterialOverrides(targetNodeId)
+    })
+  },
+  { flush: 'post' },
+)
 
 const cameraStateSignature = computed(() => {
   const state = props.cameraState
@@ -28923,6 +29429,7 @@ defineExpose({
   captureScreenshot,
   activateRigidbodyColliderEdit,
   deactivateRigidbodyColliderEdit,
+  enterHouseRigEditMode,
 })
 </script>
 
@@ -29211,6 +29718,19 @@ defineExpose({
             height: wallDoorSelectionOverlayBox.height + 'px',
           }"
         />
+      </div>
+      <div
+        v-if="houseRigEditModeActive"
+        class="house-rig-edit-hud"
+        role="status"
+        aria-live="polite"
+      >
+        <span class="house-rig-edit-hud__badge">HOUSE RIG</span>
+        <span class="house-rig-edit-hud__node">{{ houseRigEditNodeLabel }}</span>
+        <span class="house-rig-edit-hud__axis house-rig-edit-hud__axis--x">X 宽</span>
+        <span class="house-rig-edit-hud__axis house-rig-edit-hud__axis--y">Y 高</span>
+        <span class="house-rig-edit-hud__axis house-rig-edit-hud__axis--z">Z 深</span>
+        <span class="house-rig-edit-hud__exit">Esc 退出</span>
       </div>
       <div class="camera-status-hud">
         <Transition name="camera-hints-slide">
@@ -29680,6 +30200,75 @@ defineExpose({
   border: 1px solid rgba(187, 222, 251, 0.95);
   background: rgba(130, 177, 255, 0.2);
   box-shadow: inset 0 0 0 1px rgba(187, 222, 251, 0.45);
+}
+
+.house-rig-edit-hud {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(620px, calc(100% - 32px));
+  padding: 7px 11px;
+  transform: translateX(-50%);
+  border: 1px solid rgba(255, 213, 128, 0.52);
+  border-radius: 9px;
+  background:
+    linear-gradient(135deg, rgba(34, 28, 18, 0.94), rgba(13, 18, 24, 0.92));
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: rgba(239, 243, 248, 0.96);
+  font-size: 12px;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+
+.house-rig-edit-hud__badge {
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 213, 128, 0.58);
+  border-radius: 5px;
+  background: rgba(255, 190, 72, 0.12);
+  color: #ffd980;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.house-rig-edit-hud__node {
+  max-width: 180px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.house-rig-edit-hud__axis {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.house-rig-edit-hud__axis--x {
+  color: #ff7b7b;
+}
+
+.house-rig-edit-hud__axis--y {
+  color: #79dc8c;
+}
+
+.house-rig-edit-hud__axis--z {
+  color: #78aaff;
+}
+
+.house-rig-edit-hud__exit {
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(201, 210, 222, 0.78);
+  white-space: nowrap;
 }
 
 

@@ -252,6 +252,12 @@ async function main() {
     'Edit Harmony actors',
     'Add or configure character, vehicle, rigidbody, and related runtime-bound components.',
   )
+  domainTool(
+    HARMONY_AGENT_TOOLS.houseRig,
+    'houseRig',
+    'Edit Harmony House Rig',
+    'Inspect, validate, version, resize, and assign per-part materials for a House Rig component through semantic model operations.',
+  )
 
   server.registerTool(
     HARMONY_AGENT_TOOLS.camera,

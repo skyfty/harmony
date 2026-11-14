@@ -67,6 +67,7 @@ const AGENT_DOMAIN_BY_COMPONENT_TYPE: Record<string, HarmonyAgentDomain> = {
   wall: 'builder',
   warpGate: 'builder',
   water: 'builder',
+  houseRig: 'houseRig',
 }
 
 const AGENT_TOOL_BY_DOMAIN: Record<HarmonyAgentDomain, string> = {
@@ -75,6 +76,7 @@ const AGENT_TOOL_BY_DOMAIN: Record<HarmonyAgentDomain, string> = {
   builder: 'harmony_builder_edit',
   guideRoute: 'harmony_guide_route_edit',
   terrain: 'harmony_terrain_edit',
+  houseRig: 'harmony_house_rig_edit',
 }
 
 const AGENT_ACTIONS_BY_DOMAIN: Record<HarmonyAgentDomain, string[]> = {
@@ -100,6 +102,15 @@ const AGENT_ACTIONS_BY_DOMAIN: Record<HarmonyAgentDomain, string[]> = {
     'reset_region',
     'compile',
     'regenerate_road',
+    'patch_component',
+  ],
+  houseRig: [
+    'inspect',
+    'validate',
+    'set_script',
+    'set_dimensions',
+    'set_material',
+    'reset',
     'patch_component',
   ],
 }
@@ -129,6 +140,7 @@ const DOMAIN_PROTECTED_FIELDS: Record<HarmonyAgentDomain, string[]> = {
   ],
   guideRoute: ['anchors', 'legs', 'stops', 'transitions'],
   terrain: ['dynamicMesh', 'heightSamples', 'manualHeightMap', 'regions'],
+  houseRig: ['scriptId', 'scriptVersion', 'assetId', 'topologyHash', 'dimensions', 'parts'],
 }
 
 function isSimpleInspectorField(field: ComponentInspectorSection['fields'][number]): boolean {

@@ -44,6 +44,7 @@ import CouponPanel from '@/components/inspector/CouponPanel.vue'
 import ProceduralCityPanel from '@/components/inspector/ProceduralCityPanel.vue'
 import CityGeneratorPanel from '@/components/inspector/CityGeneratorPanel.vue'
 import GeneralMeshPanel from '@/components/inspector/GeneralMeshPanel.vue'
+import HouseRigPanel from '@/components/inspector/HouseRigPanel.vue'
 import ProceduralLandscapePanel from '@/components/inspector/ProceduralLandscapePanel.vue'
 import LandscapeExclusionZonePanel from '@/components/inspector/LandscapeExclusionZonePanel.vue'
 import TerrainFlatteningPanel from '@/components/inspector/TerrainFlatteningPanel.vue'
@@ -55,6 +56,7 @@ import { isLightweightImportNode } from '@schema/core'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 import { collectAnimationClipCatalog } from '@schema/runtimeAnimationCatalog'
 import { resolveCharacterControllerAnimationBindings } from '@schema/characterControllerAnimationRuntime'
+import type { MaterialDetailsTarget } from '@/types/material-details'
 
 import {
   BEHAVIOR_COMPONENT_TYPE,
@@ -97,6 +99,7 @@ import {
   PROCEDURAL_CITY_COMPONENT_TYPE,
   CITY_GENERATOR_COMPONENT_TYPE,
   GENERAL_MESH_COMPONENT_TYPE,
+  HOUSE_RIG_COMPONENT_TYPE,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE,
   TERRAIN_FLATTENING_COMPONENT_TYPE,
@@ -118,7 +121,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'collapse'): void
   (event: 'toggle-placement'): void
-  (event: 'open-material-details', payload: { id: string }): void
+  (event: 'open-material-details', payload: MaterialDetailsTarget): void
   (event: 'close-material-details'): void
   (event: 'open-vehicle-wheel-details', payload: { id: string }): void
   (event: 'close-vehicle-wheel-details'): void
@@ -139,7 +142,54 @@ const {
 } = storeToRefs(sceneStore)
 
 const nodeName = ref('')
-const materialDetailsTargetId = ref<string | null>(null)
+const materialDetailsTarget = ref<MaterialDetailsTarget | null>(null)
+const activeNodeMaterialId = computed<string | null>({
+  get: () => materialDetailsTarget.value?.kind === 'nodeMaterial'
+    ? materialDetailsTarget.value.materialId
+    : null,
+  set: (value) => {
+    if (!value) {
+      if (materialDetailsTarget.value?.kind === 'nodeMaterial') {
+        materialDetailsTarget.value = null
+      }
+      return
+    }
+    if (!selectedNodeId.value) {
+      return
+    }
+    materialDetailsTarget.value = {
+      kind: 'nodeMaterial',
+      nodeId: selectedNodeId.value,
+      materialId: value,
+    }
+  },
+})
+const activeHouseRigPartKey = computed<string | null>({
+  get: () => materialDetailsTarget.value?.kind === 'houseRigPart'
+    ? materialDetailsTarget.value.partKey
+    : null,
+  set: (value) => {
+    if (!value) {
+      if (materialDetailsTarget.value?.kind === 'houseRigPart') {
+        materialDetailsTarget.value = null
+      }
+      return
+    }
+    const nodeId = selectedNodeId.value
+    const componentId = materialDetailsTarget.value?.kind === 'houseRigPart'
+      ? materialDetailsTarget.value.componentId
+      : selectedNode.value?.components?.[HOUSE_RIG_COMPONENT_TYPE]?.id ?? ''
+    if (!nodeId || !componentId) {
+      return
+    }
+    materialDetailsTarget.value = {
+      kind: 'houseRigPart',
+      nodeId,
+      componentId,
+      partKey: value,
+    }
+  },
+})
 const vehicleWheelDetailsTargetId = ref<string | null>(null)
 const suspensionEditorActive = ref(false)
 const behaviorDetailsActive = ref(false)
@@ -154,6 +204,9 @@ const isEnvironmentNode = computed(() => selectedNode.value?.id === ENVIRONMENT_
 const isMultiuserNode = computed(() => selectedNode.value?.id === MULTIUSER_NODE_ID)
 const isNominateNode = computed(() =>
   Boolean(selectedNode.value?.components?.[NOMINATE_COMPONENT_TYPE]),
+)
+const hasHouseRigComponent = computed(() =>
+  Boolean(selectedNode.value?.components?.[HOUSE_RIG_COMPONENT_TYPE]),
 )
 const isRegionNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Region')
 const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Ground')
@@ -190,6 +243,7 @@ const showMaterialPanel = computed(
     !isLightNode.value &&
     !isMultiuserNode.value &&
     !isNominateNode.value &&
+    !hasHouseRigComponent.value &&
     !isRegionNode.value &&
     (
       isGroundNode.value
@@ -278,9 +332,11 @@ function computeDefaultExpandedPanels() {
     (!node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)) &&
     (!node?.nodeType || node.nodeType !== 'Light') &&
     !Boolean(node?.components?.[NOMINATE_COMPONENT_TYPE]) &&
+    !Boolean(node?.components?.[HOUSE_RIG_COMPONENT_TYPE]) &&
     node?.dynamicMesh?.type !== 'Region'
   if (
-    (shouldShowMaterial || isImportedModelOverrideNode(node) || nodeSupportsImportedMaterialEdit(node))
+    !Boolean(node?.components?.[HOUSE_RIG_COMPONENT_TYPE])
+    && (shouldShowMaterial || isImportedModelOverrideNode(node) || nodeSupportsImportedMaterialEdit(node))
     && node?.id !== GROUND_NODE_ID
   ) {
     panels.push('material')
@@ -342,14 +398,28 @@ function handleNameUpdate(value: string) {
   sceneStore.renameNode(selectedNodeId.value, trimmed)
 }
 
-function handleOpenMaterialDetails(id: string) {
-  materialDetailsTargetId.value = id
-  emit('open-material-details', { id })
+function handleOpenNodeMaterialDetails(id: string) {
+  const nodeId = selectedNodeId.value
+  if (!nodeId) {
+    return
+  }
+  const target: MaterialDetailsTarget = {
+    kind: 'nodeMaterial',
+    nodeId,
+    materialId: id,
+  }
+  materialDetailsTarget.value = target
+  emit('open-material-details', target)
+}
+
+function handleOpenHouseRigMaterialDetails(target: MaterialDetailsTarget) {
+  materialDetailsTarget.value = target
+  emit('open-material-details', target)
 }
 
 function closeMaterialDetails(options: { silent?: boolean; force?: boolean } = {}) {
-  const hadTarget = materialDetailsTargetId.value !== null
-  materialDetailsTargetId.value = null
+  const hadTarget = materialDetailsTarget.value !== null
+  materialDetailsTarget.value = null
   if ((hadTarget || options.force) && !options.silent) {
     emit('close-material-details')
   }
@@ -514,6 +584,7 @@ watch(
     const materialVisible =
       !isLightNode.value &&
       !isRegionNode.value &&
+      !hasHouseRigComponent.value &&
       (
         (selectedNode.value?.materials?.length ?? 0) > 0
         || isImportedModelOverrideNode(selectedNode.value)
@@ -709,8 +780,8 @@ watch(
           <LightPanel v-if="isLightNode"/>
           <MaterialPanel
             v-else-if="showMaterialPanel"
-            v-model:active-node-material-id="materialDetailsTargetId"
-            @open-details="handleOpenMaterialDetails"
+            v-model:active-node-material-id="activeNodeMaterialId"
+            @open-details="handleOpenNodeMaterialDetails"
             @close-details="handleMaterialPanelRequestCloseDetails"
           />
           <RoadPanel v-if="showRoadPanel" />
@@ -763,6 +834,11 @@ watch(
               <ProceduralCityPanel v-else-if="component.type === PROCEDURAL_CITY_COMPONENT_TYPE" />
               <CityGeneratorPanel v-else-if="component.type === CITY_GENERATOR_COMPONENT_TYPE" />
               <GeneralMeshPanel v-else-if="component.type === GENERAL_MESH_COMPONENT_TYPE" />
+              <HouseRigPanel
+                v-else-if="component.type === HOUSE_RIG_COMPONENT_TYPE"
+                v-model:active-material-key="activeHouseRigPartKey"
+                @open-details="handleOpenHouseRigMaterialDetails"
+              />
               <ProceduralLandscapePanel v-else-if="component.type === PROCEDURAL_LANDSCAPE_COMPONENT_TYPE" />
               <LandscapeExclusionZonePanel
                 v-else-if="component.type === LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE"

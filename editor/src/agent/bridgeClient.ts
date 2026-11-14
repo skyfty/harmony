@@ -104,7 +104,7 @@ function getSessionId(): string {
 }
 
 function buildCapabilities(): HarmonyAgentCapabilities {
-  const domains: HarmonyAgentDomain[] = ['builder', 'behavior', 'guideRoute', 'terrain', 'actor']
+  const domains: HarmonyAgentDomain[] = ['builder', 'behavior', 'guideRoute', 'terrain', 'actor', 'houseRig']
   return {
     protocolVersion: HARMONY_AGENT_PROTOCOL_VERSION,
     operatingPolicy: HARMONY_AGENT_OPERATING_POLICY,

@@ -38,6 +38,7 @@ try {
     'harmony_guide_route_edit',
     'harmony_terrain_edit',
     'harmony_actor_edit',
+    'harmony_house_rig_edit',
   ]
   for (const name of expected) {
     if (!names.has(name)) {
@@ -98,6 +99,14 @@ try {
   const schemaPayload = JSON.parse(schemaText)
   if (!Array.isArray(schemaPayload.profiles) || schemaPayload.profiles.length < 20) {
     throw new Error(`Component schema response is incomplete: ${schemaText}`)
+  }
+  const houseRigProfile = schemaPayload.profiles.find((profile) => profile.type === 'houseRig')
+  if (
+    !houseRigProfile
+    || houseRigProfile.domain !== 'houseRig'
+    || houseRigProfile.tool !== 'harmony_house_rig_edit'
+  ) {
+    throw new Error(`House Rig component profile is invalid: ${schemaText}`)
   }
   console.error('[smoke] searching catalog')
   const catalog = await client.callTool({

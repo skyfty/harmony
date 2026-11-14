@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
+import MaterialAssetList, {
+  type MaterialAssetListItem,
+} from '@/components/inspector/MaterialAssetList.vue'
 import { resolveImportedModelMaterialSeed, useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import {
   cloneTextureSettings,
   createTextureSettings,
@@ -94,12 +95,6 @@ const inheritedOverrideLabel = computed(() => {
 void inheritedMaterialTypeLabel
 void inheritedOverrideLabel
 const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
-const dragOverSlotId = ref<string | null>(null)
-const isListDragActive = ref(false)
-const materialPickerVisible = ref(false)
-const materialPickerSlotId = ref<string | null>(null)
-const materialPickerSelectedId = ref('')
-const materialPickerAnchor = ref<{ x: number; y: number } | null>(null)
 const materialPreviewThumbnails = ref<Record<string, string>>({})
 const groundDefaultPreviewThumbnail = ref<string | null>(null)
 let groundDefaultPreviewToken = 0
@@ -208,40 +203,20 @@ watch(
   { immediate: true },
 )
 
-watch(
-  () => props.disabled,
-  (disabled: boolean | undefined) => {
-    if (disabled) {
-      handleMaterialAssetPickerCancel()
-    }
-  },
-)
-
-const materialListEntries = computed(() =>
+const materialListEntries = computed<MaterialAssetListItem[]>(() =>
   nodeMaterials.value.map((entry: SceneNodeMaterial, index: number) => {
     const thumbnail = getMaterialPreviewThumbnail(entry)
     const color = normalizeHexColor(entry.color, DEFAULT_MATERIAL_COLOR)
     return {
       id: entry.id,
       title: entry.name ?? `材质 ${index + 1}`,
-      subtitle: isImportedModelMaterialNode.value
-        ? (isLightweightNode.value ? '子节点覆盖' : '整模型材质覆盖')
-        : '材质副本',
-      shared: false,
       color,
       thumbnail,
-      index,
     }
   }),
 )
 
-watch(nodeMaterials, (list: SceneNodeMaterial[]) => {
-  if (materialPickerSlotId.value && !list.some((entry) => entry.id === materialPickerSlotId.value)) {
-    handleMaterialAssetPickerCancel()
-  }
-})
-
-function handleSelect(id: string) {
+function handleOpenDetails(id: string) {
   internalActiveId.value = id
   emit('update:active-node-material-id', id)
   emit('open-details', id)
@@ -364,59 +339,12 @@ function handleRequestDeleteSlot() {
   emit('close-details')
 }
 
-function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {
-  if (event.dataTransfer) {
-    const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw)
-        if (parsed?.assetId && typeof parsed.assetId === 'string') {
-          return { assetId: parsed.assetId }
-        }
-      } catch (error) {
-        console.warn('Failed to parse asset drag payload', error)
-      }
-    }
-  }
-  const draggingId = sceneStore.draggingAssetId
-  if (draggingId) {
-    return { assetId: draggingId }
-  }
-  return null
-}
-
-function resolveProjectAssetFromEvent(event: DragEvent): ProjectAsset | null {
-  const payload = parseAssetDragPayload(event)
-  if (!payload) {
-    return null
-  }
-  const asset = sceneStore.getAsset(payload.assetId)
-  if (!asset) {
-    return null
-  }
-  return asset
-}
-
 function isMaterialAsset(asset: ProjectAsset): asset is MaterialAsset {
   return asset.type === 'material'
 }
 
 function isTextureAsset(asset: ProjectAsset): asset is TextureAsset {
   return asset.type === 'image' || asset.type === 'texture'
-}
-
-function resolveSlotAssetFromEvent(event: DragEvent): MaterialAsset | TextureAsset | null {
-  const asset = resolveProjectAssetFromEvent(event)
-  if (!asset) {
-    return null
-  }
-  if (isMaterialAsset(asset)) {
-    return asset
-  }
-  if (isTextureAsset(asset)) {
-    return asset
-  }
-  return null
 }
 
 function ensureMaterialAssetRegistered(asset: ProjectAsset): ProjectAsset {
@@ -479,30 +407,8 @@ function normalizeHexColor(value: unknown, fallback: string): string {
   return `#${hexValue.toLowerCase()}`
 }
 
-function handleOpenMaterialAssetPicker(slotId: string, event?: MouseEvent) {
-  if (props.disabled) {
-    return
-  }
-  setActiveSlot(slotId)
-  materialPickerSlotId.value = slotId
-  materialPickerSelectedId.value = ''
-  materialPickerAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
-  materialPickerVisible.value = true
-}
-
-function handleMaterialAssetPickerCancel() {
-  materialPickerVisible.value = false
-  materialPickerAnchor.value = null
-  materialPickerSlotId.value = null
-  materialPickerSelectedId.value = ''
-}
-
-async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
-  const slotId = materialPickerSlotId.value
-  materialPickerSelectedId.value = asset?.id ?? ''
-  materialPickerVisible.value = false
-  materialPickerAnchor.value = null
-  materialPickerSlotId.value = null
+async function handleApplyAsset(payload: { id: string; asset: ProjectAsset | null }) {
+  const { id: slotId, asset } = payload
   if (!selectedNodeId.value || !slotId) {
     return
   }
@@ -515,78 +421,23 @@ async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
     }
     return
   }
-  if (asset.type !== 'material') {
-    return
-  }
-  const registeredAsset = ensureMaterialAssetRegistered(asset)
-  const applied = await sceneStore.applyMaterialAssetToNodeMaterialSlot(
-    selectedNodeId.value,
-    slotId,
-    registeredAsset.id,
-  )
-  if (!applied) {
-    return
-  }
-  setMaterialPreviewThumbnail(
-    slotId,
-    applied.thumbnail ?? resolveMaterialAssetThumbnail(registeredAsset.id) ?? registeredAsset.thumbnail,
-  )
-  setActiveSlot(slotId)
-}
-
-function handleSlotDragOver(slotId: string, event: DragEvent) {
-  if (props.disabled || !selectedNodeId.value) {
-    return
-  }
-  const asset = resolveSlotAssetFromEvent(event)
-  if (!asset) {
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  dragOverSlotId.value = slotId
-  isListDragActive.value = false
-}
-
-function handleSlotDragLeave(slotId: string, event: DragEvent) {
-  if (dragOverSlotId.value !== slotId) {
-    return
-  }
-  const target = event.currentTarget as HTMLElement | null
-  const related = event.relatedTarget as Node | null
-  if (target && related && target.contains(related)) {
-    return
-  }
-  dragOverSlotId.value = null
-}
-
-async function handleSlotDrop(slotId: string, event: DragEvent) {
-  if (props.disabled || !selectedNodeId.value) {
-    return
-  }
-  const asset = resolveProjectAssetFromEvent(event)
-  if (!asset) {
-    return
-  }
   const materialAsset = isMaterialAsset(asset) ? asset : null
   const textureAsset = isTextureAsset(asset) ? (asset as TextureAsset) : null
   if (!materialAsset && !textureAsset) {
     return
   }
-  event.preventDefault()
-  event.stopPropagation()
-  dragOverSlotId.value = null
-  isListDragActive.value = false
   if (materialAsset) {
+    const registeredAsset = ensureMaterialAssetRegistered(materialAsset)
     const applied = await sceneStore.applyMaterialAssetToNodeMaterialSlot(
       selectedNodeId.value,
       slotId,
-      materialAsset.id,
+      registeredAsset.id,
     )
     if (applied) {
-      setMaterialPreviewThumbnail(slotId, resolveMaterialAssetThumbnail(materialAsset.id) ?? materialAsset.thumbnail)
+      setMaterialPreviewThumbnail(
+        slotId,
+        applied.thumbnail ?? resolveMaterialAssetThumbnail(registeredAsset.id) ?? registeredAsset.thumbnail,
+      )
       setActiveSlot(slotId)
       emit('open-details', slotId)
     }
@@ -602,46 +453,10 @@ async function handleSlotDrop(slotId: string, event: DragEvent) {
   }
 }
 
-function handleListDragOver(event: DragEvent) {
+async function handleApplyListAsset(asset: ProjectAsset) {
   if (props.disabled || !selectedNodeId.value) {
     return
   }
-  const asset = resolveSlotAssetFromEvent(event)
-  if (!asset) {
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  dragOverSlotId.value = null
-  isListDragActive.value = true
-}
-
-function handleListDragLeave(event: DragEvent) {
-  if (!isListDragActive.value) {
-    return
-  }
-  const target = event.currentTarget as HTMLElement | null
-  const related = event.relatedTarget as Node | null
-  if (target && related && target.contains(related)) {
-    return
-  }
-  isListDragActive.value = false
-}
-
-async function handleListDrop(event: DragEvent) {
-  if (props.disabled || !selectedNodeId.value) {
-    return
-  }
-  const asset = resolveSlotAssetFromEvent(event)
-  if (!asset) {
-    return
-  }
-  event.preventDefault()
-  event.stopPropagation()
-  dragOverSlotId.value = null
-  isListDragActive.value = false
   const nodeId = selectedNodeId.value
   const targetSlot = ensurePrimaryMaterialSlot()
   if (!targetSlot) {
@@ -664,7 +479,7 @@ async function handleListDrop(event: DragEvent) {
     }
     return
   }
-  if (applyAlbedoTexture(targetSlot.id, asset)) {
+  if (isTextureAsset(asset) && applyAlbedoTexture(targetSlot.id, asset)) {
     clearMaterialPreviewThumbnail(targetSlot.id)
     setActiveSlot(targetSlot.id)
     emit('open-details', targetSlot.id)
@@ -713,62 +528,14 @@ async function handleListDrop(event: DragEvent) {
     <v-expansion-panel-text>
 
 
-      <div class="material-panel">
-        <div
-          class="material-panel__list"
-          :class="{ 'is-drag-over': isListDragActive && !dragOverSlotId }"
-          @dragenter="handleListDragOver"
-          @dragover="handleListDragOver"
-          @dragleave="handleListDragLeave"
-          @drop="handleListDrop"
-        >
-          <v-list density="compact" nav class="material-list">
-            <v-list-item
-              v-for="entry in materialListEntries"
-              :key="entry.id"
-              :value="entry.id"
-              :active="entry.id === internalActiveId"
-              :class="{
-                'is-active': entry.id === internalActiveId,
-                'is-drag-target': dragOverSlotId === entry.id,
-              }"
-              @dragenter="handleSlotDragOver(entry.id, $event)"
-              @dragover="handleSlotDragOver(entry.id, $event)"
-              @dragleave="handleSlotDragLeave(entry.id, $event)"
-              @drop="handleSlotDrop(entry.id, $event)"
-            >
-              <template #prepend>
-                <div
-                  class="material-color-control"
-                  :class="{ 'is-disabled': props.disabled }"
-                  @click.stop="handleOpenMaterialAssetPicker(entry.id, $event)"
-                >
-                  <div
-                    class="material-sphere"
-                    :class="{ 'material-sphere--thumbnail': !!entry.thumbnail }"
-                    :style="entry.thumbnail
-                      ? { backgroundImage: `url(${entry.thumbnail})`, backgroundColor: entry.color }
-                      : { backgroundColor: entry.color }"
-                  ></div>
-                </div>
-              </template>
-              <v-list-item-title  @click="handleSelect(entry.id)">{{ entry.title }}</v-list-item-title>
-            </v-list-item>
-          </v-list>
-        </div>
-
-      </div>
-      <AssetPickerDialog
-        v-model="materialPickerVisible"
-        :asset-id="materialPickerSelectedId"
-        asset-type="material"
-        :extensions="['material']"
-        title="选择材质预置"
-        :anchor="materialPickerAnchor"
-        confirm-text="选择"
-        cancel-text="取消"
-        @update:asset="handleMaterialAssetPicked"
-        @cancel="handleMaterialAssetPickerCancel"
+      <MaterialAssetList
+        v-model="internalActiveId"
+        :items="materialListEntries"
+        :disabled="props.disabled"
+        allow-list-drop
+        @open-details="handleOpenDetails"
+        @apply-asset="handleApplyAsset"
+        @apply-list-asset="handleApplyListAsset"
       />
     </v-expansion-panel-text>
   </v-expansion-panel>

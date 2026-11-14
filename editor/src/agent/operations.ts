@@ -13,6 +13,20 @@ import {
   type Vector3Like,
 } from '@schema/core'
 import { componentManager } from '@schema/components'
+import {
+  HOUSE_RIG_COMPONENT_TYPE,
+  getHouseRigRuntimeSnapshot,
+} from '@schema/components'
+import {
+  clampHouseRigDimensions,
+  getHouseRigScript,
+  getLatestHouseRigScript,
+  listHouseRigScripts,
+  normalizeHouseRigComponentProps,
+  toHouseRigAssetDescriptor,
+  validateHouseRigDeformPlan,
+  type HouseRigComponentProps,
+} from '@schema/houseRig'
 import type {
   HarmonyApplyRequest,
   HarmonyApplyResult,
@@ -899,6 +913,193 @@ async function executeDomainOperation(
           throw new AgentBridgeError('OPERATION_NOT_SUPPORTED', `Unsupported terrain action ${operation.action}`)
       }
     }
+    case 'houseRig': {
+      const nodeId = readString(args, 'nodeId')
+      const node = findNodeOrThrow(store, nodeId)
+      const component = resolveComponent(
+        node,
+        typeof args.componentId === 'string' ? args.componentId : undefined,
+        HOUSE_RIG_COMPONENT_TYPE,
+      )
+      const props = normalizeHouseRigComponentProps(
+        component.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+        node,
+      )
+      const snapshot = getHouseRigRuntimeSnapshot(nodeId)
+      if (operation.action === 'inspect' || operation.action === 'validate') {
+        const script = getHouseRigScript(props.scriptId, props.scriptVersion)
+        const compatibility = snapshot && script
+          ? script.getCompatibility(toHouseRigAssetDescriptor(snapshot.rest))
+          : null
+        const plan = operation.action === 'validate' && snapshot && script
+          ? script.buildPlan(snapshot.rest, snapshot.dimensions)
+          : snapshot?.plan ?? null
+        const issues = plan && snapshot
+          ? validateHouseRigDeformPlan(snapshot.rest, plan)
+          : []
+        return {
+          nodeId,
+          componentId: component.id,
+          scriptId: props.scriptId,
+          scriptVersion: props.scriptVersion,
+          assetId: snapshot?.rest.assetId ?? props.assetId,
+          topologyHash: snapshot?.rest.topologyHash ?? props.topologyHash,
+          dimensions: snapshot?.dimensions ?? props.dimensions,
+          restDimensions: snapshot?.rest.dimensions ?? props.restDimensions,
+          limits: snapshot?.rest.limits ?? null,
+          compatibility,
+          issues,
+          warnings: snapshot?.warnings ?? [],
+          handles: plan?.handles ?? null,
+          bounds: plan?.bounds ?? snapshot?.rest.bounds ?? null,
+          parts: (snapshot?.rest.parts ?? props.parts).map((part) => ({
+            key: part.key,
+            objectPath: part.objectPath,
+            meshName: part.meshName,
+            role: part.role,
+            side: part.side,
+            layer: part.layer,
+            vertexCount: 'vertexCount' in part ? part.vertexCount : null,
+            material: 'material' in part && part.material
+              ? {
+                  name: part.material.name ?? null,
+                  type: part.material.type,
+                  sourceMaterialAssetId: part.material.sourceMaterialAssetId ?? null,
+                  textures: Object.entries(part.material.textures ?? {})
+                    .filter(([, value]) => Boolean(value?.assetId))
+                    .map(([slot, value]) => ({ slot, assetId: value?.assetId ?? null })),
+                }
+              : null,
+          })),
+          scripts: listHouseRigScripts().map((entry) => ({
+            id: entry.id,
+            label: entry.label,
+            version: entry.version,
+            description: entry.description,
+            compatibility: snapshot
+              ? entry.getCompatibility(toHouseRigAssetDescriptor(snapshot.rest))
+              : null,
+          })),
+        }
+      }
+      if (operation.action === 'set_script') {
+        const requestedId = readString(args, 'scriptId')
+        const requestedVersion = typeof args.scriptVersion === 'string'
+          ? args.scriptVersion.trim()
+          : ''
+        const script = requestedVersion
+          ? getHouseRigScript(requestedId, requestedVersion)
+          : getLatestHouseRigScript(requestedId)
+        if (!script) {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            `Unknown House Rig script ${requestedId}@${requestedVersion || '(latest)'}`,
+          )
+        }
+        return {
+          changed: store.updateNodeComponentProps(nodeId, component.id, {
+            scriptId: script.id,
+            scriptVersion: script.version,
+          }),
+          scriptId: script.id,
+          scriptVersion: script.version,
+          compatibility: snapshot
+            ? script.getCompatibility(toHouseRigAssetDescriptor(snapshot.rest))
+            : null,
+        }
+      }
+      if (!snapshot) {
+        throw new AgentBridgeError(
+          'VALIDATION_FAILED',
+          `House Rig runtime is not ready for ${nodeId}`,
+        )
+      }
+      if (operation.action === 'set_dimensions') {
+        const source = isRecord(args.dimensions) ? args.dimensions : args
+        const candidate = {
+          width: Number(source.width ?? props.dimensions.width),
+          depth: Number(source.depth ?? props.dimensions.depth),
+          wallHeight: Number(source.wallHeight ?? props.dimensions.wallHeight),
+        }
+        if (![candidate.width, candidate.depth, candidate.wallHeight].every(Number.isFinite)) {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            'width, depth, and wallHeight must be finite numbers',
+          )
+        }
+        const dimensions = clampHouseRigDimensions(
+          candidate,
+          snapshot.rest.limits,
+          snapshot.rest.dimensions,
+        )
+        return {
+          changed: store.updateNodeComponentProps(nodeId, component.id, { dimensions }),
+          dimensions,
+        }
+      }
+      if (operation.action === 'set_material') {
+        const partKey = readString(args, 'partKey')
+        const assetId = readString(args, 'assetId')
+        const asset = store.getAsset(assetId)
+        if (!asset) {
+          throw new AgentBridgeError('VALIDATION_FAILED', `Unknown material or texture asset ${assetId}`)
+        }
+        if (asset.type === 'material') {
+          const material = await store.applyMaterialAssetToHouseRigPart(
+            nodeId,
+            component.id,
+            partKey,
+            assetId,
+          )
+          if (!material) {
+            throw new AgentBridgeError('VALIDATION_FAILED', `Unable to assign material to ${partKey}`)
+          }
+          return { changed: true, partKey, materialAssetId: assetId }
+        }
+        if (asset.type === 'image' || asset.type === 'texture') {
+          const slot = typeof args.slot === 'string' ? args.slot : 'albedo'
+          const material = store.applyTextureAssetToHouseRigPart(
+            nodeId,
+            component.id,
+            partKey,
+            assetId,
+            slot as never,
+          )
+          if (!material) {
+            throw new AgentBridgeError('VALIDATION_FAILED', `Unable to assign texture to ${partKey}`)
+          }
+          return { changed: true, partKey, textureAssetId: assetId, slot }
+        }
+        throw new AgentBridgeError(
+          'VALIDATION_FAILED',
+          'House Rig part materials accept material, image, or texture assets',
+        )
+      }
+      if (operation.action === 'reset') {
+        const dimensions = { ...snapshot.rest.dimensions }
+        const includeMaterials = args.includeMaterials === true
+        const parts = includeMaterials
+          ? props.parts.map((part) => ({ ...part, material: null }))
+          : props.parts
+        return {
+          changed: store.updateNodeComponentProps(nodeId, component.id, {
+            dimensions,
+            parts,
+          }),
+          dimensions,
+          materialsReset: includeMaterials,
+        }
+      }
+      if (operation.action === 'patch_component') {
+        if (!isRecord(args.patch)) {
+          throw new AgentBridgeError('VALIDATION_FAILED', 'patch must be an object')
+        }
+        return {
+          changed: store.updateNodeComponentProps(nodeId, component.id, args.patch),
+        }
+      }
+      break
+    }
     case 'actor': {
       const nodeId = readString(args, 'nodeId')
       const node = findNodeOrThrow(store, nodeId)
@@ -1153,6 +1354,14 @@ export async function applySceneOperations(
       && operation.op !== 'camera.focus'
       && operation.op !== 'camera.set'
       && operation.op !== 'tool.set_active'
+      && !(
+        operation.op === 'domain.apply'
+        && operation.domain === 'houseRig'
+        && (
+          operation.action === 'inspect'
+          || operation.action === 'validate'
+        )
+      )
       && !(
         operation.op === 'domain.apply'
         && operation.domain === 'terrain'

@@ -147,6 +147,10 @@ import { shouldPreserveTextureWallNodeMaterials } from '@schema/wallRenderMode'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import {
+	createNeutralPbrEnvironment,
+	type NeutralPbrEnvironment,
+} from '@schema/neutralPbrEnvironment'
+import {
 	instantiateRuntimePrefabControlSwitchInstance,
 } from '@schema/runtimePrefabControlSwitch'
 import { createTerrainScatterLodRuntime } from '@schema/scatter'
@@ -315,6 +319,7 @@ import {
 	animationComponentDefinition,
 	skinComponentDefinition,
 	generalMeshComponentDefinition,
+	houseRigComponentDefinition,
 	proceduralLandscapeComponentDefinition,
 	landscapeExclusionZoneComponentDefinition,
 	particleSystemComponentDefinition,
@@ -577,7 +582,10 @@ import {
 	resolveGuideRoutePrimaryProviderNodeId,
 } from '@schema/guideRouteRuntime'
 import { createScenePreviewPerfController } from '@schema/overlay'
-import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
+import {
+	canNodeUseRuntimeModelInstancing,
+	hasEnabledHouseRigComponent,
+} from '@schema/runtimeModelInstancing'
 
 const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
 	format: 'json',
@@ -1938,6 +1946,7 @@ previewComponentManager.registerDefinition(nominateComponentDefinition)
 previewComponentManager.registerDefinition(preloadableComponentDefinition)
 previewComponentManager.registerDefinition(onlineComponentDefinition)
 previewComponentManager.registerDefinition(generalMeshComponentDefinition)
+previewComponentManager.registerDefinition(houseRigComponentDefinition)
 previewComponentManager.registerDefinition(proceduralLandscapeComponentDefinition)
 previewComponentManager.registerDefinition(landscapeExclusionZoneComponentDefinition)
 
@@ -2456,6 +2465,7 @@ const DISPLAY_BOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia'
 type ResolvedAssetUrl = { url: string; mimeType?: string | null; dispose?: () => void }
 
 let renderer: THREE.WebGLRenderer | null = null
+let neutralHouseRigEnvironment: NeutralPbrEnvironment | null = null
 let scene: THREE.Scene | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let listener: THREE.AudioListener | null = null
@@ -7422,6 +7432,7 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 		serverAssetBaseUrl: readServerDownloadBaseUrl(),
 		deviceProfileId: activeScenePreviewDeviceProfileId,
 		renderGuideRouteVisuals: false,
+		houseRigEnvironmentMap: resolveHouseRigEnvironmentMap(),
 		materialFactoryOptions: {
 			hdrLoader: rgbeLoader,
 		},
@@ -7601,6 +7612,7 @@ async function switchControlNodeRuntimePrefab(
 				const options: SceneGraphBuildOptions = {
 					serverAssetBaseUrl: readServerDownloadBaseUrl(),
 					deviceProfileId: activeScenePreviewDeviceProfileId,
+					houseRigEnvironmentMap: resolveHouseRigEnvironmentMap(),
 					materialFactoryOptions: { hdrLoader: rgbeLoader },
 				}
 				const merged = mergePreviewAssetOverrides(activeScenePackageAssetOverrides, Object.keys(localOverrides).length ? localOverrides : undefined)
@@ -13522,9 +13534,25 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 }
 
 function disposeSkyResources() {
-	if (!scene) return
-	scene.environment = null
-	scene.environmentIntensity = 1
+	neutralHouseRigEnvironment?.dispose()
+	neutralHouseRigEnvironment = null
+	if (scene) {
+		scene.environment = null
+		scene.environmentIntensity = 1
+	}
+}
+
+function resolveHouseRigEnvironmentMap(): THREE.Texture | null {
+	if (scene?.environment) {
+		return scene.environment
+	}
+	if (!renderer) {
+		return null
+	}
+	if (!neutralHouseRigEnvironment) {
+		neutralHouseRigEnvironment = createNeutralPbrEnvironment(renderer)
+	}
+	return neutralHouseRigEnvironment.texture
 }
 
 /**
@@ -16748,6 +16776,11 @@ function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolea
 }
 
 function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+	if (hasEnabledHouseRigComponent(node)) {
+		// House Rig owns per-part runtime materials. Generic imported-model
+		// synchronization would reset those overrides to the GLB baseline.
+		return
+	}
 	if (shouldPreserveTextureWallNodeMaterials(node)) {
 		// Texture walls own alpha-tested image materials. Generic node materials
 		// must not replace them after the wall graph has been built.
@@ -17525,6 +17558,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 			serverAssetBaseUrl: readServerDownloadBaseUrl(),
 			deviceProfileId: activeScenePreviewDeviceProfileId,
 			renderGuideRouteVisuals: false,
+			houseRigEnvironmentMap: resolveHouseRigEnvironmentMap(),
 			onProgress: (info) => {
 				resourceProgress.total = info.total
 				resourceProgress.loaded = info.loaded

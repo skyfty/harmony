@@ -729,6 +729,10 @@ import {
   type SceneGraphBuildOptions,
 } from '@harmony/schema/sceneGraph';
 import {
+  createNeutralPbrEnvironment,
+  type NeutralPbrEnvironment,
+} from '@harmony/schema/neutralPbrEnvironment';
+import {
   instantiateRuntimePrefabControlSwitchInstanceFromPrefab,
 } from '@harmony/schema/runtimePrefabControlSwitch';
 import {
@@ -866,6 +870,7 @@ import {
 import {
   canNodeUseRuntimeModelInstancing,
   collectRuntimeModelNodesByAssetId,
+  hasEnabledHouseRigComponent,
 } from '@harmony/schema/runtimeModelInstancing';
 // LanternSlideDefinition is not exported from skyCubeTexture, so remove it from import and use 'any' or define locally if needed
 import {
@@ -1196,6 +1201,9 @@ import {
 import {
   generalMeshComponentDefinition,
 } from '@harmony/schema/components/definitions/generalMeshComponent';
+import {
+  houseRigComponentDefinition,
+} from '@harmony/schema/components/definitions/houseRigComponent';
 import {
   proceduralLandscapeComponentDefinition,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
@@ -2328,6 +2336,7 @@ type CameraFrameSnapshot = {
 const cameraFrameSnapshotPosition = new THREE.Vector3();
 const cameraFrameSnapshotQuaternion = new THREE.Quaternion();
 let renderContext: RenderContext | null = null;
+let neutralHouseRigEnvironment: NeutralPbrEnvironment | null = null;
 let baseRendererPixelRatio = 1;
 let landscapePixelRatioCap: number | null = null;
 let baseRendererShadowsEnabled = true;
@@ -2727,6 +2736,7 @@ previewComponentManager.registerDefinition(nominateComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 previewComponentManager.registerDefinition(deviceAdaptationComponentDefinition);
 previewComponentManager.registerDefinition(generalMeshComponentDefinition);
+previewComponentManager.registerDefinition(houseRigComponentDefinition);
 previewComponentManager.registerDefinition(proceduralLandscapeComponentDefinition);
 previewComponentManager.registerDefinition(landscapeExclusionZoneComponentDefinition);
 
@@ -6417,12 +6427,28 @@ function resolveLandscapePixelRatioCap(document: SceneJsonExportDocument | null)
   return null
 }
 
+function resolveHouseRigEnvironmentMap(): THREE.Texture | null {
+  const scene = renderContext?.scene;
+  if (scene?.environment) {
+    return scene.environment;
+  }
+  const renderer = renderContext?.renderer;
+  if (!renderer) {
+    return null;
+  }
+  if (!neutralHouseRigEnvironment) {
+    neutralHouseRigEnvironment = createNeutralPbrEnvironment(renderer);
+  }
+  return neutralHouseRigEnvironment.texture;
+}
+
 function createSceneGraphBuildOptions(
   payload: ScenePreviewPayload,
   onProgress?: SceneGraphBuildOptions['onProgress'],
 ): SceneGraphBuildOptions {
   const buildOptions: SceneGraphBuildOptions = {};
   buildOptions.renderGuideRouteVisuals = false;
+  buildOptions.houseRigEnvironmentMap = resolveHouseRigEnvironmentMap();
   // Coarse phase timing for the graph builder. The host owns the clock, so the
   // callback only reports names/details and this closure adds the deltas.
   activeDeviceAdaptationProfile = resolveDeviceAdaptationProfile(payload.document.deviceAdaptation, readDeviceAdaptationSystemInfo());
@@ -7480,6 +7506,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   const runtimeDocument = createRuntimePrefabDocument(prefab, cloned.root);
   const buildOptions: SceneGraphBuildOptions = {};
   buildOptions.renderGuideRouteVisuals = false;
+  buildOptions.houseRigEnvironmentMap = resolveHouseRigEnvironmentMap();
   buildOptions.deviceProfileId = activeDeviceAdaptationProfile?.id ?? null;
   if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
     buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
@@ -14717,6 +14744,11 @@ function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolea
 }
 
 function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+  if (hasEnabledHouseRigComponent(node)) {
+    // House Rig owns per-part runtime materials. Generic imported-model
+    // synchronization would reset those overrides to the GLB baseline.
+    return;
+  }
   if (shouldPreserveTextureWallNodeMaterials(node)) {
     // Texture walls own alpha-tested image materials. Generic node materials
     // must not replace them after the wall graph has been built.
@@ -16710,6 +16742,7 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
     stripRemoteMultiuserPrefabRuntimeComponents(cloned.root);
     const runtimeDocument = createRuntimePrefabDocument(source.prefab, cloned.root);
     const buildOptions: SceneGraphBuildOptions = {};
+    buildOptions.houseRigEnvironmentMap = resolveHouseRigEnvironmentMap();
     buildOptions.renderGuideRouteVisuals = false;
     buildOptions.deviceProfileId = activeDeviceAdaptationProfile?.id ?? null;
     if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
@@ -24397,6 +24430,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 }
 
 function disposeEnvironmentResources() {
+  neutralHouseRigEnvironment?.dispose();
+  neutralHouseRigEnvironment = null;
   sceneSunLightRuntime?.dispose();
   sceneSunLightRuntime = null;
   pendingEnvironmentSettings = null;

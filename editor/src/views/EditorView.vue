@@ -39,6 +39,7 @@ import type { RuntimeResourceBudgetReport } from '@schema/core'
 type SceneViewportHandle = InstanceType<typeof SceneViewport> & {
   activateRigidbodyColliderEdit: () => boolean
   deactivateRigidbodyColliderEdit: (options?: { save?: boolean }) => boolean
+  enterHouseRigEditMode: (nodeId: string) => boolean
 }
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
@@ -68,6 +69,7 @@ import type { EditorTool } from '@/types/editor-tool'
 import { useUiStore } from '@/stores/uiStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
+import type { MaterialDetailsTarget } from '@/types/material-details'
 import Loader, { type LoaderProgressPayload } from '@schema/loader'
 import type { Object3D } from 'three'
 import {
@@ -414,7 +416,7 @@ const floatingInspectorRef = ref<InspectorPanelPublicInstance | null>(null)
 
 const materialDetailsState = reactive({
   visible: false,
-  targetId: null as string | null,
+  target: null as MaterialDetailsTarget | null,
   anchor: null as MaterialDetailsAnchor | null,
   source: null as MaterialDetailsSource | null,
 })
@@ -545,6 +547,13 @@ function setTool(tool: EditorTool) {
   sceneStore.setActiveTool(tool)
 }
 
+function activateHouseRigFromHierarchy(nodeId: string) {
+  setTool('select')
+  void nextTick(() => {
+    viewportRef.value?.enterHouseRigEditMode(nodeId)
+  })
+}
+
 type ViewportSelectionPayload = { primaryId: string | null; selectedIds: string[] }
 
 function handleViewportSelection(payload: ViewportSelectionPayload) {
@@ -601,7 +610,7 @@ function updateMaterialDetailsAnchor() {
   materialDetailsState.anchor = { top: rect.top, left: rect.left }
 }
 
-function handleInspectorMaterialDetailsOpen(source: MaterialDetailsSource, payload: { id: string }) {
+function handleInspectorMaterialDetailsOpen(source: MaterialDetailsSource, payload: MaterialDetailsTarget) {
   if (behaviorDetailsState.visible) {
     handleBehaviorDetailsOverlayClose()
   }
@@ -611,8 +620,12 @@ function handleInspectorMaterialDetailsOpen(source: MaterialDetailsSource, paylo
   if (vehicleSuspensionEditorState.visible) {
     handleVehicleSuspensionEditorOverlayClose()
   }
+  const previousSource = materialDetailsState.source
+  if (materialDetailsState.visible && previousSource && previousSource !== source) {
+    getInspectorRef(previousSource)?.closeMaterialDetails?.({ silent: true, force: true })
+  }
   materialDetailsState.source = source
-  materialDetailsState.targetId = payload.id
+  materialDetailsState.target = payload
   materialDetailsState.visible = true
   nextTick(() => {
     updateMaterialDetailsAnchor()
@@ -624,7 +637,7 @@ function handleInspectorMaterialDetailsClose(source: MaterialDetailsSource) {
     return
   }
   materialDetailsState.visible = false
-  materialDetailsState.targetId = null
+  materialDetailsState.target = null
   materialDetailsState.anchor = null
   materialDetailsState.source = null
 }
@@ -632,7 +645,7 @@ function handleInspectorMaterialDetailsClose(source: MaterialDetailsSource) {
 function handleMaterialDetailsOverlayClose() {
   const source = materialDetailsState.source
   materialDetailsState.visible = false
-  materialDetailsState.targetId = null
+  materialDetailsState.target = null
   materialDetailsState.anchor = null
   materialDetailsState.source = null
   if (source) {
@@ -2469,6 +2482,7 @@ onBeforeUnmount(() => {
             :floating="false"
             @collapse="hierarchyOpen = false"
             @toggle-placement="togglePanelPlacement('hierarchy')"
+            @activate-house-rig="activateHouseRigFromHierarchy"
           />
         </section>
       </transition>
@@ -2529,6 +2543,7 @@ onBeforeUnmount(() => {
               :floating="true"
               @collapse="hierarchyOpen = false"
               @toggle-placement="togglePanelPlacement('hierarchy')"
+              @activate-house-rig="activateHouseRigFromHierarchy"
             />
           </div>
         </transition>
@@ -2611,8 +2626,8 @@ onBeforeUnmount(() => {
       />
 
       <MaterialDetailsPanel
-        v-if="materialDetailsState.visible && materialDetailsState.targetId && materialDetailsState.anchor"
-        :node-material-id="materialDetailsState.targetId"
+        v-if="materialDetailsState.visible && materialDetailsState.target && materialDetailsState.anchor"
+        :target="materialDetailsState.target"
         :visible="materialDetailsState.visible"
         :anchor="materialDetailsState.anchor"
         @close="handleMaterialDetailsOverlayClose"

@@ -22,6 +22,7 @@ import { findObjectByPath } from '@schema/modelAssetLoader'
 import { isAnySteerTargetNode } from '@schema/components'
 import { shouldPreserveLandscapeRoadSelectionOnLock } from '@/components/editor/landscapeRoadEditPolicy'
 import { getNodeIcon } from '@/types/node-icons'
+import { resolveEditableHouseRigComponent } from '@/utils/houseRigInteraction'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import AssetReferenceSearchDialog from './AssetReferenceSearchDialog.vue'
 import { Group, Vector3 } from 'three'
@@ -35,6 +36,7 @@ const props = defineProps<{ floating?: boolean }>()
 const emit = defineEmits<{
   (event: 'collapse'): void
   (event: 'toggle-placement'): void
+  (event: 'activate-house-rig', nodeId: string): void
 }>()
 
 const sceneStore = useSceneStore()
@@ -1840,6 +1842,19 @@ function handleNodeDoubleClick(nodeId: string) {
     if (canCompleteNodePick(nodeId)) {
       nodePickerStore.completePick(nodeId)
     }
+    return
+  }
+  const houseRigNode = sceneStore.getNodeById(nodeId)
+  if (
+    !activeBuildTool.value
+    && resolveEditableHouseRigComponent(
+      houseRigNode,
+      sceneStore.isNodeSelectionLocked(nodeId),
+    )
+  ) {
+    setActiveNode(nodeId)
+    sceneStore.requestCameraFocus(nodeId)
+    emit('activate-house-rig', nodeId)
     return
   }
   const nextSelection = sceneStore.handleNodeDoubleClick(nodeId)

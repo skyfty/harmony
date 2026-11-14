@@ -56,5 +56,18 @@ describe('component Agent profiles', () => {
       domain: 'actor',
       tool: 'harmony_actor_edit',
     })
+    expect(componentManager.getAgentProfile('houseRig')).toMatchObject({
+      editMode: 'domain',
+      domain: 'houseRig',
+      tool: 'harmony_house_rig_edit',
+      actions: expect.arrayContaining([
+        'inspect',
+        'validate',
+        'set_script',
+        'set_dimensions',
+        'set_material',
+        'reset',
+      ]),
+    })
   })
 })

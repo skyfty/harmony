@@ -723,6 +723,7 @@ export function resolveSceneNodeMaterialSlots(
 
 export class SceneMaterialFactory {
   private readonly textureCache = new Map<string, Promise<THREE.Texture | null>>();
+  private readonly resolvedTextures = new Map<string, THREE.Texture | null>();
   private readonly disposableUrls = new Set<string>();
   private readonly provider: ResourceCache;
   private readonly warn?: (message: string) => void;
@@ -811,6 +812,7 @@ export class SceneMaterialFactory {
 
   dispose(): void {
     this.textureCache.clear();
+    this.resolvedTextures.clear();
     this.disposableUrls.forEach((url) => {
       try {
         URL.revokeObjectURL(url);
@@ -1103,6 +1105,9 @@ export class SceneMaterialFactory {
       });
 
     this.textureCache.set(signature, pending);
+    void pending.then((texture) => {
+      this.resolvedTextures.set(signature, texture);
+    });
     return pending;
   }
 
@@ -1111,6 +1116,14 @@ export class SceneMaterialFactory {
     settings: Partial<SceneMaterialTextureSettings> | null = null,
   ): Promise<THREE.Texture | null> {
     return this.ensureTexture(assetId, settings)
+  }
+
+  peekTexture(
+    assetId: string,
+    settings: Partial<SceneMaterialTextureSettings> | null = null,
+  ): THREE.Texture | null {
+    const signature = `${assetId}::${textureSettingsSignature(settings as SceneMaterialTextureSettings | null)}`;
+    return this.resolvedTextures.get(signature) ?? null;
   }
 
   private isHdrTextureAsset(assetId: string, asset: AssetCacheEntry): boolean {

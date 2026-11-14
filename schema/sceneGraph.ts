@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import type { AssetCacheEntry } from './assetCache';
-import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, applyMaterialOverrides, resolveSceneNodeMaterialSlots } from './material';
+import {
+  SceneMaterialFactory,
+  MATERIAL_TEXTURE_SLOTS,
+  applyMaterialOverrides,
+  resolveOverrideTextureSlots,
+  resolveSceneNodeMaterialSlots,
+} from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { collectAssetRegistryEntryIds, collectAssetRegistryLookupIds } from './assetRegistryLookup';
@@ -20,6 +26,7 @@ import type {
   GuideRouteDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
+  SceneMaterialTextureRef,
 } from './core';
 import {
   isRuntimeHiddenInPreview,
@@ -63,7 +70,10 @@ import { loadNodeObject } from './modelAssetLoader'
 
 import type { SceneNodeWithExtras } from './sceneGraph/types';
 import { applyNodeMetadata as applyNodeMetadataToObject } from './sceneGraph/nodeMetadata';
-import { applyLightweightImportPatches } from './sceneGraph/lightweightImportPatch';
+import {
+  applyLightweightImportPatches,
+  buildAssetObjectPathIndex,
+} from './sceneGraph/lightweightImportPatch';
 import { buildGroundMesh as buildGroundDynamicMesh } from './sceneGraph/dynamicMeshes/ground';
 import { buildWallMesh as buildWallDynamicMesh } from './sceneGraph/dynamicMeshes/wall';
 import { buildFloorMesh as buildFloorDynamicMesh } from './sceneGraph/dynamicMeshes/floor';
@@ -77,6 +87,12 @@ import {
 } from './compiledStaticMesh';
 import { compileRoadStaticMeshMetadata } from './roadMesh'
 import { GENERAL_MESH_COMPONENT_TYPE } from './components/definitions/generalMeshComponent'
+import {
+  applyHouseRigMaterialEnvironmentPreview,
+  HOUSE_RIG_COMPONENT_TYPE,
+  normalizeHouseRigComponentProps,
+  type HouseRigComponentProps,
+} from './houseRig'
 import {
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   type ProceduralLandscapeComponentProps,
@@ -124,6 +140,7 @@ export interface SceneGraphBuildOptions {
   deviceProfileId?: string | null;
   resolveNodeAdaptation?: (node: SceneNode) => DeviceAdaptationNodeRule | null;
   materialFactoryOptions?: Pick<SceneMaterialFactoryOptions, 'textureLoader' | 'hdrLoader'>;
+  houseRigEnvironmentMap?: THREE.Texture | null;
 }
 
 type MeshTemplate = {
@@ -142,6 +159,11 @@ async function loadAssetImportModule(): Promise<typeof import('./assetImport')> 
 
 function hasEnabledGeneralMeshComponent(node: Pick<SceneNode, 'components'>): boolean {
   const component = node.components?.[GENERAL_MESH_COMPONENT_TYPE]
+  return Boolean(component && component.enabled !== false)
+}
+
+function hasEnabledHouseRigComponent(node: Pick<SceneNode, 'components'>): boolean {
+  const component = node.components?.[HOUSE_RIG_COMPONENT_TYPE]
   return Boolean(component && component.enabled !== false)
 }
 
@@ -1422,6 +1444,7 @@ class SceneGraphBuilder {
       && node.sourceAssetId
       && !childrenExpanded
       && !hasEnabledGeneralMeshComponent(node)
+      && !hasEnabledHouseRigComponent(node)
       && !(Array.isArray(node.materials) && node.materials.length > 0)
     ) {
       const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
@@ -1438,6 +1461,7 @@ class SceneGraphBuilder {
         const asset = await this.loadNodeAssetMesh(node);
         if (asset) {
           await this.applyMaterialOverridesToImportedObject(asset, node);
+          await this.applyHouseRigMaterialOverridesToImportedObject(asset, node);
           this.resetImportedObjectLocalTransform(asset);
           asset.userData = asset.userData ?? {};
           asset.userData.sourceAssetId = node.sourceAssetId;
@@ -1879,6 +1903,56 @@ class SceneGraphBuilder {
     await this.applyImportedMaterialOverrideDelta(object, nodeMaterialConfigs);
   }
 
+  private async applyHouseRigMaterialOverridesToImportedObject(
+    object: THREE.Object3D,
+    node: SceneNodeWithExtras,
+  ): Promise<void> {
+    const rawState = node.components?.[HOUSE_RIG_COMPONENT_TYPE] as
+      | SceneNodeComponentState<HouseRigComponentProps>
+      | undefined
+    if (!rawState || rawState.enabled === false) {
+      return
+    }
+    const props = normalizeHouseRigComponentProps(
+      rawState.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+      node,
+    )
+    const configuredParts = props.parts.filter((part) => part.material)
+    if (!configuredParts.length) {
+      return
+    }
+    const pathIndex = buildAssetObjectPathIndex(object)
+    const uniqueNameIndex = new Map<string, THREE.Object3D[]>()
+    pathIndex.forEach((target) => {
+      const mesh = target as THREE.Mesh
+      if (!mesh?.isMesh || !mesh.name) {
+        return
+      }
+      const entries = uniqueNameIndex.get(mesh.name) ?? []
+      entries.push(mesh)
+      uniqueNameIndex.set(mesh.name, entries)
+    })
+    for (const part of configuredParts) {
+      const material = part.material
+      if (!material) {
+        continue
+      }
+      const byPath = part.objectPath ? pathIndex.get(part.objectPath) ?? null : null
+      const byName = uniqueNameIndex.get(part.meshName)
+      const target = byPath ?? (byName?.length === 1 ? byName[0] ?? null : null)
+      if (!target) {
+        this.warn(`House Rig material part is missing: ${part.meshName} (${part.objectPath || 'root'})`)
+        continue
+      }
+      await this.applySingleMaterialOverrideToObject(target, material)
+      applyHouseRigMaterialEnvironmentPreview(
+        target,
+        material,
+        this.options.houseRigEnvironmentMap,
+      )
+    }
+  }
+
   /**
    * Applies one inline material config to every mesh of the object. Used by
    * lightweight import nodes, which carry at most a single material override
@@ -1910,9 +1984,19 @@ class SceneGraphBuilder {
       return;
     }
     const textureLoader = this.materialFactory;
+    const textureRefs = materialConfigs.flatMap((config) =>
+      resolveOverrideTextureSlots(config)
+        .map((slot) => config.textures?.[slot] ?? null)
+        .filter((ref): ref is SceneMaterialTextureRef => Boolean(ref)),
+    );
+    await Promise.all(textureRefs.map((ref) =>
+      textureLoader.loadTexture(ref.assetId, ref.settings ?? null),
+    ));
     applyMaterialOverrides(object, materialConfigs, {
       inheritUnspecifiedTextures: true,
-      resolveTexture: (ref) => textureLoader.loadTexture(ref.assetId, ref.settings ?? null),
+      resolveTexture: (ref) =>
+        textureLoader.peekTexture(ref.assetId, ref.settings ?? null)
+        ?? textureLoader.loadTexture(ref.assetId, ref.settings ?? null),
       warn: (message) => {
         if (message) {
           this.warn(message);

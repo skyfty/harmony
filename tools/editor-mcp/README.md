@@ -77,10 +77,19 @@ Domain writes:
 - `harmony_guide_route_edit`
 - `harmony_terrain_edit`
 - `harmony_actor_edit`
+- `harmony_house_rig_edit`
 
 Component schemas report whether a component uses generic or domain editing. Generic writes reject protected complex fields with `FIELD_REQUIRES_DOMAIN_TOOL`.
 
 `harmony_camera_control` can read the live Three.js camera or set position, target, FOV, distance, orbit angles, projection, navigation mode, and named presets. `harmony_tool_control` reads and activates the same transform and viewport build tools exposed by the Editor UI.
+
+`harmony_house_rig_edit` exposes the House Rig component without arbitrary code execution:
+
+- `inspect` returns imported mesh parts, inferred semantic roles, dimensions, handles, compatibility, materials, and script versions.
+- `validate` builds a deformation plan and checks vertex counts, finite values, and plan completeness without changing the scene revision.
+- `set_script`, `set_dimensions`, `set_material`, and `reset` apply revision-checked atomic component updates.
+
+Codex uses this tool for model inspection and verification, then edits the typed scripts under `schema/houseRig/scripts` in the repository. House Rig scripts are compiled into the shared schema and are never downloaded or evaluated by the MCP bridge at runtime.
 
 Examples:
 

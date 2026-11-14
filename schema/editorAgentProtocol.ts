@@ -24,6 +24,7 @@ export type HarmonyAgentDomain =
   | 'guideRoute'
   | 'terrain'
   | 'actor'
+  | 'houseRig'
 
 export type HarmonyAgentErrorCode =
   | 'BAD_REQUEST'
@@ -501,6 +502,7 @@ export const HARMONY_AGENT_TOOLS = {
   guideRoute: 'harmony_guide_route_edit',
   terrain: 'harmony_terrain_edit',
   actor: 'harmony_actor_edit',
+  houseRig: 'harmony_house_rig_edit',
 } as const
 
 export const HARMONY_AGENT_OPERATION_NAMES = [

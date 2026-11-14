@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useSceneStore } from '@/stores/sceneStore'
+import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import {
   type SceneMaterialProps,
@@ -14,9 +14,26 @@ import {
 import TexturePanel from './TexturePanel.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
-import { isLightweightImportNode, type SceneMaterialType, type SceneMaterialTextureSlot } from '@schema/core'
+import {
+  isLightweightImportNode,
+  type SceneMaterialType,
+  type SceneMaterialTextureSlot,
+  type SceneNodeMaterial,
+} from '@schema/core'
+import {
+  HOUSE_RIG_COMPONENT_TYPE,
+  normalizeHouseRigComponentProps,
+  type HouseRigComponentProps,
+  type HouseRigPartBinding,
+} from '@schema/houseRig'
+import { subscribeHouseRigRuntime } from '@schema/components'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { buildMaterialAssetFilename, parseMaterialAssetDocument } from '@/utils/materialAsset'
+import { buildHouseRigPartMaterialViewMap } from '@/utils/houseRigMaterialRuntime'
+import {
+  materialDetailsTargetKey,
+  type MaterialDetailsTarget,
+} from '@/types/material-details'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
 
@@ -62,7 +79,7 @@ type SliderConfigEntry = {
 }
 
 const props = defineProps<{
-  nodeMaterialId: string | null
+  target: MaterialDetailsTarget
   visible: boolean
   disabled?: boolean
   anchor: { top: number; left: number } | null
@@ -156,16 +173,121 @@ const DEFAULT_PROPS: SceneMaterialProps = {
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const { selectedNode, selectedNodeId, deviceAdaptation } = storeToRefs(sceneStore)
+const {
+  selectedNode,
+  selectedNodeId,
+  deviceAdaptation,
+  sceneNodePropertyVersion,
+} = storeToRefs(sceneStore)
 
-const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
-const activeNodeMaterialEntry = computed(() => {
-  if (!props.nodeMaterialId) {
+const targetNode = computed(() => {
+  void sceneNodePropertyVersion.value
+  if (selectedNode.value?.id === props.target.nodeId) {
+    return selectedNode.value
+  }
+  return sceneStore.getNodeById(props.target.nodeId)
+})
+const isHouseRigTarget = computed(() => props.target.kind === 'houseRigPart')
+const houseRigResolvedTargetKey = ref('')
+const runtimeRevision = ref(0)
+let unsubscribeRuntimeSnapshot: (() => void) | null = null
+
+watch(
+  () => props.target.kind === 'houseRigPart' ? props.target.nodeId : null,
+  (nodeId) => {
+    unsubscribeRuntimeSnapshot?.()
+    unsubscribeRuntimeSnapshot = nodeId
+      ? subscribeHouseRigRuntime(nodeId, () => {
+          runtimeRevision.value += 1
+        })
+      : null
+    runtimeRevision.value += 1
+  },
+  { immediate: true },
+)
+
+const nodeMaterials = computed(() => targetNode.value?.materials ?? [])
+const houseRigComponent = computed(() => {
+  if (props.target.kind !== 'houseRigPart') {
     return null
   }
-  return nodeMaterials.value.find((entry) => entry.id === props.nodeMaterialId) ?? null
+  const component = targetNode.value?.components?.[HOUSE_RIG_COMPONENT_TYPE]
+  return component?.id === props.target.componentId ? component : null
 })
-const activeNodeMaterial = activeNodeMaterialEntry
+const houseRigPart = computed<HouseRigPartBinding | null>(() => {
+  void sceneNodePropertyVersion.value
+  const target = props.target
+  const node = targetNode.value
+  const component = houseRigComponent.value
+  if (target.kind !== 'houseRigPart' || !node || !component) {
+    return null
+  }
+  const normalized = normalizeHouseRigComponentProps(
+    component.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+    node,
+  )
+  return normalized.parts.find((part) => part.key === target.partKey) ?? null
+})
+watch(
+  [
+    () => materialDetailsTargetKey(props.target),
+    () => isHouseRigTarget.value,
+    () => !!houseRigPart.value,
+  ],
+  ([targetKey, isHouseRig, resolved]) => {
+    if (!isHouseRig) {
+      houseRigResolvedTargetKey.value = ''
+      return
+    }
+    if (resolved) {
+      houseRigResolvedTargetKey.value = targetKey
+      return
+    }
+    if (props.visible && houseRigResolvedTargetKey.value === targetKey) {
+      flushPendingMaterialPropsCommit()
+      houseRigResolvedTargetKey.value = ''
+      emit('close')
+    }
+  },
+  { immediate: true },
+)
+const houseRigMaterialView = computed(() => {
+  void runtimeRevision.value
+  void sceneNodePropertyVersion.value
+  if (!isHouseRigTarget.value || !houseRigPart.value) {
+    return null
+  }
+  const node = targetNode.value
+  if (!node) {
+    return null
+  }
+  const normalized = normalizeHouseRigComponentProps(
+    houseRigComponent.value?.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+    node,
+  )
+  return buildHouseRigPartMaterialViewMap(
+    getRuntimeObject(node.id),
+    normalized.parts,
+  ).get(houseRigPart.value.key) ?? null
+})
+const houseRigRuntimeSeed = computed<SceneNodeMaterial | null>(
+  () => houseRigMaterialView.value?.material ?? null,
+)
+const activeMaterial = computed<SceneNodeMaterial | null>(() => {
+  const target = props.target
+  if (target.kind === 'nodeMaterial') {
+    return nodeMaterials.value.find((entry) => entry.id === target.materialId) ?? null
+  }
+  return houseRigMaterialView.value?.material ?? null
+})
+const activeNodeMaterialEntry = computed(() => {
+  const target = props.target
+  if (target.kind !== 'nodeMaterial') {
+    return null
+  }
+  return nodeMaterials.value.find((entry) => entry.id === target.materialId) ?? null
+})
+const activeNodeMaterial = activeMaterial
 const hasOtherDefaultSlot = computed(() => nodeMaterials.value.some((entry) =>
   entry.id !== activeNodeMaterialEntry.value?.id && !entry.deviceProfileId,
 ))
@@ -192,7 +314,10 @@ const deviceProfileSelectionError = ref('')
  * everything else keeps rendering with the model's own texture.
  */
 const supportsTextureInheritance = computed(() => {
-  const node = selectedNode.value
+  if (isHouseRigTarget.value) {
+    return true
+  }
+  const node = targetNode.value
   if (!node) {
     return false
   }
@@ -217,6 +342,11 @@ function isTextureSlotOverridden(slot: SceneMaterialTextureSlot): boolean {
 }
 
 function isTextureSlotInherited(slot: SceneMaterialTextureSlot): boolean {
+  if (isHouseRigTarget.value) {
+    return !isTextureSlotOverridden(slot)
+      && !formTextures[slot]
+      && !!houseRigMaterialView.value?.inheritedTextureSlots.includes(slot)
+  }
   return supportsTextureInheritance.value && !isTextureSlotOverridden(slot) && !formTextures[slot]
 }
 
@@ -238,7 +368,7 @@ const emissiveColorMenuOpen = ref(false)
 
 const draggingSlot = ref<SceneMaterialTextureSlot | null>(null)
 const hasPendingChanges = ref(false)
-const lastSyncedMaterialId = ref<string | null>(null)
+const lastSyncedTargetKey = ref('')
 const showAllProperties = ref(false)
 
 const formTextures = reactive<TextureMapState>(createEmptyTextureMap())
@@ -286,8 +416,9 @@ const overwriteTargetAssetId = ref<string | null>(null)
 const overwriteTargetFilename = ref<string | null>(null)
 const TEXTURE_ASSET_TYPE = 'texture,image,hdri' as const
 let pendingMaterialPropsCommitTimer: ReturnType<typeof setTimeout> | null = null
-let pendingMaterialPropsTarget: { nodeId: string; materialId: string } | null = null
+let pendingMaterialPropsTarget: MaterialDetailsTarget | null = null
 let pendingMaterialPropsUpdate: MaterialPropUpdate | null = null
+let pendingMaterialPropsSeed: SceneNodeMaterial | null = null
 
 const assetDialogTitle = computed(() => {
   const slot = assetDialogSlot.value
@@ -354,12 +485,20 @@ const materialFlagSelection = computed<MaterialFlagOption[]>({
 })
 
 const currentMaterialTitle = computed(() => {
+  if (isHouseRigTarget.value) {
+    return houseRigPart.value?.meshName
+      || activeNodeMaterial.value?.name
+      || '部件材质'
+  }
   const entry = activeNodeMaterial.value
   if (!entry) {
     return 'Material'
   }
   return entry.name ?? `Material ${activeMaterialIndex.value + 1}`
 })
+const currentMaterialSourceLabel = computed(() =>
+  isHouseRigTarget.value ? houseRigMaterialView.value?.sourceLabel ?? '' : '',
+)
 
 const panelStyle = computed(() => {
   if (!props.anchor) {
@@ -398,13 +537,14 @@ watch(assetDialogVisible, (open) => {
 })
 
 watch(
-  [() => selectedNodeId.value, () => props.nodeMaterialId],
+  [() => selectedNodeId.value, () => materialDetailsTargetKey(props.target)],
   () => {
     flushPendingMaterialPropsCommit()
   },
 )
 
 onBeforeUnmount(() => {
+  unsubscribeRuntimeSnapshot?.()
   flushPendingMaterialPropsCommit()
 })
 
@@ -414,7 +554,7 @@ watch(
     if (!entry) {
       baseColorMenuOpen.value = false
       emissiveColorMenuOpen.value = false
-      lastSyncedMaterialId.value = null
+      lastSyncedTargetKey.value = ''
       resetDirtyState()
       resetMaterialSaveState()
       showAllProperties.value = false
@@ -422,7 +562,8 @@ watch(
       applyPropsToForm(DEFAULT_PROPS, { name: '', description: '' })
       return
     }
-    const isNewSelection = entry.id !== lastSyncedMaterialId.value
+    const targetKey = materialDetailsTargetKey(props.target)
+    const isNewSelection = targetKey !== lastSyncedTargetKey.value
     applyPropsToForm(entry, { name: entry.name ?? '', description: '' })
     if (isNewSelection) {
       resetDirtyState()
@@ -430,7 +571,7 @@ watch(
       showAllProperties.value = false
       resetTexturePanelExpansion()
     }
-    lastSyncedMaterialId.value = entry.id
+    lastSyncedTargetKey.value = targetKey
   },
   { immediate: true },
 )
@@ -491,14 +632,29 @@ function flushPendingMaterialPropsCommit() {
   clearPendingMaterialPropsCommitTimer()
   const target = pendingMaterialPropsTarget
   const update = pendingMaterialPropsUpdate
+  const seed = pendingMaterialPropsSeed
   pendingMaterialPropsTarget = null
   pendingMaterialPropsUpdate = null
+  pendingMaterialPropsSeed = null
   if (!target || !update || !Object.keys(update).length) {
     return
   }
-  sceneStore.updateNodeMaterialProps(target.nodeId, target.materialId, update, {
-    autoSaveMode: 'interactive',
-  })
+  if (target.kind === 'houseRigPart') {
+    sceneStore.updateHouseRigPartMaterial(
+      target.nodeId,
+      target.componentId,
+      target.partKey,
+      {
+        props: update,
+        seed,
+      },
+      { autoSaveMode: 'interactive' },
+    )
+  } else {
+    sceneStore.updateNodeMaterialProps(target.nodeId, target.materialId, update, {
+      autoSaveMode: 'interactive',
+    })
+  }
 }
 
 function handleClose() {
@@ -616,25 +772,26 @@ function applyPropsToForm(
 }
 
 function commitMaterialProps(update: MaterialPropUpdate) {
-  if (!activeNodeMaterial.value || !selectedNodeId.value) {
+  if (!activeNodeMaterial.value) {
     return
   }
-  const nodeEntry = activeNodeMaterial.value
-  if (!nodeEntry) {
-    return
-  }
-  const nextTarget = {
-    nodeId: selectedNodeId.value,
-    materialId: nodeEntry.id,
-  }
+  const nextTarget: MaterialDetailsTarget = props.target.kind === 'houseRigPart'
+    ? { ...props.target }
+    : {
+        kind: 'nodeMaterial',
+        nodeId: props.target.nodeId,
+        materialId: props.target.materialId,
+      }
   if (
     pendingMaterialPropsTarget
-    && (pendingMaterialPropsTarget.nodeId !== nextTarget.nodeId
-      || pendingMaterialPropsTarget.materialId !== nextTarget.materialId)
+    && materialDetailsTargetKey(pendingMaterialPropsTarget) !== materialDetailsTargetKey(nextTarget)
   ) {
     flushPendingMaterialPropsCommit()
   }
   pendingMaterialPropsTarget = nextTarget
+  pendingMaterialPropsSeed = nextTarget.kind === 'houseRigPart'
+    ? houseRigRuntimeSeed.value
+    : null
   pendingMaterialPropsUpdate = mergeMaterialPropUpdates(pendingMaterialPropsUpdate, update)
   clearPendingMaterialPropsCommitTimer()
   pendingMaterialPropsCommitTimer = setTimeout(() => {
@@ -644,17 +801,25 @@ function commitMaterialProps(update: MaterialPropUpdate) {
 }
 
 function commitMaterialMetadata(update: { name?: string }) {
-  if (!activeNodeMaterial.value || !selectedNodeId.value) {
-    return
-  }
-  const nodeEntry = activeNodeMaterial.value
-  if (!nodeEntry) {
+  if (!activeNodeMaterial.value) {
     return
   }
   if (update.name !== undefined) {
-    sceneStore.updateNodeMaterialMetadata(selectedNodeId.value, nodeEntry.id, {
-      name: update.name,
-    })
+    if (props.target.kind === 'houseRigPart') {
+      sceneStore.updateHouseRigPartMaterial(
+        props.target.nodeId,
+        props.target.componentId,
+        props.target.partKey,
+        {
+          metadata: { name: update.name },
+          seed: houseRigRuntimeSeed.value,
+        },
+      )
+    } else {
+      sceneStore.updateNodeMaterialMetadata(props.target.nodeId, props.target.materialId, {
+        name: update.name,
+      })
+    }
     markMaterialDirty()
   }
 }
@@ -738,7 +903,7 @@ function formatSliderValue(field: SliderField): string {
 function resolveTextureName(slot: SceneMaterialTextureSlot): string {
   const ref = formTextures[slot]
   if (!ref) {
-    return 'Not specified'
+    return isTextureSlotInherited(slot) ? '继承模型贴图' : 'Not specified'
   }
   const asset = sceneStore.getAsset(ref.assetId)
   return asset?.name ?? ref.name ?? ref.assetId
@@ -1061,8 +1226,11 @@ function resolveMaterialSaveName(): string {
 }
 
 async function performSaveMaterialAsset(overwriteAssetId: string | null): Promise<void> {
-  const nodeId = selectedNodeId.value?.trim() ?? ''
-  const nodeMaterialId = activeNodeMaterial.value?.id?.trim() ?? ''
+  if (props.target.kind !== 'nodeMaterial') {
+    return
+  }
+  const nodeId = props.target.nodeId.trim()
+  const nodeMaterialId = props.target.materialId.trim()
   if (!nodeId || !nodeMaterialId) {
     return
   }
@@ -1089,7 +1257,7 @@ async function performSaveMaterialAsset(overwriteAssetId: string | null): Promis
 }
 
 async function handleSaveMaterialAsset(): Promise<void> {
-  if (!activeNodeMaterial.value || !selectedNodeId.value) {
+  if (!activeNodeMaterial.value || props.target.kind !== 'nodeMaterial') {
     return
   }
 
@@ -1121,20 +1289,29 @@ async function applyImportedMaterialPayload(payload: {
     name: payload.name ?? materialForm.name,
     description: payload.description ?? materialForm.description,
   })
-  if (!selectedNodeId.value || !activeNodeMaterial.value) {
+  if (!activeNodeMaterial.value) {
     return
   }
-  const nodeEntry = activeNodeMaterial.value
-  if (!nodeEntry) {
-    return
+  if (props.target.kind === 'houseRigPart') {
+    sceneStore.updateHouseRigPartMaterial(
+      props.target.nodeId,
+      props.target.componentId,
+      props.target.partKey,
+      {
+        props: payload.props,
+        metadata: payload.name !== undefined ? { name: payload.name } : undefined,
+        seed: houseRigRuntimeSeed.value,
+      },
+    )
+  } else {
+    sceneStore.updateNodeMaterialProps(props.target.nodeId, props.target.materialId, payload.props)
+    if (payload.name !== undefined) {
+      sceneStore.updateNodeMaterialMetadata(props.target.nodeId, props.target.materialId, {
+        name: payload.name,
+      })
+    }
   }
-  sceneStore.updateNodeMaterialProps(selectedNodeId.value, nodeEntry.id, payload.props)
-  if (payload.name !== undefined) {
-    sceneStore.updateNodeMaterialMetadata(selectedNodeId.value, nodeEntry.id, {
-      name: payload.name,
-    })
-  }
-  const updatedNode = selectedNode.value ?? null
+  const updatedNode = targetNode.value ?? null
   if (updatedNode) {
     try {
       await sceneStore.ensureSceneAssetsReady({
@@ -1170,8 +1347,11 @@ async function handleImportFileChange(event: Event) {
 }
 
 function handleDeviceProfileChange(value: string) {
-  const nodeId = selectedNodeId.value
-  const materialId = activeNodeMaterialEntry.value?.id
+  if (props.target.kind !== 'nodeMaterial') {
+    return
+  }
+  const nodeId = props.target.nodeId
+  const materialId = props.target.materialId
   if (!nodeId || !materialId) return
   flushPendingMaterialPropsCommit()
   deviceProfileSelectionError.value = sceneStore.updateNodeMaterialDeviceProfile(nodeId, materialId, value || null)
@@ -1193,9 +1373,13 @@ function handleDeviceProfileChange(value: string) {
         <v-toolbar density="compact" class="panel-toolbar" height="40px">
           <div class="toolbar-text">
             <div class="material-title">{{ currentMaterialTitle }}</div>
+            <div v-if="currentMaterialSourceLabel" class="material-source">
+              {{ currentMaterialSourceLabel }}
+            </div>
           </div>
           <v-spacer />
           <v-btn
+            v-if="!isHouseRigTarget"
             class="toolbar-save"
             variant="text"
             size="small"
@@ -1219,7 +1403,10 @@ function handleDeviceProfileChange(value: string) {
         <v-divider />
         <div class="panel-content">
           <div v-if="activeNodeMaterial" class="panel-content-inner">
-            <div class="material-metadata material-profile-selector">
+            <div
+              v-if="!isHouseRigTarget"
+              class="material-metadata material-profile-selector"
+            >
               <v-select
                 :model-value="activeNodeMaterial.deviceProfileId ?? ''"
                 :items="deviceProfileOptions"
@@ -1507,7 +1694,13 @@ function handleDeviceProfileChange(value: string) {
                       role="button"
                       @click="handleTextureThumbClick(slot, $event)"
                     >
-                      <v-icon v-if="!formTextures[slot]" size="20" color="rgba(233, 236, 241, 0.4)">mdi-image-off</v-icon>
+                      <v-icon
+                        v-if="!formTextures[slot]"
+                        size="20"
+                        color="rgba(233, 236, 241, 0.4)"
+                      >
+                        {{ isTextureSlotInherited(slot) ? 'mdi-link-variant' : 'mdi-image-off' }}
+                      </v-icon>
                     </div>
                     <div class="texture-info">
                       <div class="texture-name">{{ resolveTextureName(slot) }}</div>
@@ -1589,7 +1782,9 @@ function handleDeviceProfileChange(value: string) {
             </v-dialog>
           </div>
           <div v-else class="panel-empty-state">
-            <div class="empty-message">该节点没有材质信息</div>
+            <div class="empty-message">
+              {{ isHouseRigTarget ? '部件材质目标已失效' : '该节点没有材质信息' }}
+            </div>
           </div>
         </div>
       </div>
@@ -1686,6 +1881,12 @@ border-radius: 6px;
   font-weight: 600;
   letter-spacing: 0.05em;
   color: rgba(233, 236, 241, 0.94);
+}
+
+.material-source {
+  font-size: 0.68rem;
+  line-height: 1.2;
+  color: rgba(233, 236, 241, 0.56);
 }
 
 .material-hint {

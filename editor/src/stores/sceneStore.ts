@@ -455,7 +455,17 @@ import {
   cloneNominateComponentProps,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   createProceduralLandscapeComponentState,
+  HOUSE_RIG_COMPONENT_TYPE,
+  clampHouseRigComponentProps,
+  getHouseRigRuntimeSnapshot,
 } from '@schema/components'
+import {
+  createHouseRigDimensionLimits,
+  clampHouseRigDimensions,
+  houseRigDimensionsAreInitialized,
+  normalizeHouseRigComponentProps,
+  type HouseRigComponentProps,
+} from '@schema/houseRig'
 import {
   LOD_COMPONENT_TYPE,
   type LodComponentProps,
@@ -1440,6 +1450,8 @@ declare module '@/types/scene-state' {
 
     sceneGraphStructureVersion: number
     sceneNodePropertyVersion: number
+    houseRigMaterialRefreshVersion: number
+    houseRigMaterialRefreshNodeId: string | null
     pendingScenePatches: ScenePatch[]
     compiledGroundBuildKey: string | null
     compiledGroundManifest: CompiledGroundManifest | null
@@ -2296,6 +2308,7 @@ function createNodeMaterial(
     textureOverrides?: SceneMaterialTextureSlot[]
     sourceMaterialAssetId?: string | null
     deviceProfileId?: string | null
+    editorPreviewEnvironment?: SceneNodeMaterial['editorPreviewEnvironment']
   } = {},
 ): SceneNodeMaterial {
   const source = props as Partial<SceneNodeMaterial>
@@ -2314,7 +2327,68 @@ function createNodeMaterial(
       : typeof (props as SceneNodeMaterial).deviceProfileId === 'string'
         ? { deviceProfileId: (props as SceneNodeMaterial).deviceProfileId }
         : {}),
+    ...(options.editorPreviewEnvironment !== undefined
+      ? { editorPreviewEnvironment: options.editorPreviewEnvironment }
+      : source.editorPreviewEnvironment
+        ? { editorPreviewEnvironment: source.editorPreviewEnvironment }
+        : {}),
   }
+}
+
+function hydrateHouseRigComponentPropsFromRuntime(
+  node: SceneNode,
+  rawProps: Partial<HouseRigComponentProps> & Record<string, unknown>,
+): HouseRigComponentProps | null {
+  if (!getRuntimeObject(node.id)) {
+    return null
+  }
+  const snapshot = getHouseRigRuntimeSnapshot(node.id)
+  if (!snapshot?.rest?.parts?.length) {
+    return null
+  }
+  const normalized = normalizeHouseRigComponentProps(rawProps, node)
+  const { migratedFromPrototype: _migratedFromPrototype, ...normalizedWithoutMigration } = normalized
+  const materialByKey = new Map(
+    normalized.parts
+      .filter((part) => part.material)
+      .map((part) => [part.key, part.material] as const),
+  )
+  const materialByPath = new Map(
+    normalized.parts
+      .filter((part) => part.material && part.objectPath)
+      .map((part) => [part.objectPath, part.material] as const),
+  )
+  const materialByName = new Map(
+    normalized.parts
+      .filter((part) => part.material && part.meshName)
+      .map((part) => [part.meshName, part.material] as const),
+  )
+  const restDimensions = snapshot.rest.dimensions
+  const limits = snapshot.rest.limits ?? createHouseRigDimensionLimits(restDimensions)
+  const dimensions = houseRigDimensionsAreInitialized(normalized.dimensions)
+    && houseRigDimensionsAreInitialized(normalized.restDimensions)
+    ? clampHouseRigDimensions(normalized.dimensions, limits, restDimensions)
+    : { ...restDimensions }
+  return clampHouseRigComponentProps({
+    ...normalizedWithoutMigration,
+    assetId: snapshot.rest.assetId ?? normalized.assetId,
+    topologyHash: snapshot.rest.topologyHash,
+    restDimensions,
+    dimensions,
+    parts: snapshot.rest.parts.map((part) => ({
+      key: part.key,
+      objectPath: part.objectPath,
+      meshName: part.meshName,
+      role: part.role,
+      side: part.side,
+      layer: part.layer,
+      material:
+        materialByKey.get(part.key)
+        ?? (part.objectPath ? materialByPath.get(part.objectPath) : null)
+        ?? materialByName.get(part.meshName)
+        ?? null,
+    })),
+  }, node)
 }
 
 async function renderNodeMaterialThumbnail(
@@ -9713,6 +9787,8 @@ function createInitialSceneState(): SceneState {
     hasUnsavedChanges: false,
     sceneGraphStructureVersion: 0,
     sceneNodePropertyVersion: 0,
+    houseRigMaterialRefreshVersion: 0,
+    houseRigMaterialRefreshNodeId: null,
     pendingScenePatches: [],
     compiledGroundBuildKey: null,
     compiledGroundManifest: null,
@@ -9776,6 +9852,8 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.hasUnsavedChanges = false
   store.sceneGraphStructureVersion = 0
   store.sceneNodePropertyVersion = 0
+  store.houseRigMaterialRefreshVersion = 0
+  store.houseRigMaterialRefreshNodeId = null
   store.pendingScenePatches = []
   store.compiledGroundBuildKey = null
   store.compiledGroundManifest = null
@@ -10407,6 +10485,15 @@ export const useSceneStore = defineStore('scene', {
         return
       }
       this.sceneNodePropertyVersion += 1
+    },
+
+    notifyHouseRigMaterialChanged(nodeId: string) {
+      const normalizedNodeId = typeof nodeId === 'string' ? nodeId.trim() : ''
+      if (!normalizedNodeId) {
+        return
+      }
+      this.houseRigMaterialRefreshNodeId = normalizedNodeId
+      this.houseRigMaterialRefreshVersion += 1
     },
 
     bumpSceneGraphStructureVersion() {
@@ -20807,6 +20894,21 @@ export const useSceneStore = defineStore('scene', {
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
+        if (type === HOUSE_RIG_COMPONENT_TYPE) {
+          const houseRigState = updatedNode.components?.[HOUSE_RIG_COMPONENT_TYPE] as
+            | SceneNodeComponentState<HouseRigComponentProps>
+            | undefined
+          if (houseRigState) {
+            const hydrated = hydrateHouseRigComponentPropsFromRuntime(
+              updatedNode,
+              houseRigState.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+            )
+            if (hydrated) {
+              houseRigState.props = hydrated
+              componentManager.syncNode(updatedNode)
+            }
+          }
+        }
         syncProceduralCityRuntimeForNode(nodeId, this.nodes)
       }
       commitSceneSnapshot(this)
@@ -21648,9 +21750,283 @@ export const useSceneStore = defineStore('scene', {
       if (type === LANDFORM_COMPONENT_TYPE) {
         scheduleLandformGroundSplatBake(this, 'updateNodeComponentProps')
       }
+      if (
+        type === HOUSE_RIG_COMPONENT_TYPE
+        && (
+          Object.prototype.hasOwnProperty.call(patch, 'dimensions')
+          || Object.prototype.hasOwnProperty.call(patch, 'scriptId')
+          || Object.prototype.hasOwnProperty.call(patch, 'scriptVersion')
+          || Object.prototype.hasOwnProperty.call(patch, 'parts')
+        )
+      ) {
+        this.notifyHouseRigMaterialChanged(nodeId)
+      }
       commitSceneSnapshot(this, { autoSaveMode: options.autoSaveMode })
       refreshSkinRuntimeForScene(this.nodes)
       return true
+    },
+    refreshHouseRigComponentBinding(nodeId: string, componentId?: string): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return false
+      }
+      const match = componentId
+        ? findComponentEntryById(target.components, componentId)
+        : Object.entries(target.components ?? {}).find(([type]) => type === HOUSE_RIG_COMPONENT_TYPE)
+      if (!match || match[0] !== HOUSE_RIG_COMPONENT_TYPE) {
+        return false
+      }
+      const component = match[1] as SceneNodeComponentState<HouseRigComponentProps>
+      const hydrated = hydrateHouseRigComponentPropsFromRuntime(
+        target,
+        component.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+      )
+      if (!hydrated) {
+        return false
+      }
+      if (JSON.stringify(component.props) === JSON.stringify(hydrated)) {
+        return false
+      }
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, target.id, (node) => {
+        const current = findComponentEntryById(node.components, component.id)
+        if (!current || current[0] !== HOUSE_RIG_COMPONENT_TYPE) {
+          return
+        }
+        node.components = {
+          ...(node.components ?? {}),
+          [HOUSE_RIG_COMPONENT_TYPE]: {
+            ...current[1],
+            props: hydrated,
+          },
+        }
+      })
+      this.queueSceneNodePatch(target.id, ['components'])
+      const updated = findNodeById(this.nodes, target.id)
+      if (updated) {
+        componentManager.syncNode(updated)
+      }
+      commitSceneSnapshot(this)
+      return true
+    },
+    async applyMaterialAssetToHouseRigPart(
+      nodeId: string,
+      componentId: string,
+      partKey: string,
+      materialAssetId: string,
+    ): Promise<SceneNodeMaterial | null> {
+      const normalizedAssetId = typeof materialAssetId === 'string' ? materialAssetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+      const target = findNodeById(this.nodes, nodeId)
+      const match = findComponentEntryById(target?.components, componentId)
+      if (!target || !match || match[0] !== HOUSE_RIG_COMPONENT_TYPE) {
+        return null
+      }
+      const material = await this.ensureMaterialAssetDefinitionLoaded(normalizedAssetId)
+      if (!material) {
+        return null
+      }
+      const component = match[1] as SceneNodeComponentState<HouseRigComponentProps>
+      const props = normalizeHouseRigComponentProps(
+        component.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+        target,
+      )
+      const sourceAsset = this.getAsset(normalizedAssetId)
+      const nextMaterial = createNodeMaterial(material, {
+        name: material.name,
+        type: material.type,
+        thumbnail: sourceAsset?.thumbnail ?? null,
+        sourceMaterialAssetId: normalizedAssetId,
+        textureOverrides: collectTextureOverrideSlots(material),
+        editorPreviewEnvironment: 'neutral-pbr',
+      })
+      const parts = props.parts.map((part) =>
+        part.key === partKey ? { ...part, material: nextMaterial } : part,
+      )
+      const updated = this.updateNodeComponentProps(target.id, component.id, {
+        ...props,
+        parts,
+      })
+      if (!updated) {
+        return null
+      }
+      return nextMaterial
+    },
+    updateHouseRigPartMaterial(
+      nodeId: string,
+      componentId: string,
+      partKey: string,
+      update: {
+        props?: Partial<SceneMaterialProps> & { textureOverrides?: SceneMaterialTextureSlot[] }
+        metadata?: { name?: string | null }
+        seed?: SceneNodeMaterial | null
+      },
+      options: { autoSaveMode?: SceneAutoSaveMode } = {},
+    ): SceneNodeMaterial | null {
+      const target = findNodeById(this.nodes, nodeId)
+      const match = findComponentEntryById(target?.components, componentId)
+      if (!target || !match || match[0] !== HOUSE_RIG_COMPONENT_TYPE) {
+        return null
+      }
+      const component = match[1] as SceneNodeComponentState<HouseRigComponentProps>
+      const props = normalizeHouseRigComponentProps(
+        component.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+        target,
+      )
+      const part = props.parts.find((entry) => entry.key === partKey)
+      if (!part) {
+        return null
+      }
+
+      const propUpdate = materialUpdateToProps(update.props ?? {})
+      const touchedTextureSlots = propUpdate.textures
+        ? (Object.keys(propUpdate.textures) as SceneMaterialTextureSlot[])
+        : []
+      const explicitTextureOverrides = Array.isArray(update.props?.textureOverrides)
+        ? Array.from(new Set(update.props.textureOverrides))
+        : null
+      const hasNameUpdate = !!update.metadata
+        && Object.prototype.hasOwnProperty.call(update.metadata, 'name')
+      const nextName = hasNameUpdate
+        ? (typeof update.metadata?.name === 'string' && update.metadata.name.trim()
+            ? update.metadata.name.trim()
+            : undefined)
+        : undefined
+
+      const current = part.material
+      if (!current && !Object.keys(propUpdate).length && !explicitTextureOverrides && !hasNameUpdate) {
+        return null
+      }
+
+      const seed = current ? null : (update.seed ?? null)
+      const baseProps = current
+        ? extractMaterialProps(current)
+        : seed
+          ? extractMaterialProps(seed)
+          : createMaterialProps()
+      const nextTextureOverrides = explicitTextureOverrides
+        ?? (propUpdate.textures
+          ? Array.from(new Set([
+              ...(current?.textureOverrides ?? seed?.textureOverrides ?? []),
+              ...touchedTextureSlots,
+            ]))
+          : current?.textureOverrides ?? seed?.textureOverrides)
+      const nextMaterial = createNodeMaterial(mergeMaterialProps(baseProps, propUpdate), {
+        id: current?.id ?? generateUuid(),
+        name: hasNameUpdate ? nextName : current?.name ?? seed?.name,
+        type: current?.type ?? seed?.type ?? 'MeshStandardMaterial',
+        thumbnail: current?.thumbnail ?? seed?.thumbnail ?? null,
+        sourceMaterialAssetId: current?.sourceMaterialAssetId ?? seed?.sourceMaterialAssetId ?? null,
+        textureOverrides: nextTextureOverrides,
+        deviceProfileId: current?.deviceProfileId,
+        editorPreviewEnvironment: 'neutral-pbr',
+      })
+
+      if (current && JSON.stringify(current) === JSON.stringify(nextMaterial)) {
+        return current
+      }
+
+      Object.values(nextMaterial.textures ?? {}).forEach((ref) => {
+        void this.ensureNodeMaterialTextureAssetRegistered(ref)
+      })
+      const parts = props.parts.map((entry) =>
+        entry.key === partKey ? { ...entry, material: nextMaterial } : entry,
+      )
+      const updated = this.updateNodeComponentProps(target.id, component.id, {
+        ...props,
+        parts,
+      }, options)
+      if (!updated) {
+        return null
+      }
+      return nextMaterial
+    },
+    applyTextureAssetToHouseRigPart(
+      nodeId: string,
+      componentId: string,
+      partKey: string,
+      textureAssetId: string,
+      slot: SceneMaterialTextureSlot = 'albedo',
+    ): SceneNodeMaterial | null {
+      const normalizedAssetId = typeof textureAssetId === 'string' ? textureAssetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+      const target = findNodeById(this.nodes, nodeId)
+      const match = findComponentEntryById(target?.components, componentId)
+      if (!target || !match || match[0] !== HOUSE_RIG_COMPONENT_TYPE) {
+        return null
+      }
+      const component = match[1] as SceneNodeComponentState<HouseRigComponentProps>
+      const props = normalizeHouseRigComponentProps(
+        component.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+        target,
+      )
+      const part = props.parts.find((entry) => entry.key === partKey)
+      if (!part) {
+        return null
+      }
+      const asset = this.getAsset(normalizedAssetId)
+      const base = part.material ?? createNodeMaterial(createMaterialProps())
+      const textureOverrides = Array.from(new Set([
+        ...(base.textureOverrides ?? []),
+        slot,
+      ]))
+      const nextMaterial = createNodeMaterial({
+        ...base,
+        textures: {
+          ...(base.textures ?? {}),
+          [slot]: {
+            assetId: normalizedAssetId,
+            name: asset?.name,
+          },
+        },
+      }, {
+        id: base.id,
+        name: base.name,
+        type: base.type,
+        thumbnail: base.thumbnail,
+        sourceMaterialAssetId: base.sourceMaterialAssetId ?? null,
+        textureOverrides,
+        editorPreviewEnvironment: 'neutral-pbr',
+      })
+      const parts = props.parts.map((entry) =>
+        entry.key === partKey ? { ...entry, material: nextMaterial } : entry,
+      )
+      const updated = this.updateNodeComponentProps(target.id, component.id, {
+        ...props,
+        parts,
+      })
+      if (!updated) {
+        return null
+      }
+      return nextMaterial
+    },
+    clearHouseRigPartMaterial(
+      nodeId: string,
+      componentId: string,
+      partKey: string,
+    ): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      const match = findComponentEntryById(target?.components, componentId)
+      if (!target || !match || match[0] !== HOUSE_RIG_COMPONENT_TYPE) {
+        return false
+      }
+      const component = match[1] as SceneNodeComponentState<HouseRigComponentProps>
+      const props = normalizeHouseRigComponentProps(
+        component.props as Partial<HouseRigComponentProps> & Record<string, unknown>,
+        target,
+      )
+      const parts = props.parts.map((entry) =>
+        entry.key === partKey ? { ...entry, material: null } : entry,
+      )
+      const updated = this.updateNodeComponentProps(target.id, component.id, {
+        ...props,
+        parts,
+      })
+      return updated
     },
     updateNodeComponentMetadata(nodeId: string, componentId: string, metadata: Record<string, unknown> | undefined): boolean {
       const target = findNodeById(this.nodes, nodeId)

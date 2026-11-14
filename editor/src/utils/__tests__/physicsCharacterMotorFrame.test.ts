@@ -76,6 +76,7 @@ class ProbeGroundedWorld extends PhysicsWorldBase<
       speedGovernorBrakeAssist: 0,
       speedGovernorOverHardCap: false,
       speedGovernorSmoothedForwardSpeedAbs: 0,
+      speedGovernorSteeringAngle: 0,
     }
   }
 

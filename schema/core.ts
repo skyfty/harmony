@@ -710,6 +710,11 @@ export interface SceneNodeMaterial extends SceneMaterialProps {
   textureOverrides?: SceneMaterialTextureSlot[];
   /** Device Adaptation profile that selects this slot as an alternative. */
   deviceProfileId?: string | null;
+  /**
+   * Editor-only preview aid for imported House Rig overrides that need
+   * environment reflections to remain visible with physically based values.
+   */
+  editorPreviewEnvironment?: 'neutral-pbr';
 }
 export type AssetSourceMetadata =
   | {
