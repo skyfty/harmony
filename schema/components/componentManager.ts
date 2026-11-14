@@ -110,6 +110,7 @@ const AGENT_ACTIONS_BY_DOMAIN: Record<HarmonyAgentDomain, string[]> = {
     'set_script',
     'set_dimensions',
     'set_material',
+    'set_texture_mapping',
     'reset',
     'patch_component',
   ],

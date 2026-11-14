@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import {
+  applyMaterialOverrides,
+  createTextureSettings,
+  MATERIAL_TEXTURE_REPEAT_INFO_KEY,
+} from '@schema/material'
+import {
   componentManager,
   getHouseRigRuntimeSnapshot,
   subscribeHouseRigRuntime,
@@ -19,6 +24,7 @@ import {
   type HouseRigRestSnapshot,
 } from '@schema/houseRig'
 import type { SceneNode } from '@schema/core'
+import { createHouseRigDefaultMaterial } from '@/utils/houseRigMaterialRuntime'
 
 function makeMesh(
   name: string,
@@ -235,6 +241,7 @@ describe('House Rig naming and scripts', () => {
         'basic-naming@1.0.0',
         'current-ten-part-house@1.0.0',
         'current-ten-part-house@1.0.1',
+        'current-ten-part-house@1.0.2',
       ]))
     const root = createTenPartHouse().root
     const rest = createRest(root)
@@ -248,6 +255,14 @@ describe('House Rig naming and scripts', () => {
 
     const aspectCorrectScript = getHouseRigScript('current-ten-part-house', '1.0.1')!
     expect(aspectCorrectScript.getCompatibility({
+      assetId: rest.assetId,
+      topologyHash: rest.topologyHash,
+      dimensions: rest.dimensions,
+      parts: rest.parts,
+    })).toMatchObject({ compatible: true })
+
+    const metricUvScript = getHouseRigScript('current-ten-part-house', '1.0.2')!
+    expect(metricUvScript.getCompatibility({
       assetId: rest.assetId,
       topologyHash: rest.topologyHash,
       dimensions: rest.dimensions,
@@ -501,7 +516,7 @@ describe('House Rig deployment plans', () => {
     }
   })
 
-  it('preserves UVs and wall corner seams in the aspect-correct ten-part house', () => {
+  it('preserves legacy UVs in version 1.0.1', () => {
     const { root } = createTenPartHouse()
     const rest = createRest(root)
     const script = getHouseRigScript('current-ten-part-house', '1.0.1')!
@@ -512,19 +527,122 @@ describe('House Rig deployment plans', () => {
 
     for (const restPart of rest.parts) {
       expect(planPart(rest, plan, restPart.meshName).uvs).toBe(restPart.uvs)
+      expect(planPart(rest, plan, restPart.meshName).uvMetersPerUnit).toBeUndefined()
+    }
+  })
+
+  it('rebuilds metric UVs while preserving wall corner seams in version 1.0.2', () => {
+    const { root, meshes } = createTenPartHouse()
+    const rest = createRest(root)
+    const script = getHouseRigScript('current-ten-part-house', '1.0.2')!
+    const plan = script.buildPlan(rest, dimensions(rest, {
+      width: rest.dimensions.width * 2.5,
+      depth: rest.dimensions.depth * 1.7,
+      wallHeight: rest.dimensions.wallHeight * 1.3,
+    }))
+    expect(validateHouseRigDeformPlan(rest, plan)).toEqual([])
+
+    for (const plannedPart of plan.parts) {
+      expect(plannedPart.uvs).not.toBeNull()
+      expect(plannedPart.uvMetersPerUnit).toEqual({ x: 1, y: 1 })
     }
 
     const endWall = planPart(rest, plan, '墙-前-外')
+    expect(endWall.uvs![2]! - endWall.uvs![0]!).toBeCloseTo(
+      endWall.positionsRoot[6]! - endWall.positionsRoot[0]!,
+      6,
+    )
+    expect(endWall.uvs![3]! - endWall.uvs![1]!).toBeCloseTo(
+      endWall.positionsRoot[4]! - endWall.positionsRoot[1]!,
+      6,
+    )
+
     const sideWall = planPart(rest, plan, '墙-左-外')
-    const endWallX = endWall.positionsRoot[0]!
+    expect(sideWall.uvs![6]! - sideWall.uvs![0]!).toBeCloseTo(
+      sideWall.positionsRoot[9]! - sideWall.positionsRoot[0]!,
+      6,
+    )
+
+    const roof = planPart(rest, plan, '墙-上-外')
+    const roofPositions = roof.positionsRoot
+    let ridgeY = Number.NEGATIVE_INFINITY
+    let eaveY = Number.POSITIVE_INFINITY
+    let ridgeX = 0
+    let eaveRadius = 0
+    for (let index = 0; index < roofPositions.length; index += 3) {
+      const x = roofPositions[index] ?? 0
+      const y = roofPositions[index + 1] ?? 0
+      ridgeY = Math.max(ridgeY, y)
+      eaveY = Math.min(eaveY, y)
+      if (Math.abs(y - ridgeY) <= 1e-6) {
+        ridgeX = x
+      }
+    }
+    for (let index = 0; index < roofPositions.length; index += 3) {
+      if (Math.abs((roofPositions[index + 1] ?? 0) - eaveY) <= 1e-6) {
+        eaveRadius = Math.max(eaveRadius, Math.abs((roofPositions[index] ?? 0) - ridgeX))
+      }
+    }
+    const expectedSlopeDistance = Math.hypot(ridgeY - eaveY, eaveRadius)
+    const maxRoofV = Math.max(
+      ...Array.from(
+        { length: roofPositions.length / 3 },
+        (_value, index) => roof.uvs![index * 2 + 1] ?? 0,
+      ),
+    )
+    const minRoofV = Math.min(
+      ...Array.from(
+        { length: roofPositions.length / 3 },
+        (_value, index) => roof.uvs![index * 2 + 1] ?? 0,
+      ),
+    )
+    expect(maxRoofV - minRoofV).toBeCloseTo(expectedSlopeDistance, 6)
+
+    applyHouseRigDeformPlan(root, rest, plan)
+    for (const mesh of meshes.values()) {
+      expect(mesh.userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY]).toEqual({
+        uvMetersPerUnit: { x: 1, y: 1 },
+      })
+    }
+
+    const endWallSource = rest.parts.find((part) => part.meshName === '墙-前-外')!
+    const materialConfig = createHouseRigDefaultMaterial({
+      ...endWallSource,
+      material: null,
+    })
+    const tileSizeMeters = { x: 2, y: 3 }
+    const textureSettings = createTextureSettings({ tileSizeMeters })
+    materialConfig.textures = {
+      albedo: { assetId: 'albedo', settings: textureSettings },
+      normal: { assetId: 'normal', settings: textureSettings },
+      roughness: { assetId: 'roughness', settings: textureSettings },
+    }
+    materialConfig.textureOverrides = ['albedo', 'normal', 'roughness']
+    const endWallMesh = meshes.get('墙-前-外')!
+    applyMaterialOverrides(endWallMesh, [materialConfig], {
+      inheritUnspecifiedTextures: true,
+      resolveTexture: (ref) => {
+        const texture = new THREE.Texture()
+        texture.name = ref.assetId
+        return texture
+      },
+    })
+    const endWallMaterial = endWallMesh.material as THREE.MeshStandardMaterial
+    expect(endWallMaterial.map?.repeat.toArray()).toEqual([0.5, 1 / 3])
+    expect(endWallMaterial.normalMap?.repeat.toArray()).toEqual([0.5, 1 / 3])
+    expect(endWallMaterial.roughnessMap?.repeat.toArray()).toEqual([0.5, 1 / 3])
+
+    const plannedEndWall = planPart(rest, plan, '墙-前-外')
+    const plannedSideWall = planPart(rest, plan, '墙-左-外')
+    const endWallX = plannedEndWall.positionsRoot[0]!
     const sideWallMinX = Math.min(
-      ...[0, 1, 2, 3].map((index) => sideWall.positionsRoot[index * 3]!),
+      ...[0, 1, 2, 3].map((index) => plannedSideWall.positionsRoot[index * 3]!),
     )
     expect(Math.abs(endWallX - sideWallMinX)).toBeLessThanOrEqual(0.02)
 
-    const sideWallZ = sideWall.positionsRoot[2]!
+    const sideWallZ = plannedSideWall.positionsRoot[2]!
     const endWallMaxZ = Math.max(
-      ...[0, 1, 2, 3].map((index) => endWall.positionsRoot[index * 3 + 2]!),
+      ...[0, 1, 2, 3].map((index) => plannedEndWall.positionsRoot[index * 3 + 2]!),
     )
     expect(Math.abs(sideWallZ - endWallMaxZ)).toBeLessThanOrEqual(1e-5)
   })

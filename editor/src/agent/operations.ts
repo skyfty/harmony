@@ -37,6 +37,7 @@ import {
   HARMONY_AGENT_MAX_OPERATIONS,
   HARMONY_AGENT_MAX_ITEM_BYTES,
 } from '@schema/editorAgentProtocol'
+import { createTextureSettings } from '@schema/material'
 import { resolveSceneNodeWorldMatrix, useSceneStore } from '@/stores/sceneStore'
 import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
 import { AgentBridgeError } from '@/agent/errors'
@@ -1074,6 +1075,108 @@ async function executeDomainOperation(
           'VALIDATION_FAILED',
           'House Rig part materials accept material, image, or texture assets',
         )
+      }
+      if (operation.action === 'set_texture_mapping') {
+        if (!Array.isArray(args.parts) || args.parts.length === 0) {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            'parts must contain at least one House Rig texture mapping update',
+          )
+        }
+        const byPartKey = new Map<string, {
+          repeat: { x: number; y: number }
+          tileSizeMeters: { x: number; y: number }
+        }>()
+        for (const [index, rawUpdate] of args.parts.entries()) {
+          if (!isRecord(rawUpdate)) {
+            throw new AgentBridgeError(
+              'VALIDATION_FAILED',
+              `parts[${index}] must be an object`,
+            )
+          }
+          const partKey = readString(rawUpdate, 'partKey')
+          if (byPartKey.has(partKey)) {
+            throw new AgentBridgeError(
+              'VALIDATION_FAILED',
+              `Duplicate texture mapping update for part ${partKey}`,
+            )
+          }
+          const readVector = (key: string) => {
+            const value = isRecord(rawUpdate[key]) ? rawUpdate[key] : null
+            const x = Number(value?.x)
+            const y = Number(value?.y)
+            if (!value || !Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) {
+              throw new AgentBridgeError(
+                'VALIDATION_FAILED',
+                `parts[${index}].${key} must contain positive x and y values`,
+              )
+            }
+            return { x, y }
+          }
+          byPartKey.set(partKey, {
+            repeat: readVector('repeat'),
+            tileSizeMeters: readVector('tileSizeMeters'),
+          })
+        }
+
+        const updatedParts = props.parts.map((part) => {
+          const mapping = byPartKey.get(part.key)
+          if (!mapping) {
+            return part
+          }
+          if (!part.material) {
+            throw new AgentBridgeError(
+              'VALIDATION_FAILED',
+              `House Rig part ${part.key} has no material to update`,
+            )
+          }
+          const nextTextures = Object.fromEntries(
+            Object.entries(part.material.textures ?? {}).map(([slot, ref]) => {
+              if (!ref) {
+                return [slot, ref]
+              }
+              return [
+                slot,
+                {
+                  ...ref,
+                  settings: createTextureSettings({
+                    ...ref.settings,
+                    wrapS: 'RepeatWrapping',
+                    wrapT: 'RepeatWrapping',
+                    repeat: mapping.repeat,
+                    tileSizeMeters: mapping.tileSizeMeters,
+                  }),
+                },
+              ]
+            }),
+          )
+          return {
+            ...part,
+            material: {
+              ...part.material,
+              textures: nextTextures,
+              textureOverrides: Object.keys(nextTextures)
+                .filter((slot) => Boolean(nextTextures[slot])) as SceneMaterialTextureSlot[],
+            },
+          }
+        })
+        const requestedKeys = new Set(byPartKey.keys())
+        const knownPartKeys = new Set(props.parts.map((part) => part.key))
+        const unknownKeys = Array.from(requestedKeys).filter((key) => !knownPartKeys.has(key))
+        if (unknownKeys.length) {
+          throw new AgentBridgeError(
+            'VALIDATION_FAILED',
+            `Unknown House Rig parts: ${unknownKeys.join(', ')}`,
+          )
+        }
+        const changed = store.updateNodeComponentProps(nodeId, component.id, {
+          ...props,
+          parts: updatedParts,
+        })
+        return {
+          changed,
+          partKeys: Array.from(requestedKeys),
+        }
       }
       if (operation.action === 'reset') {
         const dimensions = { ...snapshot.rest.dimensions }

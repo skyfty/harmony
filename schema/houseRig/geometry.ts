@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { MATERIAL_TEXTURE_REPEAT_INFO_KEY } from '../material'
 import { hashString, stableSerialize } from '../stableSerialize'
 import { objectPathFromSegments, houseRigPartKey, parseHouseRigPartName } from './naming'
 import {
@@ -359,6 +360,15 @@ export function validateHouseRigDeformPlan(
         )
       }
     }
+    if (part.uvMetersPerUnit) {
+      const { x, y } = part.uvMetersPerUnit
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) {
+        issues.push(`Part ${source.meshName} has invalid metric UV units`)
+      }
+      if (!part.uvs) {
+        issues.push(`Part ${source.meshName} declares metric UVs without UV coordinates`)
+      }
+    }
   })
   rest.parts.forEach((part) => {
     if (!seen.has(part.key)) {
@@ -408,17 +418,33 @@ export function applyHouseRigDeformPlan(
     }
     position.needsUpdate = true
     if (plannedPart.uvs) {
-      const uv = mesh.geometry.getAttribute('uv')
-      if (uv && uv.count === source.vertexCount) {
-        for (let index = 0; index < uv.count; index += 1) {
-          uv.setXY(
-            index,
-            plannedPart.uvs[index * 2] ?? 0,
-            plannedPart.uvs[index * 2 + 1] ?? 0,
-          )
-        }
-        uv.needsUpdate = true
+      let uv = mesh.geometry.getAttribute('uv')
+      if (!uv || uv.count !== source.vertexCount) {
+        uv = new THREE.Float32BufferAttribute(
+          new Float32Array(source.vertexCount * 2),
+          2,
+        )
+        mesh.geometry.setAttribute('uv', uv)
       }
+      for (let index = 0; index < uv.count; index += 1) {
+        uv.setXY(
+          index,
+          plannedPart.uvs[index * 2] ?? 0,
+          plannedPart.uvs[index * 2 + 1] ?? 0,
+        )
+      }
+      uv.needsUpdate = true
+    }
+    const userData = mesh.userData ?? (mesh.userData = {})
+    if (plannedPart.uvMetersPerUnit) {
+      userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY] = {
+        uvMetersPerUnit: {
+          x: plannedPart.uvMetersPerUnit.x,
+          y: plannedPart.uvMetersPerUnit.y,
+        },
+      }
+    } else if (MATERIAL_TEXTURE_REPEAT_INFO_KEY in userData) {
+      delete userData[MATERIAL_TEXTURE_REPEAT_INFO_KEY]
     }
     mesh.geometry.computeVertexNormals()
     mesh.geometry.computeBoundingBox()

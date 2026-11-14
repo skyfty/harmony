@@ -2,6 +2,7 @@ import { basicNamingHouseRigScript } from './scripts/basic-naming'
 import {
   currentTenPartHouseRigScript,
   currentTenPartHouseRigScriptV1_0_1,
+  currentTenPartHouseRigScriptV1_0_2,
 } from './scripts/current-ten-part-house'
 import type { HouseRigScript } from './types'
 
@@ -27,6 +28,7 @@ export function registerHouseRigScript(script: HouseRigScript): void {
 registerHouseRigScript(basicNamingHouseRigScript)
 registerHouseRigScript(currentTenPartHouseRigScript)
 registerHouseRigScript(currentTenPartHouseRigScriptV1_0_1)
+registerHouseRigScript(currentTenPartHouseRigScriptV1_0_2)
 
 export function getHouseRigScript(id: string, version: string): HouseRigScript | null {
   return scripts.get(houseRigScriptVersionKey(id, version)) ?? null

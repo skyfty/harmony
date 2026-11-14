@@ -87,7 +87,7 @@ Component schemas report whether a component uses generic or domain editing. Gen
 
 - `inspect` returns imported mesh parts, inferred semantic roles, dimensions, handles, compatibility, materials, and script versions.
 - `validate` builds a deformation plan and checks vertex counts, finite values, and plan completeness without changing the scene revision.
-- `set_script`, `set_dimensions`, `set_material`, and `reset` apply revision-checked atomic component updates.
+- `set_script`, `set_dimensions`, `set_material`, `set_texture_mapping`, and `reset` apply revision-checked atomic component updates. `set_texture_mapping` synchronizes repeat, wrapping, and physical tile size across every PBR texture slot on selected parts.
 
 Codex uses this tool for model inspection and verification, then edits the typed scripts under `schema/houseRig/scripts` in the repository. House Rig scripts are compiled into the shared schema and are never downloaded or evaluated by the MCP bridge at runtime.
 

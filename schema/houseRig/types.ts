@@ -117,6 +117,12 @@ export interface HouseRigDeformPlanPart {
   key: string
   positionsRoot: ArrayLike<number>
   uvs?: ArrayLike<number> | null
+  /**
+   * UV units represented by one coordinate unit. Metric projections use
+   * `{ x: 1, y: 1 }` so material tile sizes remain stable while the rig
+   * changes the mesh footprint or wall height.
+   */
+  uvMetersPerUnit?: { x: number; y: number } | null
 }
 
 export interface HouseRigDeformPlan {

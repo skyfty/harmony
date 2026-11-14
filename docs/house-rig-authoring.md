@@ -24,6 +24,8 @@ Each script implements `HouseRigScript`:
 - `getCompatibility(asset)` checks asset/topology/part requirements.
 - `buildPlan(rest, dimensions)` is a pure, deterministic calculation from the immutable rest snapshot.
 - The returned plan contains root-local vertex positions, optional UVs, three handle anchors, bounds, and warnings.
+- When UVs are regenerated from deformed geometry, set `uvMetersPerUnit` to declare the UV coordinate scale. Metric projections use `{ x: 1, y: 1 }`, which lets material `tileSizeMeters` remain stable through later dimension changes.
+- Do not preserve normalized source UVs after a non-uniform footprint or height change. Regenerate planar or surface-distance UVs from the deformed positions, or explicitly preserve the old version for backward compatibility.
 - Scripts must not mutate scene nodes, materials, global state, or runtime objects.
 
 Use the script ID as the filename; do not encode version numbers in paths. Keep each supported version in the `version` field and export multiple versioned script objects from the same file when backward compatibility is required.
@@ -46,4 +48,5 @@ Register every version explicitly in `schema/houseRig/registry.ts`. Existing pre
 - Width and depth use one shared footprint mapping for every wall and roof part. Do not translate normal-facing walls separately from tangent walls; that opens corner seams under large expansions.
 - `current-ten-part-house@1.0.0` pins compatibility to the current ten-plane Blender fixture and retains the original roof translation behavior.
 - `current-ten-part-house@1.0.1` preserves the imported roof pitch as width changes and keeps wall tops attached to the scaled roof surface. Depth changes only scale roof length; wall-height changes translate the roof.
+- `current-ten-part-house@1.0.2` keeps the 1.0.1 deformation behavior and regenerates metric UVs for the final geometry. Wall U axes follow the horizontal wall direction, wall V is vertical, and roof V follows slope distance. The original topology and source UV orientation are retained as the fallback for unsupported parts.
 - Dimension limits default to 35%-250% of the imported rest dimensions with 0.01 m steps.
