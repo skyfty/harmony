@@ -1,5 +1,8 @@
-import { basicNamingHouseRigScript } from './scripts/basic-naming/v1_0_0'
-import { currentTenPartHouseRigScript } from './scripts/current-ten-part-house/v1_0_0'
+import { basicNamingHouseRigScript } from './scripts/basic-naming'
+import {
+  currentTenPartHouseRigScript,
+  currentTenPartHouseRigScriptV1_0_1,
+} from './scripts/current-ten-part-house'
 import type { HouseRigScript } from './types'
 
 const scripts = new Map<string, HouseRigScript>()
@@ -23,6 +26,7 @@ export function registerHouseRigScript(script: HouseRigScript): void {
 
 registerHouseRigScript(basicNamingHouseRigScript)
 registerHouseRigScript(currentTenPartHouseRigScript)
+registerHouseRigScript(currentTenPartHouseRigScriptV1_0_1)
 
 export function getHouseRigScript(id: string, version: string): HouseRigScript | null {
   return scripts.get(houseRigScriptVersionKey(id, version)) ?? null

@@ -2,7 +2,7 @@ import {
   cloneRootPositions,
   createHouseRigHandles,
   planBounds,
-} from '../../geometry'
+} from '../geometry'
 import type {
   HouseRigCompatibility,
   HouseRigDeformPlan,
@@ -10,7 +10,7 @@ import type {
   HouseRigDimensions,
   HouseRigRestSnapshot,
   HouseRigScript,
-} from '../../types'
+} from '../types'
 
 function scaleCoordinate(
   positions: Float32Array,

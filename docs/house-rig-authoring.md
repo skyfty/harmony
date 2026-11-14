@@ -16,7 +16,7 @@ House Rig is a shared runtime component for imported static house white models. 
 Scripts are compiled into the shared schema and therefore work in Editor, Preview, and SceneryViewer.
 
 ```text
-schema/houseRig/scripts/<script-id>/v<version>.ts
+schema/houseRig/scripts/<script-id>.ts
 ```
 
 Each script implements `HouseRigScript`:
@@ -26,13 +26,15 @@ Each script implements `HouseRigScript`:
 - The returned plan contains root-local vertex positions, optional UVs, three handle anchors, bounds, and warnings.
 - Scripts must not mutate scene nodes, materials, global state, or runtime objects.
 
+Use the script ID as the filename; do not encode version numbers in paths. Keep each supported version in the `version` field and export multiple versioned script objects from the same file when backward compatibility is required.
+
 Register every version explicitly in `schema/houseRig/registry.ts`. Existing prefabs pin `scriptId@scriptVersion`; publish a new version instead of changing an already-used version.
 
 ## Codex Workflow
 
 1. Select the imported model node and call `harmony_house_rig_edit` with `action: "inspect"`.
 2. Use the returned mesh names, object paths, roles, vertex counts, bounds, and material keys to plan the deformation.
-3. Add or update a versioned script under the shared schema directory and add a regression fixture.
+3. Add or update a script under the shared schema directory and add a regression fixture.
 4. Build the schema and reload the Editor.
 5. Call `validate`, then test width, depth, and wall-height values.
 6. Capture the viewport and verify roof shape, wall thickness, seam alignment, and texture density.
@@ -42,5 +44,6 @@ Register every version explicitly in `schema/houseRig/registry.ts`. Existing pre
 
 - `basic-naming@1.0.0` deforms canonical walls and roofs. Wall bases stay fixed, wall tops follow height changes, and roof geometry keeps its shape while moving with the eave.
 - Width and depth use one shared footprint mapping for every wall and roof part. Do not translate normal-facing walls separately from tangent walls; that opens corner seams under large expansions.
-- `current-ten-part-house@1.0.0` pins compatibility to the current ten-plane Blender fixture.
+- `current-ten-part-house@1.0.0` pins compatibility to the current ten-plane Blender fixture and retains the original roof translation behavior.
+- `current-ten-part-house@1.0.1` preserves the imported roof pitch as width changes and keeps wall tops attached to the scaled roof surface. Depth changes only scale roof length; wall-height changes translate the roof.
 - Dimension limits default to 35%-250% of the imported rest dimensions with 0.01 m steps.

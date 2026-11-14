@@ -270,7 +270,7 @@ export function buildHouseRigRestSnapshot(options: {
   return {
     assetId,
     topologyHash: computeHouseRigTopologyHash(root, assetId),
-    dimensions: fallbackDimensions,
+    dimensions,
     limits,
     bounds: overallBounds,
     parts,

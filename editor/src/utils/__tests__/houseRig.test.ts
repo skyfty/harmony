@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import {
   componentManager,
+  getHouseRigRuntimeSnapshot,
   subscribeHouseRigRuntime,
 } from '@schema/components'
 import {
@@ -186,6 +187,29 @@ function roofSurfaceYAtX(
   return ridgeY - (Math.abs(x - ridgeX) / Math.max(1e-6, eaveRadius)) * (ridgeY - eaveY)
 }
 
+function roofPitch(positions: ArrayLike<number>): number {
+  let ridgeY = Number.NEGATIVE_INFINITY
+  let eaveY = Number.POSITIVE_INFINITY
+  for (let index = 1; index < positions.length; index += 3) {
+    ridgeY = Math.max(ridgeY, positions[index] ?? 0)
+    eaveY = Math.min(eaveY, positions[index] ?? 0)
+  }
+  let ridgeX = 0
+  for (let index = 0; index < positions.length; index += 3) {
+    if (Math.abs((positions[index + 1] ?? 0) - ridgeY) <= 1e-6) {
+      ridgeX = positions[index] ?? 0
+      break
+    }
+  }
+  let eaveRadius = 0
+  for (let index = 0; index < positions.length; index += 3) {
+    if (Math.abs((positions[index + 1] ?? 0) - eaveY) <= 1e-6) {
+      eaveRadius = Math.max(eaveRadius, Math.abs((positions[index] ?? 0) - ridgeX))
+    }
+  }
+  return (ridgeY - eaveY) / Math.max(1e-6, eaveRadius)
+}
+
 describe('House Rig naming and scripts', () => {
   it('maps the current Chinese names and canonical English aliases', () => {
     expect(parseHouseRigPartName('墙-上-内')).toEqual({
@@ -210,11 +234,20 @@ describe('House Rig naming and scripts', () => {
       .toEqual(expect.arrayContaining([
         'basic-naming@1.0.0',
         'current-ten-part-house@1.0.0',
+        'current-ten-part-house@1.0.1',
       ]))
     const root = createTenPartHouse().root
     const rest = createRest(root)
     const script = getHouseRigScript('current-ten-part-house', '1.0.0')!
     expect(script.getCompatibility({
+      assetId: rest.assetId,
+      topologyHash: rest.topologyHash,
+      dimensions: rest.dimensions,
+      parts: rest.parts,
+    })).toMatchObject({ compatible: true })
+
+    const aspectCorrectScript = getHouseRigScript('current-ten-part-house', '1.0.1')!
+    expect(aspectCorrectScript.getCompatibility({
       assetId: rest.assetId,
       topologyHash: rest.topologyHash,
       dimensions: rest.dimensions,
@@ -263,6 +296,25 @@ describe('House Rig deployment plans', () => {
       wallHeight: rest.dimensions.wallHeight * 100,
     }
     expect(clampHouseRigDimensions(expanded, limits, rest.dimensions)).toEqual(expanded)
+  })
+
+  it('keeps the persisted rest dimensions when the runtime geometry is deformed', () => {
+    const { root } = createTenPartHouse()
+    const targetDimensions = {
+      width: 14,
+      depth: 9,
+      wallHeight: 8,
+    }
+    const rest = buildHouseRigRestSnapshot({
+      root,
+      assetId: 'sha256-house-fixture',
+      dimensions: targetDimensions,
+    })
+
+    expect(rest.dimensions).toEqual(targetDimensions)
+    expect(rest.limits.width.min).toBeCloseTo(targetDimensions.width * 0.35, 6)
+    expect(rest.limits.depth.min).toBeCloseTo(targetDimensions.depth * 0.35, 6)
+    expect(rest.limits.wallHeight.min).toBeCloseTo(targetDimensions.wallHeight * 0.35, 6)
   })
 
   it('keeps roof shape rigid while translating it with wall height', () => {
@@ -348,6 +400,128 @@ describe('House Rig deployment plans', () => {
     }))
     const sideWall = planPart(rest, plan, '墙-左-外')
     const endWall = planPart(rest, plan, '墙-前-外')
+    const sideWallZ = sideWall.positionsRoot[2]!
+    const endWallMaxZ = Math.max(
+      ...[0, 1, 2, 3].map((index) => endWall.positionsRoot[index * 3 + 2]!),
+    )
+    expect(Math.abs(sideWallZ - endWallMaxZ)).toBeLessThanOrEqual(1e-5)
+  })
+
+  it('keeps both ten-part roof pitches fixed while width changes', () => {
+    const { root } = createTenPartHouse()
+    const rest = createRest(root)
+    const script = getHouseRigScript('current-ten-part-house', '1.0.1')!
+
+    for (const widthScale of [0.5, 1.8, 5]) {
+      const plan = script.buildPlan(rest, dimensions(rest, {
+        width: rest.dimensions.width * widthScale,
+      }))
+      for (const roofName of ['墙-上-内', '墙-上-外']) {
+        const restRoof = rest.parts.find((part) => part.meshName === roofName)!
+        const plannedRoof = planPart(rest, plan, roofName)
+        expect(roofPitch(plannedRoof.positionsRoot)).toBeCloseTo(
+          roofPitch(restRoof.positionsRoot),
+          6,
+        )
+      }
+    }
+  })
+
+  it('changes only roof length when the ten-part house depth changes', () => {
+    const { root } = createTenPartHouse()
+    const rest = createRest(root)
+    const script = getHouseRigScript('current-ten-part-house', '1.0.1')!
+    const depthScale = 2.4
+    const plan = script.buildPlan(rest, dimensions(rest, {
+      depth: rest.dimensions.depth * depthScale,
+    }))
+
+    for (const roofName of ['墙-上-内', '墙-上-外']) {
+      const restRoof = rest.parts.find((part) => part.meshName === roofName)!
+      const plannedRoof = planPart(rest, plan, roofName)
+      expect(roofPitch(plannedRoof.positionsRoot)).toBeCloseTo(
+        roofPitch(restRoof.positionsRoot),
+        8,
+      )
+      const restZSpan = restRoof.bounds.size.z
+      const plannedZSpan = Math.max(
+        ...Array.from(
+          { length: plannedRoof.positionsRoot.length / 3 },
+          (_value, index) => plannedRoof.positionsRoot[index * 3 + 2] ?? 0,
+        ),
+      ) - Math.min(
+        ...Array.from(
+          { length: plannedRoof.positionsRoot.length / 3 },
+          (_value, index) => plannedRoof.positionsRoot[index * 3 + 2] ?? 0,
+        ),
+      )
+      expect(plannedZSpan).toBeCloseTo(restZSpan * depthScale, 5)
+      for (let index = 1; index < restRoof.positionsRoot.length; index += 3) {
+        expect(plannedRoof.positionsRoot[index]).toBeCloseTo(
+          restRoof.positionsRoot[index]!,
+          6,
+        )
+      }
+    }
+  })
+
+  it('keeps every ten-part wall contact gap attached to the scaled roof', () => {
+    const { root } = createTenPartHouse()
+    const rest = createRest(root)
+    const script = getHouseRigScript('current-ten-part-house', '1.0.1')!
+    const nextDimensions = dimensions(rest, {
+      width: rest.dimensions.width * 3.2,
+      depth: rest.dimensions.depth * 0.7,
+      wallHeight: rest.dimensions.wallHeight + 2.1,
+    })
+    const plan = script.buildPlan(rest, nextDimensions)
+    expect(validateHouseRigDeformPlan(rest, plan)).toEqual([])
+
+    for (const wall of rest.parts.filter((part) => part.role === 'wall')) {
+      const roofName = wall.layer === 'inner' ? '墙-上-内' : '墙-上-外'
+      const restRoof = rest.parts.find((part) => part.meshName === roofName)!
+      const plannedWall = planPart(rest, plan, wall.meshName)
+      const plannedRoof = planPart(rest, plan, roofName)
+      const wallBaseY = wall.bounds.min.y
+      const wallHeight = wall.bounds.max.y - wallBaseY
+      const topTolerance = Math.max(1e-4, wallHeight * 1e-3)
+      for (let index = 0; index < wall.positionsRoot.length; index += 3) {
+        const restY = wall.positionsRoot[index + 1]!
+        if (restY <= wallBaseY + topTolerance) {
+          expect(plannedWall.positionsRoot[index + 1]).toBeCloseTo(restY, 6)
+          continue
+        }
+        const restX = wall.positionsRoot[index]!
+        const plannedX = plannedWall.positionsRoot[index]!
+        const restGap = roofSurfaceYAtX(restRoof, restX) - restY
+        const plannedGap = roofSurfaceYAtX(plannedRoof, plannedX)
+          - plannedWall.positionsRoot[index + 1]!
+        expect(plannedGap).toBeCloseTo(restGap, 6)
+      }
+    }
+  })
+
+  it('preserves UVs and wall corner seams in the aspect-correct ten-part house', () => {
+    const { root } = createTenPartHouse()
+    const rest = createRest(root)
+    const script = getHouseRigScript('current-ten-part-house', '1.0.1')!
+    const plan = script.buildPlan(rest, dimensions(rest, {
+      width: rest.dimensions.width * 2.5,
+      depth: rest.dimensions.depth * 1.7,
+    }))
+
+    for (const restPart of rest.parts) {
+      expect(planPart(rest, plan, restPart.meshName).uvs).toBe(restPart.uvs)
+    }
+
+    const endWall = planPart(rest, plan, '墙-前-外')
+    const sideWall = planPart(rest, plan, '墙-左-外')
+    const endWallX = endWall.positionsRoot[0]!
+    const sideWallMinX = Math.min(
+      ...[0, 1, 2, 3].map((index) => sideWall.positionsRoot[index * 3]!),
+    )
+    expect(Math.abs(endWallX - sideWallMinX)).toBeLessThanOrEqual(0.02)
+
     const sideWallZ = sideWall.positionsRoot[2]!
     const endWallMaxZ = Math.max(
       ...[0, 1, 2, 3].map((index) => endWall.positionsRoot[index * 3 + 2]!),
@@ -458,6 +632,58 @@ describe('House Rig runtime isolation', () => {
       .not.toBeCloseTo(geometryB.getAttribute('position').getX(0), 4)
     componentManager.removeNode(nodeA.id)
     componentManager.removeNode(nodeB.id)
+  })
+
+  it('reuses the immutable rest positions across sequential dimension updates', () => {
+    const fixture = createTenPartHouse()
+    const rest = createRest(fixture.root)
+    const props: HouseRigComponentProps = {
+      schemaVersion: 1,
+      scriptId: 'current-ten-part-house',
+      scriptVersion: '1.0.1',
+      assetId: rest.assetId,
+      topologyHash: rest.topologyHash,
+      restDimensions: rest.dimensions,
+      dimensions: { ...rest.dimensions },
+      parts: [],
+    }
+    const node: SceneNode = {
+      id: 'house-rig-sequential-scale',
+      name: 'House Sequential Scale',
+      nodeType: 'Group',
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      sourceAssetId: rest.assetId ?? undefined,
+      components: {
+        houseRig: {
+          id: 'component-sequential-scale',
+          type: 'houseRig',
+          enabled: true,
+          props: JSON.parse(JSON.stringify(props)) as HouseRigComponentProps,
+        },
+      },
+    }
+    const component = node.components!.houseRig as {
+      props: HouseRigComponentProps
+    }
+    componentManager.attachRuntime(node, fixture.root)
+
+    for (const widthScale of [2, 3, 4]) {
+      component.props = {
+        ...component.props,
+        dimensions: {
+          ...component.props.dimensions,
+          width: rest.dimensions.width * widthScale,
+        },
+      }
+      componentManager.syncNode(node)
+      const snapshot = getHouseRigRuntimeSnapshot(node.id)!
+      expect(snapshot.rest.dimensions).toEqual(rest.dimensions)
+      expect(snapshot.plan!.bounds.size.x).toBeCloseTo(rest.bounds.size.x * widthScale, 4)
+    }
+
+    componentManager.removeNode(node.id)
   })
 
   it('notifies subscribers when the runtime snapshot is attached and detached', () => {

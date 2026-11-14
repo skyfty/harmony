@@ -20,6 +20,7 @@ import {
 import type {
   HouseRigComponentProps,
   HouseRigDimensions,
+  HouseRigRestSnapshot,
   HouseRigRuntimeSnapshot,
 } from '../../houseRig/types'
 import { Component, type ComponentRuntimeContext } from '../Component'
@@ -169,6 +170,7 @@ class HouseRigComponent extends Component<HouseRigComponentProps> {
   private pendingMeshRetryTimer: ReturnType<typeof setTimeout> | null = null
   private pendingMeshRetryCount = 0
   private initialAttachPending = false
+  private restSnapshot: HouseRigRestSnapshot | null = null
 
   constructor(context: ComponentRuntimeContext<HouseRigComponentProps>) {
     super(context)
@@ -182,6 +184,7 @@ class HouseRigComponent extends Component<HouseRigComponentProps> {
     }
     this.activeRoot = object
     this.initialAttachPending = true
+    this.restSnapshot = null
     this.isolateRuntimeAssets(object)
     this.applyCurrentProps(this.context.getProps(), { initialAttach: true })
   }
@@ -231,18 +234,21 @@ class HouseRigComponent extends Component<HouseRigComponentProps> {
       rawProps as Partial<HouseRigComponentProps> & Record<string, unknown>,
       node,
     )
-    let rest: ReturnType<typeof buildHouseRigRestSnapshot>
-    try {
-      rest = buildHouseRigRestSnapshot({
-        root,
-        assetId: props.assetId ?? sourceAssetIdForNode(node),
-        dimensions: houseRigDimensionsAreInitialized(props.restDimensions)
-          ? props.restDimensions
-          : null,
-      })
-    } catch {
-      this.schedulePendingMeshRetry(root)
-      return
+    let rest = this.restSnapshot
+    if (!rest) {
+      try {
+        rest = buildHouseRigRestSnapshot({
+          root,
+          assetId: props.assetId ?? sourceAssetIdForNode(node),
+          dimensions: houseRigDimensionsAreInitialized(props.restDimensions)
+            ? props.restDimensions
+            : null,
+        })
+        this.restSnapshot = rest
+      } catch {
+        this.schedulePendingMeshRetry(root)
+        return
+      }
     }
     this.clearPendingMeshRetry()
     if (options.initialAttach || this.initialAttachPending) {
@@ -361,6 +367,7 @@ class HouseRigComponent extends Component<HouseRigComponentProps> {
     this.isolatedMeshes = []
     this.activeRoot = null
     this.initialAttachPending = false
+    this.restSnapshot = null
     clearRuntimeSnapshot(this.context.nodeId)
   }
 }
