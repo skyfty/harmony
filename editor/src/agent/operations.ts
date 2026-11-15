@@ -53,6 +53,7 @@ import {
   type TerrainFlatteningComponentProps,
 } from '@schema/proceduralLandscape/terrainFlattening'
 import { fitTerrainFlatteningTransition } from '@schema/proceduralLandscape/terrainTransitionFit'
+import { extractSurfaceImageMetadataFromUserData } from '@/utils/surfaceImageDecal'
 
 type SceneStore = ReturnType<typeof useSceneStore>
 
@@ -316,6 +317,53 @@ function resolveLocalTransformFromWorld(
     rotation: { x: localEuler.x, y: localEuler.y, z: localEuler.z },
     scale: toPlainVector(localScale),
   }
+}
+
+function resolveWorldPositionFromLocal(
+  store: SceneStore,
+  node: SceneNode,
+  position: Vector3Like,
+): THREE.Vector3 {
+  const parentId = store.getParentNodeId(node.id)
+  const parentMatrix = parentId ? resolveSceneNodeWorldMatrix(store.nodes, parentId) : null
+  if (parentId && !parentMatrix) {
+    throw new AgentBridgeError('NODE_NOT_FOUND', `Cannot resolve parent world transform for ${node.id}`)
+  }
+  return toVector3(position).applyMatrix4(parentMatrix ?? new THREE.Matrix4())
+}
+
+function assertSurfaceImageTransformFields(node: SceneNode, label: string): void {
+  if (!extractSurfaceImageMetadataFromUserData(node.userData)) {
+    return
+  }
+  throw new AgentBridgeError(
+    'VALIDATION_FAILED',
+    `${label} cannot contain rotation or scale for Surface Image ${node.id}; only surface-bound translation is supported`,
+  )
+}
+
+function moveSurfaceImageOrThrow(
+  store: SceneStore,
+  nodeId: string,
+  worldPosition: THREE.Vector3,
+): ReturnType<SceneStore['moveSurfaceImageNode']> {
+  const result = store.moveSurfaceImageNode({ nodeId, worldPosition })
+  if (result.changed) {
+    return result
+  }
+  if (result.reason === 'TARGET_UNAVAILABLE') {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      `Surface Image ${nodeId} target surface ${result.targetNodeId ?? '(missing)'} is unavailable`,
+    )
+  }
+  if (result.reason === 'OUTSIDE_TARGET_SURFACE') {
+    throw new AgentBridgeError(
+      'VALIDATION_FAILED',
+      `Surface Image ${nodeId} cannot reach its target surface from the requested position: ${JSON.stringify(result.diagnostics ?? null)}`,
+    )
+  }
+  return result
 }
 
 function isSimplePatchValue(value: unknown): boolean {
@@ -1241,9 +1289,30 @@ async function executeOperation(
       return createNode(store, operation)
     case 'node.update': {
       const node = findNodeOrThrow(store, operation.nodeId)
+      const isSurfaceImage = Boolean(extractSurfaceImageMetadataFromUserData(node.userData))
+      if (isSurfaceImage) {
+        if (operation.local?.rotation || operation.local?.scale) {
+          assertSurfaceImageTransformFields(node, 'local')
+        }
+        if (operation.world?.rotation || operation.world?.scale) {
+          assertSurfaceImageTransformFields(node, 'world')
+        }
+      }
       if (operation.name !== undefined) store.renameNode(node.id, operation.name)
       if (operation.visible !== undefined) store.setNodeVisibility(node.id, operation.visible)
       if (operation.locked !== undefined) store.setNodeLocked(node.id, operation.locked)
+      if (isSurfaceImage && operation.local?.position && operation.world?.position) {
+        throw new AgentBridgeError(
+          'VALIDATION_FAILED',
+          'Surface Image node.update must provide either local.position or world.position, not both',
+        )
+      }
+      if (isSurfaceImage && (operation.local?.position || operation.world?.position)) {
+        const worldPosition = operation.world?.position
+          ? toVector3(operation.world.position)
+          : resolveWorldPositionFromLocal(store, node, operation.local!.position!)
+        return moveSurfaceImageOrThrow(store, node.id, worldPosition)
+      }
       if (operation.local) {
         store.updateNodeProperties({ id: node.id, ...operation.local })
       }
@@ -1254,6 +1323,16 @@ async function executeOperation(
         })
       }
       return { nodeId: node.id }
+    }
+    case 'surface_image.move': {
+      const node = findNodeOrThrow(store, operation.nodeId)
+      if (!extractSurfaceImageMetadataFromUserData(node.userData)) {
+        throw new AgentBridgeError(
+          'VALIDATION_FAILED',
+          `Node ${node.id} is not a Surface Image`,
+        )
+      }
+      return moveSurfaceImageOrThrow(store, node.id, toVector3(operation.worldPosition))
     }
     case 'node.delete': {
       findNodeOrThrow(store, operation.nodeId)

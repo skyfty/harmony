@@ -442,8 +442,12 @@ import {
   createSurfaceImageRuntimeMesh,
   extractSurfaceImageMetadataFromUserData,
   markSurfaceImageRuntimeOwnership,
+  projectSurfaceImageTangentDelta,
+  replaceSurfaceImageRuntimeGeometry,
   resetSurfaceImageRuntimeTransform,
   resolveSurfaceImageBasis,
+  resolveSurfaceImageDrape,
+  type SurfaceImageTargetMesh,
 } from '@/utils/surfaceImageDecal'
 import {
   componentManager,
@@ -12827,6 +12831,11 @@ const {
 )
 
 function commitSelectionDragTransformsWithDeferredVertexSnap(dragState: any) {
+  if (commitSurfaceImageSelectionDrag(dragState.nodeId)) {
+    pendingVertexSnapResult = null
+    clearVertexSnapMarkers()
+    return
+  }
   const delta = pendingVertexSnapResult?.delta ?? null
   if (delta && delta.lengthSq() > 1e-12) {
     applyWorldDeltaToSelectionDrag(dragState, delta, { allowVertical: true })
@@ -12901,6 +12910,11 @@ function buildTransformControlUpdates(): TransformUpdatePayload[] {
 }
 
 function commitTransformControlUpdates(): TransformUpdatePayload[] {
+  const primaryId = sceneStore.selectedNodeId ?? null
+  if (commitSurfaceImageGizmoDrag(primaryId)) {
+    transformControlsDirty = false
+    return []
+  }
   const updates = buildTransformControlUpdates()
   transformControlsDirty = false
   if (!updates.length) {
@@ -14017,6 +14031,8 @@ const draggingChangedHandler = (event: unknown) => {
     hasTransformLastWorldPosition = false
     if (transformControlsDirty) {
       void commitTransformControlUpdates()
+    } else {
+      surfaceImageGizmoDragSession = null
     }
     sceneStore.endTransformInteraction()
     if (primaryId) {
@@ -14035,6 +14051,7 @@ const draggingChangedHandler = (event: unknown) => {
     hasTransformLastWorldPosition = false
     transformControlsDirty = false
     sceneStore.beginTransformInteraction(primaryId)
+    beginSurfaceImageGizmoDrag(primaryId)
     if (primaryId) {
       wallRenderer.beginWallDrag(primaryId)
     }
@@ -14554,6 +14571,33 @@ let surfaceImageLastPreviewProcessedAt = 0
 let surfaceImageDragActive = false
 let surfaceImageActiveAssetId: string | null = null
 const SURFACE_IMAGE_DRAG_OVER_INTERVAL_MS = 24
+const SURFACE_IMAGE_RUNTIME_DRAPE_INTERVAL_MS = 1000 / 30
+
+type SurfaceImageRuntimeDragSession = {
+  nodeId: string
+  targetNodeId: string
+  targetRoot: THREE.Object3D
+  targets: SurfaceImageTargetMesh[]
+  widthMeters: number
+  heightMeters: number
+  initialWorldNormal: THREE.Vector3
+  dragStartWorldPosition: THREE.Vector3
+  dragStartWorldNormal: THREE.Vector3
+  preferredRight: THREE.Vector3
+  lastWorldPosition: THREE.Vector3
+  lastWorldQuaternion: THREE.Quaternion
+  lastLocalPosition: THREE.Vector3
+  lastLocalQuaternion: THREE.Quaternion
+  lastLocalScale: THREE.Vector3
+  lastCompiledGeometry: ReturnType<typeof createCompiledStaticMeshMetadataFromGeometry> | null
+  lastAppliedAt: number
+  invalidNoticeShown: boolean
+}
+
+let surfaceImageSelectionDragSession: SurfaceImageRuntimeDragSession | null = null
+let surfaceImageGizmoDragSession: SurfaceImageRuntimeDragSession | null = null
+let surfaceImageApplyingRuntimeDrape = false
+
 const surfaceImageCameraRight = new THREE.Vector3(1, 0, 0)
 type SurfaceImagePreviewPlacement = {
   center: THREE.Vector3
@@ -21453,7 +21497,12 @@ function handlePointerMove(event: PointerEvent) {
     },
     onSelectionDragStart: (nodeId) => wallRenderer.beginWallDrag(nodeId),
     beginDeferredDuplicateDrag: (e, trackingState) => beginDeferredDuplicateSelectionDrag(e, trackingState),
-    updateSelectDragPosition,
+    updateSelectDragPosition: (drag, event) => {
+      if (updateSurfaceImageSelectionDragPosition(drag, event)) {
+        return true
+      }
+      return updateSelectDragPosition(drag, event)
+    },
   })
 
   // If selection-based preview is active, update preview position to follow the mouse.
@@ -24509,6 +24558,302 @@ function resolveSurfaceImageProjector(
   }
 }
 
+function createSurfaceImageRuntimeDragSession(
+  nodeId: string,
+  object: THREE.Object3D | null,
+): SurfaceImageRuntimeDragSession | null {
+  const node = sceneStore.getNodeById(nodeId)
+  const metadata = extractSurfaceImageMetadataFromUserData(node?.userData)
+  if (!node || !metadata || !object) {
+    return null
+  }
+  const targetRoot = objectMap.get(metadata.targetNodeId)
+    ?? componentManager.getRuntimeObject(metadata.targetNodeId)
+    ?? getRuntimeObject(metadata.targetNodeId)
+  if (!targetRoot) {
+    return null
+  }
+  const targets = collectSurfaceImageTargetMeshes(targetRoot, targetRoot)
+  if (!targets.length) {
+    return null
+  }
+  object.updateMatrixWorld(true)
+  const worldPosition = new THREE.Vector3()
+  const worldQuaternion = new THREE.Quaternion()
+  object.getWorldPosition(worldPosition)
+  object.getWorldQuaternion(worldQuaternion)
+  return {
+    nodeId,
+    targetNodeId: metadata.targetNodeId,
+    targetRoot,
+    targets,
+    widthMeters: metadata.widthMeters,
+    heightMeters: metadata.heightMeters,
+    initialWorldNormal: new THREE.Vector3(0, 0, 1).applyQuaternion(worldQuaternion).normalize(),
+    dragStartWorldPosition: worldPosition.clone(),
+    dragStartWorldNormal: new THREE.Vector3(0, 0, 1).applyQuaternion(worldQuaternion).normalize(),
+    preferredRight: new THREE.Vector3(1, 0, 0).applyQuaternion(worldQuaternion).normalize(),
+    lastWorldPosition: worldPosition,
+    lastWorldQuaternion: worldQuaternion,
+    lastLocalPosition: object.position.clone(),
+    lastLocalQuaternion: object.quaternion.clone(),
+    lastLocalScale: object.scale.clone(),
+    lastCompiledGeometry: extractCompiledStaticMeshMetadataFromUserData(node.userData),
+    lastAppliedAt: 0,
+    invalidNoticeShown: false,
+  }
+}
+
+function restoreSurfaceImageRuntimeDragSession(
+  session: SurfaceImageRuntimeDragSession,
+  object: THREE.Object3D,
+): void {
+  surfaceImageApplyingRuntimeDrape = true
+  try {
+    object.position.copy(session.lastLocalPosition)
+    object.quaternion.copy(session.lastLocalQuaternion)
+    object.scale.copy(session.lastLocalScale)
+    object.updateMatrixWorld(true)
+    const runtimeObject = getRuntimeObject(session.nodeId)
+    if (runtimeObject && session.lastCompiledGeometry) {
+      replaceSurfaceImageRuntimeGeometry(runtimeObject, session.lastCompiledGeometry)
+    }
+  } finally {
+    surfaceImageApplyingRuntimeDrape = false
+  }
+}
+
+function markSurfaceImageRuntimeDragInvalid(
+  session: SurfaceImageRuntimeDragSession,
+  object: THREE.Object3D,
+): void {
+  restoreSurfaceImageRuntimeDragSession(session, object)
+  if (!session.invalidNoticeShown) {
+    session.invalidNoticeShown = true
+    showSurfaceImagePlacementNotice('未贴合到目标表面，已保持上一个有效位置')
+  }
+}
+
+function applySurfaceImageRuntimeDragCandidate(
+  session: SurfaceImageRuntimeDragSession,
+  object: THREE.Object3D,
+  candidateCenter: THREE.Vector3,
+  options: { force?: boolean } = {},
+): boolean {
+  const now = performance.now()
+  if (
+    !options.force
+    && now - session.lastAppliedAt < SURFACE_IMAGE_RUNTIME_DRAPE_INTERVAL_MS
+  ) {
+    restoreSurfaceImageRuntimeDragSession(session, object)
+    return true
+  }
+  const drape = resolveSurfaceImageDrape({
+    targets: session.targets,
+    candidateCenter,
+    preferredNormal: session.initialWorldNormal,
+    preferredRight: session.preferredRight,
+    widthMeters: session.widthMeters,
+    heightMeters: session.heightMeters,
+  })
+  if (!drape) {
+    markSurfaceImageRuntimeDragInvalid(session, object)
+    return false
+  }
+
+  const geometryMetadata = createCompiledStaticMeshMetadataFromGeometry(
+    drape.geometry,
+    sceneStore.getNodeById(session.nodeId)?.name || 'Surface Image',
+  )
+  drape.geometry.dispose()
+  const runtimeObject = getRuntimeObject(session.nodeId)
+  if (!runtimeObject || !replaceSurfaceImageRuntimeGeometry(runtimeObject, geometryMetadata)) {
+    markSurfaceImageRuntimeDragInvalid(session, object)
+    return false
+  }
+
+  const localPosition = drape.center.clone()
+  let localQuaternion = drape.quaternion.clone()
+  if (object.parent) {
+    object.parent.updateMatrixWorld(true)
+    object.parent.worldToLocal(localPosition)
+    const parentWorldQuaternion = new THREE.Quaternion()
+    object.parent.getWorldQuaternion(parentWorldQuaternion)
+    localQuaternion = parentWorldQuaternion.invert().multiply(localQuaternion)
+  }
+
+  surfaceImageApplyingRuntimeDrape = true
+  try {
+    object.position.copy(localPosition)
+    object.quaternion.copy(localQuaternion)
+    object.scale.copy(session.lastLocalScale)
+    object.updateMatrixWorld(true)
+  } finally {
+    surfaceImageApplyingRuntimeDrape = false
+  }
+
+  session.lastWorldPosition.copy(drape.center)
+  session.lastWorldQuaternion.copy(drape.quaternion)
+  session.lastLocalPosition.copy(object.position)
+  session.lastLocalQuaternion.copy(object.quaternion)
+  session.lastLocalScale.copy(object.scale)
+  session.lastCompiledGeometry = geometryMetadata
+  session.preferredRight.copy(drape.preferredRight)
+  session.lastAppliedAt = now
+  session.invalidNoticeShown = false
+  return true
+}
+
+function resolveSurfaceImagePointerCandidate(
+  session: SurfaceImageRuntimeDragSession,
+  event: Pick<DragEvent, 'clientX' | 'clientY'> | PointerEvent,
+): { center: THREE.Vector3; normal: THREE.Vector3 } | null {
+  if (!updateDragRaycaster(event)) {
+    return null
+  }
+  const targetMeshes = session.targets.map((target) => target.mesh)
+  if (!targetMeshes.length) {
+    return null
+  }
+  const runtimeRaycaster = raycaster as THREE.Raycaster & { firstHitOnly?: boolean }
+  const previousFirstHitOnly = runtimeRaycaster.firstHitOnly
+  runtimeRaycaster.firstHitOnly = true
+  let intersections: THREE.Intersection[]
+  try {
+    intersections = raycaster.intersectObjects(targetMeshes, false)
+  } finally {
+    runtimeRaycaster.firstHitOnly = previousFirstHitOnly
+  }
+  const hit = intersections.find((intersection) => Boolean(intersection.point))
+  if (!hit) {
+    const tangentPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      session.dragStartWorldNormal,
+      session.lastWorldPosition,
+    )
+    const tangentPoint = raycaster.ray.intersectPlane(tangentPlane, new THREE.Vector3())
+    return tangentPoint
+      ? {
+          center: tangentPoint,
+          normal: session.dragStartWorldNormal.clone(),
+        }
+      : null
+  }
+  return {
+    center: hit.point.clone(),
+    normal: resolveIntersectionWorldNormal(hit) ?? session.initialWorldNormal.clone(),
+  }
+}
+
+function updateSurfaceImageSelectionDragPosition(
+  drag: { nodeId: string; object: THREE.Object3D },
+  event: PointerEvent,
+): boolean {
+  const metadata = extractSurfaceImageMetadataFromUserData(sceneStore.getNodeById(drag.nodeId)?.userData)
+  if (!metadata) {
+    return false
+  }
+  if (!surfaceImageSelectionDragSession || surfaceImageSelectionDragSession.nodeId !== drag.nodeId) {
+    surfaceImageSelectionDragSession = createSurfaceImageRuntimeDragSession(drag.nodeId, drag.object)
+  }
+  const session = surfaceImageSelectionDragSession
+  if (!session) {
+    showSurfaceImagePlacementNotice('目标表面尚未就绪，Surface Image 无法贴合移动')
+    return true
+  }
+  const candidate = resolveSurfaceImagePointerCandidate(session, event)
+  if (candidate) {
+    applySurfaceImageRuntimeDragCandidate(session, drag.object, candidate.center)
+  } else {
+    markSurfaceImageRuntimeDragInvalid(session, drag.object)
+  }
+  updateGridHighlightFromObject(drag.object)
+  updateSelectionHighlights()
+  return true
+}
+
+function commitSurfaceImageSelectionDrag(nodeId: string): boolean {
+  const session = surfaceImageSelectionDragSession
+  if (!session || session.nodeId !== nodeId) {
+    return false
+  }
+  sceneStore.moveSurfaceImageNode({
+    nodeId,
+    worldPosition: session.lastWorldPosition,
+  })
+  surfaceImageSelectionDragSession = null
+  return true
+}
+
+function beginSurfaceImageGizmoDrag(nodeId: string | null): void {
+  if (!nodeId) {
+    surfaceImageGizmoDragSession = null
+    return
+  }
+  if (
+    !extractSurfaceImageMetadataFromUserData(sceneStore.getNodeById(nodeId)?.userData)
+    || sceneStore.selectedNodeIds.length !== 1
+  ) {
+    surfaceImageGizmoDragSession = null
+    return
+  }
+  surfaceImageGizmoDragSession = createSurfaceImageRuntimeDragSession(
+    nodeId,
+    objectMap.get(nodeId) ?? null,
+  )
+}
+
+function handleSurfaceImageGizmoTransformChange(options: {
+  target: THREE.Object3D
+  primaryId: string | null
+  mode: string
+}): boolean {
+  const { target, primaryId, mode } = options
+  if (!primaryId || surfaceImageApplyingRuntimeDrape) {
+    return false
+  }
+  const metadata = extractSurfaceImageMetadataFromUserData(sceneStore.getNodeById(primaryId)?.userData)
+  if (!metadata || sceneStore.selectedNodeIds.length !== 1) {
+    return false
+  }
+  if (!surfaceImageGizmoDragSession || surfaceImageGizmoDragSession.nodeId !== primaryId) {
+    beginSurfaceImageGizmoDrag(primaryId)
+  }
+  const session = surfaceImageGizmoDragSession
+  if (!session) {
+    showSurfaceImagePlacementNotice('目标表面尚未就绪，Surface Image 无法贴合移动')
+    return true
+  }
+  if (mode !== 'translate') {
+    markSurfaceImageRuntimeDragInvalid(session, target)
+    showSurfaceImagePlacementNotice('Surface Image 仅支持贴合移动')
+    transformControlsDirty = true
+    return true
+  }
+  const rawCandidate = new THREE.Vector3()
+  target.getWorldPosition(rawCandidate)
+  const tangentDelta = projectSurfaceImageTangentDelta(
+    rawCandidate.sub(session.dragStartWorldPosition),
+    session.dragStartWorldNormal,
+  )
+  const candidate = session.dragStartWorldPosition.clone().add(tangentDelta)
+  applySurfaceImageRuntimeDragCandidate(session, target, candidate)
+  transformControlsDirty = true
+  return true
+}
+
+function commitSurfaceImageGizmoDrag(nodeId: string | null): boolean {
+  const session = surfaceImageGizmoDragSession
+  if (!session || !nodeId || session.nodeId !== nodeId) {
+    return false
+  }
+  sceneStore.moveSurfaceImageNode({
+    nodeId,
+    worldPosition: session.lastWorldPosition,
+  })
+  surfaceImageGizmoDragSession = null
+  return true
+}
+
 function refreshSurfaceImagePreviewTransform(): void {
   const placement = surfaceImagePreviewPlacement
   if (!placement) {
@@ -25893,6 +26238,14 @@ function handleTransformChange() {
     primaryId,
     primaryObject,
   } = ctx
+
+  if (handleSurfaceImageGizmoTransformChange({
+    target,
+    primaryId,
+    mode,
+  })) {
+    return
+  }
 
   if (isDirectionalLightTargetPivot) {
     handleDirectionalLightTargetPivotTransformChange({
@@ -28149,6 +28502,15 @@ function applyTransformSpaceForSelection(tool: EditorTool, primaryId: string | n
   }
   const ids = collectTopLevelUnlockedSelectionIds(primaryId)
   const isMulti = ids.length > 1
+  const primaryNode = primaryId ? sceneStore.getNodeById(primaryId) : null
+  const isSurfaceImage = Boolean(extractSurfaceImageMetadataFromUserData(primaryNode?.userData))
+  transformControls.showX = true
+  transformControls.showY = true
+  transformControls.showZ = !isSurfaceImage
+  if (isSurfaceImage) {
+    transformControls.setSpace('local')
+    return
+  }
   const nextSpace = resolveEffectiveTransformSpace(
     sceneStore.viewportSettings.transformSpace,
     tool,
@@ -28167,6 +28529,9 @@ function resolveTransformToolFamilies(primaryId: string | null): Array<'translat
     return ['translate']
   }
   const node = primaryId ? sceneStore.getNodeById(primaryId) : null
+  if (extractSurfaceImageMetadataFromUserData(node?.userData)) {
+    return ['translate']
+  }
   if (node?.light?.type === 'Directional') {
     return ['translate', 'rotate']
   }
@@ -28177,14 +28542,24 @@ function syncTransformToolFamilies(tool: EditorTool, primaryId: string | null): 
   if (!transformControls) {
     return
   }
+  const primaryNode = primaryId ? sceneStore.getNodeById(primaryId) : null
+  const isSurfaceImage = Boolean(extractSurfaceImageMetadataFromUserData(primaryNode?.userData))
   transformControls.setTransformFamilies(
-    tool === 'transform' ? resolveTransformToolFamilies(primaryId) : ['translate', 'rotate', 'scale'],
+    isSurfaceImage
+      ? ['translate']
+      : tool === 'transform'
+        ? resolveTransformToolFamilies(primaryId)
+        : ['translate', 'rotate', 'scale'],
   )
 }
 
 /** Gizmo orientation actually used for the current tool/selection. */
 const effectiveTransformSpace = computed<'world' | 'local'>(() => {
   const primaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const primaryNode = primaryId ? sceneStore.getNodeById(primaryId) : null
+  if (extractSurfaceImageMetadataFromUserData(primaryNode?.userData)) {
+    return 'local'
+  }
   const isMulti = collectTopLevelUnlockedSelectionIds(primaryId).length > 1
   return resolveEffectiveTransformSpace(
     sceneStore.viewportSettings.transformSpace,
@@ -28194,12 +28569,21 @@ const effectiveTransformSpace = computed<'world' | 'local'>(() => {
 })
 
 const transformSpaceLocked = computed(() => sceneStore.viewportSettings.transformSpace !== 'auto')
+const selectedSurfaceImage = computed(() => {
+  const primaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  return Boolean(extractSurfaceImageMetadataFromUserData(
+    primaryId ? sceneStore.getNodeById(primaryId)?.userData : null,
+  ))
+})
 
 const transformSpaceButtonIcon = computed(() => (
   effectiveTransformSpace.value === 'world' ? 'mdi-earth' : 'mdi-cube-outline'
 ))
 
 const transformSpaceButtonTitle = computed(() => {
+  if (selectedSurfaceImage.value) {
+    return 'Surface Image 固定在墙面切平面移动；世界法线轴已锁定'
+  }
   const parts = [effectiveTransformSpace.value === 'world'
     ? '世界坐标系（沿世界轴调整位姿）'
     : '本地坐标系（沿对象自身轴调整位姿）']

@@ -544,6 +544,10 @@ export class ComponentManager {
     this.syncNode(node)
   }
 
+  getRuntimeObject(nodeId: string): Object3D | null {
+    return this.nodeBundles.get(nodeId)?.runtimeObject ?? null
+  }
+
   /**
    * Attaches a runtime object only when the host replaced the object instance.
    * Property synchronization uses `syncNode`; reattaching an unchanged object

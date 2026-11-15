@@ -5,6 +5,7 @@ import {
   createCompiledStaticMeshRuntimeMesh,
   extractCompiledStaticMeshMetadataFromUserData,
   orientCompiledStaticMeshTrianglesTowardPositiveZ,
+  type CompiledStaticMeshMetadata,
 } from '@schema/compiledStaticMesh'
 import { resolveNodeMaterialTextureAssignmentOptions } from '@schema/material'
 import type { SceneNode } from '@schema/core'
@@ -13,6 +14,9 @@ export const SURFACE_IMAGE_USERDATA_KEY = '__surfaceImage'
 export const SURFACE_IMAGE_VERSION = 1
 export const SURFACE_IMAGE_DEFAULT_WIDTH_METERS = 1
 export const SURFACE_IMAGE_NORMAL_OFFSET_METERS = 0.002
+export const SURFACE_IMAGE_REPROJECT_MIN_DISTANCE_METERS = 0.25
+export const SURFACE_IMAGE_REPROJECT_MAX_DISTANCE_METERS = 1.5
+export const SURFACE_IMAGE_REPROJECT_DISTANCE_SCALE = 1.25
 
 export type SurfaceImageAttachmentMode = 'target' | 'ancestor' | 'world'
 
@@ -45,6 +49,30 @@ export interface BuiltSurfaceImageDecal {
   width: number
   height: number
   depth: number
+}
+
+export interface ResolvedSurfaceImageDrape extends BuiltSurfaceImageDecal {
+  center: THREE.Vector3
+  normal: THREE.Vector3
+  quaternion: THREE.Quaternion
+  preferredRight: THREE.Vector3
+  surfaceDistance: number
+}
+
+export interface SurfaceImageDrapeDiagnostics {
+  targetMeshCount: number
+  skippedSkinnedOrMorph: number
+  skippedWithoutBvh: number
+  skippedWithoutClosestPoint: number
+  skippedOutsideDistance: number
+  skippedWithoutNormal: number
+  candidates: Array<{
+    meshName: string
+    distance: number
+    normal: THREE.Vector3
+    score: number
+  }>
+  attemptedGeometryBuilds: number
 }
 
 type ClipVertex = {
@@ -695,4 +723,206 @@ export function buildSurfaceImageDecalGeometry(options: {
     height,
     depth,
   }
+}
+
+export function resolveSurfaceImageReprojectDistance(widthMeters: number, heightMeters: number): number {
+  const width = normalizePositive(widthMeters, SURFACE_IMAGE_DEFAULT_WIDTH_METERS)
+  const height = normalizePositive(heightMeters, SURFACE_IMAGE_DEFAULT_WIDTH_METERS)
+  return Math.max(
+    SURFACE_IMAGE_REPROJECT_MIN_DISTANCE_METERS,
+    Math.min(
+      SURFACE_IMAGE_REPROJECT_MAX_DISTANCE_METERS,
+      Math.max(width, height) * SURFACE_IMAGE_REPROJECT_DISTANCE_SCALE,
+    ),
+  )
+}
+
+export function projectSurfaceImageTangentDelta(
+  delta: THREE.Vector3,
+  normal: THREE.Vector3,
+): THREE.Vector3 {
+  const surfaceNormal = resolveFiniteVector(normal, worldUp)
+  return delta.clone().addScaledVector(surfaceNormal, -delta.dot(surfaceNormal))
+}
+
+function readTriangleWorldNormal(
+  geometry: THREE.BufferGeometry,
+  triangleIndex: number,
+  worldMatrix: THREE.Matrix4,
+): THREE.Vector3 | null {
+  const triangle = readGeometryTriangle(geometry, triangleIndex)
+  if (!triangle) {
+    return null
+  }
+  const edgeA = triangle[1].clone().sub(triangle[0])
+  const edgeB = triangle[2].clone().sub(triangle[0])
+  const normal = edgeA.cross(edgeB)
+  if (normal.lengthSq() <= 1e-14) {
+    return null
+  }
+  normal
+    .applyMatrix3(new THREE.Matrix3().getNormalMatrix(worldMatrix))
+    .normalize()
+  return normal
+}
+
+export function resolveSurfaceImageDrape(options: {
+  targets: readonly SurfaceImageTargetMesh[]
+  candidateCenter: THREE.Vector3
+  preferredNormal: THREE.Vector3
+  preferredRight?: THREE.Vector3 | null
+  widthMeters: number
+  heightMeters: number
+  diagnostics?: SurfaceImageDrapeDiagnostics
+}): ResolvedSurfaceImageDrape | null {
+  const width = normalizePositive(options.widthMeters, SURFACE_IMAGE_DEFAULT_WIDTH_METERS)
+  const height = normalizePositive(options.heightMeters, SURFACE_IMAGE_DEFAULT_WIDTH_METERS)
+  const preferredNormal = resolveFiniteVector(options.preferredNormal, worldUp)
+  const preferredRight = resolveFiniteVector(options.preferredRight ?? worldX, worldX)
+  const maxDistance = resolveSurfaceImageReprojectDistance(width, height)
+  const candidates: Array<{
+    center: THREE.Vector3
+    normal: THREE.Vector3
+    distance: number
+    score: number
+    meshName: string
+  }> = []
+
+  for (const target of options.targets) {
+    const mesh = target.mesh
+    if (!mesh?.isMesh || !mesh.geometry?.getAttribute('position')) {
+      continue
+    }
+    const meshFlags = mesh as THREE.Mesh & {
+      isSkinnedMesh?: boolean
+      isInstancedMesh?: boolean
+      morphTargetInfluences?: number[]
+    }
+    if (
+      meshFlags.isSkinnedMesh
+      || Object.keys(mesh.geometry.morphAttributes ?? {}).length > 0
+      || (meshFlags.morphTargetInfluences?.length ?? 0) > 0
+    ) {
+      if (options.diagnostics) {
+        options.diagnostics.skippedSkinnedOrMorph += 1
+      }
+      continue
+    }
+    const instanceId = Number.isInteger(target.instanceId) ? Number(target.instanceId) : null
+    mesh.updateWorldMatrix(true, false)
+    const worldMatrix = resolveInstanceWorldMatrix(mesh, instanceId)
+    const bvh = getGeometryBvh(mesh.geometry)
+    if (!bvh) {
+      if (options.diagnostics) {
+        options.diagnostics.skippedWithoutBvh += 1
+      }
+      continue
+    }
+    const localCandidate = options.candidateCenter.clone().applyMatrix4(worldMatrix.clone().invert())
+    const hit = bvh.closestPointToPoint(localCandidate)
+    if (!hit) {
+      if (options.diagnostics) {
+        options.diagnostics.skippedWithoutClosestPoint += 1
+      }
+      continue
+    }
+    const center = hit.point.clone().applyMatrix4(worldMatrix)
+    const distance = center.distanceTo(options.candidateCenter)
+    if (distance > maxDistance) {
+      if (options.diagnostics) {
+        options.diagnostics.skippedOutsideDistance += 1
+      }
+      continue
+    }
+    const rawNormal = readTriangleWorldNormal(mesh.geometry, hit.faceIndex, worldMatrix)
+    if (!rawNormal) {
+      if (options.diagnostics) {
+        options.diagnostics.skippedWithoutNormal += 1
+      }
+      continue
+    }
+    const continuity = rawNormal.dot(preferredNormal)
+    const normal = continuity < 0 ? rawNormal.negate() : rawNormal
+    candidates.push({
+      center,
+      normal,
+      distance,
+      score: distance + (1 - Math.abs(continuity)) * 0.01,
+      meshName: mesh.name,
+    })
+  }
+
+  candidates.sort((left, right) => left.score - right.score)
+  if (options.diagnostics) {
+    options.diagnostics.targetMeshCount = options.targets.length
+    options.diagnostics.candidates = candidates.map((candidate) => ({
+      meshName: candidate.meshName,
+      distance: candidate.distance,
+      normal: candidate.normal.clone(),
+      score: candidate.score,
+    }))
+    options.diagnostics.attemptedGeometryBuilds = 0
+  }
+  for (const candidate of candidates) {
+    if (options.diagnostics) {
+      options.diagnostics.attemptedGeometryBuilds += 1
+    }
+    const basis = resolveSurfaceImageBasis(candidate.normal, preferredRight)
+    const built = buildSurfaceImageDecalGeometry({
+      targets: options.targets,
+      projector: {
+        center: candidate.center,
+        normal: basis.normal,
+        quaternion: basis.quaternion,
+        width,
+        height,
+      },
+    })
+    if (!built) {
+      continue
+    }
+    return {
+      ...built,
+      center: candidate.center.clone(),
+      normal: basis.normal.clone(),
+      quaternion: basis.quaternion.clone(),
+      preferredRight: basis.axisU.clone(),
+      surfaceDistance: candidate.distance,
+    }
+  }
+  return null
+}
+
+export function replaceSurfaceImageRuntimeGeometry(
+  object: THREE.Object3D,
+  metadata: CompiledStaticMeshMetadata,
+): THREE.Mesh | null {
+  let targetMesh: THREE.Mesh | null = null
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (
+      !targetMesh
+      && mesh?.isMesh
+      && mesh.userData?.[SURFACE_IMAGE_USERDATA_KEY]
+      && mesh.userData?.[COMPILED_STATIC_MESH_USERDATA_KEY]
+    ) {
+      targetMesh = mesh
+    }
+  })
+  if (!targetMesh) {
+    return null
+  }
+  const mesh = targetMesh as THREE.Mesh
+  const replacement = createCompiledStaticMeshRuntimeMesh(metadata, {
+    material: mesh.material,
+    name: mesh.name,
+  })
+  mesh.geometry.dispose()
+  mesh.geometry = replacement.geometry
+  mesh.userData = {
+    ...(mesh.userData ?? {}),
+    [COMPILED_STATIC_MESH_USERDATA_KEY]: metadata,
+  }
+  mesh.updateMatrix()
+  return mesh
 }

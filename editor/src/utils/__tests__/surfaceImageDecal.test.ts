@@ -7,10 +7,13 @@ import {
   buildSurfaceImageDecalGeometry,
   markSurfaceImageRuntimeOwnership,
   normalizeSurfaceImageMetadata,
+  projectSurfaceImageTangentDelta,
+  replaceSurfaceImageRuntimeGeometry,
   resetSurfaceImageRuntimeTransform,
   resolvePreviewSurfaceMaterialOptions,
   resolveSurfaceImageBasis,
   resolveSurfaceImageAttachmentParent,
+  resolveSurfaceImageDrape,
 } from '@/utils/surfaceImageDecal'
 
 function createProjector(
@@ -198,6 +201,85 @@ describe('surface image decal geometry', () => {
     expect(result).toBeNull()
   })
 
+  it('finds and rebuilds a drape on a sloped target surface', () => {
+    const mesh = createPlane(8, 8)
+    mesh.geometry.rotateX(-Math.PI / 4)
+    mesh.updateMatrixWorld(true)
+    const normal = new THREE.Vector3(0, Math.SQRT1_2, Math.SQRT1_2)
+    const result = resolveSurfaceImageDrape({
+      targets: [{ mesh }],
+      candidateCenter: new THREE.Vector3(0.4, 0.2, -0.2),
+      preferredNormal: normal,
+      preferredRight: new THREE.Vector3(1, 0, 0),
+      widthMeters: 1,
+      heightMeters: 0.5,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.normal.dot(normal)).toBeGreaterThan(0.99)
+    expect(result!.center.distanceTo(new THREE.Vector3(0.4, 0.2, -0.2))).toBeLessThan(0.05)
+    const projectorMatrix = new THREE.Matrix4().compose(
+      result!.center,
+      result!.quaternion,
+      new THREE.Vector3(1, 1, 1),
+    )
+    for (const point of readPositions(result!.geometry)) {
+      expect(point.clone().applyMatrix4(projectorMatrix).dot(normal)).toBeCloseTo(0.002, 4)
+    }
+    result!.geometry.dispose()
+  })
+
+  it('crosses to a connected perpendicular surface while preserving image orientation', () => {
+    const front = createPlane(4, 4)
+    const side = createPlane(4, 4)
+    side.rotation.y = Math.PI / 2
+    side.position.x = 2
+    front.updateMatrixWorld(true)
+    side.updateMatrixWorld(true)
+    const result = resolveSurfaceImageDrape({
+      targets: [{ mesh: front }, { mesh: side }],
+      candidateCenter: new THREE.Vector3(1.98, 0.2, 0.1),
+      preferredNormal: new THREE.Vector3(0, 0, 1),
+      preferredRight: new THREE.Vector3(1, 0, 0),
+      widthMeters: 1,
+      heightMeters: 0.5,
+    })
+
+    expect(result).not.toBeNull()
+    expect(Math.abs(result!.normal.x)).toBeGreaterThan(0.9)
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(result!.quaternion)
+    expect(Math.abs(right.z)).toBeGreaterThan(0.9)
+    result!.geometry.dispose()
+  })
+
+  it('removes the wall-normal component from Surface Image gizmo movement', () => {
+    const projected = projectSurfaceImageTangentDelta(
+      new THREE.Vector3(2, 3, -4),
+      new THREE.Vector3(1, 0, 0),
+    )
+    expect(projected.x).toBeCloseTo(0, 8)
+    expect(projected.y).toBeCloseTo(3, 8)
+    expect(projected.z).toBeCloseTo(-4, 8)
+  })
+
+  it('rejects disconnected and backward-facing surfaces outside the snap range', () => {
+    const front = createPlane(2, 2)
+    const opposite = createPlane(2, 2)
+    opposite.rotation.y = Math.PI
+    opposite.position.z = -1
+    front.updateMatrixWorld(true)
+    opposite.updateMatrixWorld(true)
+    const result = resolveSurfaceImageDrape({
+      targets: [{ mesh: front }, { mesh: opposite }],
+      candidateCenter: new THREE.Vector3(20, 20, -1),
+      preferredNormal: new THREE.Vector3(0, 0, 1),
+      preferredRight: new THREE.Vector3(1, 0, 0),
+      widthMeters: 1,
+      heightMeters: 1,
+    })
+    expect(result).toBeNull()
+  })
+
   it('normalizes valid persisted metadata and rejects unavailable targets', () => {
     expect(normalizeSurfaceImageMetadata({
       version: 1,
@@ -262,6 +344,40 @@ describe('surface image decal geometry', () => {
     expect(runtimeSnapshot.position.toArray()).toEqual([0, 0, 0])
     expect(runtimeSnapshot.rotation.toArray().slice(0, 3)).toEqual([0, 0, 0])
     expect(runtimeSnapshot.scale.toArray()).toEqual([1, 1, 1])
+  })
+
+  it('replaces only the owned surface-image geometry and keeps its material', () => {
+    const material = new THREE.MeshBasicMaterial()
+    const runtime = new THREE.Group()
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
+    mesh.userData = {
+      __surfaceImage: {
+        version: 1,
+        assetId: 'image',
+        targetNodeId: 'target',
+        attachmentMode: 'world',
+        widthMeters: 1,
+        heightMeters: 1,
+      },
+      __compiledStaticMesh: {
+        version: 3,
+        vertices: [-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0],
+        indices: [0, 1, 2],
+        uvs: [0, 0, 1, 0, 1, 1],
+      },
+    }
+    runtime.add(mesh)
+    const replaced = replaceSurfaceImageRuntimeGeometry(runtime, {
+      version: 3,
+      vertices: [-1, -0.5, 0, 1, -0.5, 0, 1, 0.5, 0],
+      indices: [0, 1, 2],
+      uvs: [0, 0, 1, 0, 1, 1],
+    })
+    expect(replaced).toBe(mesh)
+    expect(mesh.material).toBe(material)
+    expect(mesh.geometry.getAttribute('position').getX(0)).toBeCloseTo(-1)
+    material.dispose()
+    mesh.geometry.dispose()
   })
 
   it('keeps transparent Surface Image materials visible in Preview and SceneryViewer without changing normal node hiding', () => {

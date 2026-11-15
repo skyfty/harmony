@@ -245,6 +245,7 @@ import {
 import { syncProceduralCityRuntimeArtifact } from '@schema/components/definitions/proceduralCityComponent'
 import {
   COMPILED_STATIC_MESH_USERDATA_KEY,
+  createCompiledStaticMeshMetadataFromGeometry,
   createCompiledStaticMeshRuntimeMesh,
   extractCompiledStaticMeshMetadataFromUserData,
   type CompiledStaticMeshMetadata,
@@ -322,10 +323,14 @@ import {
   SURFACE_IMAGE_USERDATA_KEY,
   SURFACE_IMAGE_VERSION,
   cloneSurfaceImageMetadata,
+  collectSurfaceImageTargetMeshes,
   extractSurfaceImageMetadataFromUserData,
   normalizeSurfaceImageMetadata,
+  replaceSurfaceImageRuntimeGeometry,
   resolveSurfaceImageAttachmentParent,
+  resolveSurfaceImageDrape,
   type SurfaceImageAttachmentMode,
+  type SurfaceImageDrapeDiagnostics,
   type SurfaceImageMetadataV1,
 } from '@/utils/surfaceImageDecal'
 
@@ -10013,6 +10018,12 @@ const sceneNodeIndex: SceneNodeIndex = {
   parentById: new Map(),
 }
 
+export function resetSceneNodeIndexCache(): void {
+  sceneNodeIndex.structureVersion = -1
+  sceneNodeIndex.nodeById.clear()
+  sceneNodeIndex.parentById.clear()
+}
+
 function rebuildSceneNodeIndex(nodes: SceneNode[]) {
   sceneNodeIndex.nodeById.clear()
   sceneNodeIndex.parentById.clear()
@@ -10223,12 +10234,30 @@ function selectionContainsLandformNode(
   })
 }
 
+function selectionContainsSurfaceImageNode(
+  nodes: SceneNode[],
+  selectedIds: string[] | null | undefined,
+): boolean {
+  if (!Array.isArray(selectedIds) || selectedIds.length === 0) {
+    return false
+  }
+  return selectedIds.some((id) => {
+    if (typeof id !== 'string' || id.length === 0) {
+      return false
+    }
+    return Boolean(extractSurfaceImageMetadataFromUserData(findNodeById(nodes, id)?.userData))
+  })
+}
+
 function isTransformToolAllowedForSelection(
   nodes: SceneNode[],
   selectedIds: string[] | null | undefined,
   tool: EditorTool,
 ): boolean {
   if ((tool === 'rotate' || tool === 'scale') && selectionContainsLandformNode(nodes, selectedIds)) {
+    return false
+  }
+  if ((tool === 'rotate' || tool === 'scale') && selectionContainsSurfaceImageNode(nodes, selectedIds)) {
     return false
   }
   return true
@@ -18017,6 +18046,205 @@ export const useSceneStore = defineStore('scene', {
         }
       } finally {
         this.endHistoryCaptureSuppression()
+      }
+    },
+
+    moveSurfaceImageNode(payload: {
+      nodeId: string
+      worldPosition: THREE.Vector3
+    }): {
+      changed: boolean
+      reason: 'MOVED' | 'UNCHANGED' | 'NOT_SURFACE_IMAGE' | 'TARGET_UNAVAILABLE' | 'OUTSIDE_TARGET_SURFACE'
+      targetNodeId: string | null
+      attachmentMode: SurfaceImageAttachmentMode | null
+      worldPosition?: { x: number; y: number; z: number }
+      worldNormal?: { x: number; y: number; z: number }
+      diagnostics?: SurfaceImageDrapeDiagnostics
+    } {
+      const node = findNodeById(this.nodes, payload.nodeId)
+      const surfaceImage = extractSurfaceImageMetadataFromUserData(node?.userData)
+      if (!node || !surfaceImage) {
+        return {
+          changed: false,
+          reason: 'NOT_SURFACE_IMAGE',
+          targetNodeId: null,
+          attachmentMode: null,
+        }
+      }
+      if (
+        !Number.isFinite(payload.worldPosition.x)
+        || !Number.isFinite(payload.worldPosition.y)
+        || !Number.isFinite(payload.worldPosition.z)
+      ) {
+        return {
+          changed: false,
+          reason: 'OUTSIDE_TARGET_SURFACE',
+          targetNodeId: surfaceImage.targetNodeId,
+          attachmentMode: surfaceImage.attachmentMode,
+        }
+      }
+
+      const targetRoot = componentManager.getRuntimeObject(surfaceImage.targetNodeId)
+        ?? getRuntimeObject(surfaceImage.targetNodeId)
+      if (!targetRoot) {
+        return {
+          changed: false,
+          reason: 'TARGET_UNAVAILABLE',
+          targetNodeId: surfaceImage.targetNodeId,
+          attachmentMode: surfaceImage.attachmentMode,
+        }
+      }
+      const targetSceneWorldMatrix = computeWorldMatrixForNode(this.nodes, surfaceImage.targetNodeId)
+      if (targetSceneWorldMatrix) {
+        targetRoot.updateWorldMatrix(true, false)
+        const runtimeWorldMatrix = targetRoot.matrixWorld.clone()
+        const worldMatrixMatches = runtimeWorldMatrix.elements.every(
+          (value, index) => Math.abs(value - targetSceneWorldMatrix.elements[index]!) <= 1e-4,
+        )
+        if (!worldMatrixMatches) {
+          const desiredLocalMatrix = targetRoot.parent
+            ? targetRoot.parent.matrixWorld.clone().invert().multiply(targetSceneWorldMatrix)
+            : targetSceneWorldMatrix
+          const targetPosition = new THREE.Vector3()
+          const targetQuaternion = new THREE.Quaternion()
+          const targetScale = new THREE.Vector3()
+          desiredLocalMatrix.decompose(targetPosition, targetQuaternion, targetScale)
+          targetRoot.position.copy(targetPosition)
+          targetRoot.quaternion.copy(targetQuaternion)
+          targetRoot.scale.copy(targetScale)
+          targetRoot.updateMatrixWorld(true)
+        }
+      }
+      const targets = collectSurfaceImageTargetMeshes(targetRoot, targetRoot)
+      if (!targets.length) {
+        return {
+          changed: false,
+          reason: 'TARGET_UNAVAILABLE',
+          targetNodeId: surfaceImage.targetNodeId,
+          attachmentMode: surfaceImage.attachmentMode,
+        }
+      }
+
+      const currentWorldMatrix = computeWorldMatrixForNode(this.nodes, node.id)
+      if (!currentWorldMatrix) {
+        return {
+          changed: false,
+          reason: 'TARGET_UNAVAILABLE',
+          targetNodeId: surfaceImage.targetNodeId,
+          attachmentMode: surfaceImage.attachmentMode,
+        }
+      }
+      const currentWorldPosition = new THREE.Vector3()
+      const currentWorldQuaternion = new THREE.Quaternion()
+      const currentWorldScale = new THREE.Vector3()
+      currentWorldMatrix.decompose(currentWorldPosition, currentWorldQuaternion, currentWorldScale)
+      const preferredNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(currentWorldQuaternion)
+      const preferredRight = new THREE.Vector3(1, 0, 0).applyQuaternion(currentWorldQuaternion)
+      const diagnostics: SurfaceImageDrapeDiagnostics = {
+        targetMeshCount: targets.length,
+        skippedSkinnedOrMorph: 0,
+        skippedWithoutBvh: 0,
+        skippedWithoutClosestPoint: 0,
+        skippedOutsideDistance: 0,
+        skippedWithoutNormal: 0,
+        candidates: [],
+        attemptedGeometryBuilds: 0,
+      }
+      const drape = resolveSurfaceImageDrape({
+        targets,
+        candidateCenter: payload.worldPosition,
+        preferredNormal,
+        preferredRight,
+        widthMeters: surfaceImage.widthMeters,
+        heightMeters: surfaceImage.heightMeters,
+        diagnostics,
+      })
+      if (!drape) {
+        return {
+          changed: false,
+          reason: 'OUTSIDE_TARGET_SURFACE',
+          targetNodeId: surfaceImage.targetNodeId,
+          attachmentMode: surfaceImage.attachmentMode,
+          diagnostics,
+        }
+      }
+
+      const geometryMetadata = createCompiledStaticMeshMetadataFromGeometry(
+        drape.geometry,
+        node.name || 'Surface Image',
+      )
+      drape.geometry.dispose()
+      const currentGeometry = extractCompiledStaticMeshMetadataFromUserData(node.userData)
+      const parentMap = buildParentMap(this.nodes)
+      const parentId = parentMap.get(node.id) ?? null
+      const parentWorldMatrix = parentId ? computeWorldMatrixForNode(this.nodes, parentId) : new THREE.Matrix4()
+      if (!parentWorldMatrix) {
+        return {
+          changed: false,
+          reason: 'TARGET_UNAVAILABLE',
+          targetNodeId: surfaceImage.targetNodeId,
+          attachmentMode: surfaceImage.attachmentMode,
+        }
+      }
+      const desiredWorldMatrix = new THREE.Matrix4().compose(
+        drape.center,
+        drape.quaternion,
+        currentWorldScale,
+      )
+      const localMatrix = parentWorldMatrix.clone().invert().multiply(desiredWorldMatrix)
+      const localPosition = new THREE.Vector3()
+      const localQuaternion = new THREE.Quaternion()
+      const localScale = new THREE.Vector3()
+      localMatrix.decompose(localPosition, localQuaternion, localScale)
+      const localEuler = new THREE.Euler().setFromQuaternion(localQuaternion, 'XYZ')
+      const transformChanged = !vectorsEqual(node.position, toPlainVector(localPosition))
+        || !vectorsEqual(node.rotation, { x: localEuler.x, y: localEuler.y, z: localEuler.z })
+        || !vectorsEqual(node.scale, toPlainVector(localScale))
+      const geometryChanged = stableSerialize(currentGeometry) !== stableSerialize(geometryMetadata)
+      if (!transformChanged && !geometryChanged) {
+        return {
+          changed: false,
+          reason: 'UNCHANGED',
+          targetNodeId: surfaceImage.targetNodeId,
+          attachmentMode: surfaceImage.attachmentMode,
+          worldPosition: toPlainVector(drape.center),
+          worldNormal: toPlainVector(drape.normal),
+        }
+      }
+
+      const isActiveTransform = this.activeTransformNodeId === node.id
+      if (isActiveTransform && !this.transformSnapshotCaptured) {
+        this.captureHistorySnapshot()
+        this.transformSnapshotCaptured = true
+      } else if (!isActiveTransform) {
+        this.captureHistorySnapshot()
+      }
+
+      node.position = toPlainVector(localPosition)
+      node.rotation = {
+        x: localEuler.x,
+        y: localEuler.y,
+        z: localEuler.z,
+      }
+      node.scale = toPlainVector(localScale)
+      node.userData = {
+        ...(node.userData ?? {}),
+        [COMPILED_STATIC_MESH_USERDATA_KEY]: cloneCompiledStaticMeshMetadata(geometryMetadata),
+      }
+      const runtimeObject = getRuntimeObject(node.id)
+      if (runtimeObject) {
+        replaceSurfaceImageRuntimeGeometry(runtimeObject, geometryMetadata)
+      }
+      this.queueSceneNodePatch(node.id, ['transform', 'userData'])
+      commitSceneSnapshot(this)
+
+      return {
+        changed: true,
+        reason: 'MOVED',
+        targetNodeId: surfaceImage.targetNodeId,
+        attachmentMode: surfaceImage.attachmentMode,
+        worldPosition: toPlainVector(drape.center),
+        worldNormal: toPlainVector(drape.normal),
       }
     },
 

@@ -18,6 +18,9 @@ declare module '@/utils/transformControls.js' {
     dragging: boolean
     camera: Camera
     enabled: boolean
+    showX: boolean
+    showY: boolean
+    showZ: boolean
 
     constructor(camera: Camera, domElement?: HTMLElement | null)
     attach(object: Object3D): this

@@ -24,6 +24,7 @@ import {
   type useSceneStore,
 } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
+import { extractSurfaceImageMetadataFromUserData } from '@/utils/surfaceImageDecal'
 
 type SceneStore = ReturnType<typeof useSceneStore>
 
@@ -175,7 +176,7 @@ function toGeometrySnapshot(
   store: SceneStore,
   node: SceneNode,
 ): HarmonyGeometrySnapshot | undefined {
-  const runtimeObject = getRuntimeObject(node.id)
+  const runtimeObject = componentManager.getRuntimeObject(node.id) ?? getRuntimeObject(node.id)
   if (!runtimeObject) {
     return undefined
   }
@@ -219,6 +220,7 @@ function toNodeSummary(
     ? (node.materials ?? []).map(toMaterialSummary)
     : undefined
   const geometry = includeGeometry ? toGeometrySnapshot(store, node) : undefined
+  const surfaceImage = extractSurfaceImageMetadataFromUserData(node.userData)
 
   return {
     id: node.id,
@@ -239,6 +241,15 @@ function toNodeSummary(
     ...(componentSnapshots ? { components: componentSnapshots } : {}),
     ...(materials ? { materials } : {}),
     ...(geometry !== undefined ? { geometry } : {}),
+    ...(surfaceImage ? {
+      surfaceImage: {
+        assetId: surfaceImage.assetId,
+        targetNodeId: surfaceImage.targetNodeId,
+        attachmentMode: surfaceImage.attachmentMode,
+        widthMeters: surfaceImage.widthMeters,
+        heightMeters: surfaceImage.heightMeters,
+      },
+    } : {}),
   }
 }
 
@@ -268,7 +279,15 @@ export function queryScene(store: SceneStore, query: HarmonySceneQuery = {}): Ha
     if (query.componentType && !node.components?.[query.componentType]) return false
     if (text) {
       const componentTypes = Object.values(node.components ?? {}).map((component) => component?.type ?? '')
-      const haystack = [node.name, node.id, node.nodeType, ...componentTypes].join(' ').toLowerCase()
+      const surfaceImage = extractSurfaceImageMetadataFromUserData(node.userData)
+      const haystack = [
+        node.name,
+        node.id,
+        node.nodeType,
+        surfaceImage?.assetId,
+        surfaceImage?.targetNodeId,
+        ...componentTypes,
+      ].join(' ').toLowerCase()
       if (!haystack.includes(text)) return false
     }
     return true

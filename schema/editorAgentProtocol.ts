@@ -166,6 +166,14 @@ export interface HarmonySceneQuery {
   cursor?: string
 }
 
+export interface HarmonySurfaceImageSummary {
+  assetId: string
+  targetNodeId: string
+  attachmentMode: 'target' | 'ancestor' | 'world'
+  widthMeters: number
+  heightMeters: number
+}
+
 export interface HarmonyNodeSummary {
   id: string
   parentId: string | null
@@ -182,6 +190,7 @@ export interface HarmonyNodeSummary {
   components?: HarmonyComponentSnapshot[]
   materials?: HarmonyMaterialSummary[]
   geometry?: HarmonyGeometrySnapshot
+  surfaceImage?: HarmonySurfaceImageSummary
 }
 
 export interface HarmonyBounds {
@@ -293,6 +302,11 @@ export type HarmonyOperation =
       locked?: boolean
       local?: HarmonyWorldTransform
       world?: HarmonyWorldTransform
+    }
+  | {
+      op: 'surface_image.move'
+      nodeId: string
+      worldPosition: Vector3Like
     }
   | { op: 'node.delete'; nodeId: string }
   | { op: 'node.duplicate'; nodeIds: string[]; select?: boolean }
@@ -508,6 +522,7 @@ export const HARMONY_AGENT_TOOLS = {
 export const HARMONY_AGENT_OPERATION_NAMES = [
   'node.create',
   'node.update',
+  'surface_image.move',
   'node.delete',
   'node.duplicate',
   'node.move',

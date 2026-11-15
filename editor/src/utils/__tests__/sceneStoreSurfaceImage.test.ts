@@ -9,6 +9,8 @@ import {
 import {
   clearRuntimeObjectRegistry,
   getRuntimeObject,
+  registerRuntimeObject,
+  resetSceneNodeIndexCache,
   useSceneStore,
 } from '@/stores/sceneStore'
 import {
@@ -40,6 +42,7 @@ function makeNode(payload: Partial<SceneNode> & Pick<SceneNode, 'id' | 'name' | 
 
 beforeEach(() => {
   setActivePinia(createPinia())
+  resetSceneNodeIndexCache()
 })
 
 describe('scene store surface images', () => {
@@ -219,5 +222,131 @@ describe('scene store surface images', () => {
     expect(pastedSurface!.scale.x).toBeCloseTo(originalTransform.scale.x, 8)
     expect(pastedSurface!.scale.y).toBeCloseTo(originalTransform.scale.y, 8)
     expect(pastedSurface!.scale.z).toBeCloseTo(originalTransform.scale.z, 8)
+  })
+
+  it('moves a Surface Image and rebuilds its geometry in one undoable operation', async () => {
+    const store = useSceneStore()
+    store.currentSceneId = 'scene-store-surface-move'
+    store.currentSceneMeta = {
+      name: 'Scene Store Surface Move',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      projectId: 'scene-store-test',
+    }
+    store.isSceneReady = true
+    const targetRoot = new THREE.Group()
+    const targetMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(4, 4),
+      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
+    )
+    targetRoot.add(targetMesh)
+    registerRuntimeObject('move-target', targetRoot)
+    store.nodes = [
+      makeNode({
+        id: 'move-target',
+        name: 'Move Target',
+        nodeType: 'Group',
+        sourceAssetId: 'source-model',
+      }),
+    ]
+    store.bumpSceneGraphStructureVersion()
+
+    const created = store.createSurfaceImageNode({
+      assetId: 'move-image',
+      targetNodeId: 'move-target',
+      geometry,
+      worldCenter: new THREE.Vector3(0, 0, 0.002),
+      worldQuaternion: new THREE.Quaternion(),
+      widthMeters: 1,
+      heightMeters: 0.5,
+    })
+    expect(created).not.toBeNull()
+    const initialPosition = { ...created!.node.position }
+    const beforeGeometry = extractCompiledStaticMeshMetadataFromUserData(created!.node.userData)
+    const beforeRevision = store.sceneRevision
+    const beforeUndoCount = store.undoStack.length
+
+    const moved = store.moveSurfaceImageNode({
+      nodeId: created!.node.id,
+      worldPosition: new THREE.Vector3(0.45, 0.25, 0.01),
+    })
+
+    expect(moved).toMatchObject({
+      changed: true,
+      reason: 'MOVED',
+      targetNodeId: 'move-target',
+    })
+    expect(moved.worldPosition?.z).toBeCloseTo(0, 3)
+    const movedNode = store.getNodeById(created!.node.id)!
+    expect(movedNode.position.x).toBeCloseTo(0.45, 2)
+    expect(movedNode.position.y).toBeCloseTo(0.25, 2)
+    expect(extractCompiledStaticMeshMetadataFromUserData(movedNode.userData)).not.toEqual(beforeGeometry)
+    expect(store.sceneRevision).toBe(beforeRevision + 1)
+    expect(store.undoStack).toHaveLength(beforeUndoCount + 1)
+
+    await store.undo()
+    const restored = store.getNodeById(created!.node.id)!
+    expect(restored.position).toEqual(initialPosition)
+    expect(extractCompiledStaticMeshMetadataFromUserData(restored.userData)).toEqual(beforeGeometry)
+    clearRuntimeObjectRegistry()
+  })
+
+  it('does not change history or revision when a Surface Image leaves its target surface', () => {
+    const store = useSceneStore()
+    store.currentSceneId = 'scene-store-surface-invalid'
+    store.currentSceneMeta = {
+      name: 'Scene Store Surface Invalid',
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      projectId: 'scene-store-test',
+    }
+    store.isSceneReady = true
+    const targetRoot = new THREE.Group()
+    targetRoot.add(new THREE.Mesh(
+      new THREE.PlaneGeometry(2, 2),
+      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
+    ))
+    registerRuntimeObject('limited-target', targetRoot)
+    store.nodes = [
+      makeNode({
+        id: 'limited-target',
+        name: 'Limited Target',
+        nodeType: 'Group',
+        sourceAssetId: 'source-model',
+      }),
+    ]
+    store.bumpSceneGraphStructureVersion()
+    const created = store.createSurfaceImageNode({
+      assetId: 'limited-image',
+      targetNodeId: 'limited-target',
+      geometry,
+      worldCenter: new THREE.Vector3(0, 0, 0.002),
+      worldQuaternion: new THREE.Quaternion(),
+      widthMeters: 1,
+      heightMeters: 0.5,
+    })!
+    const beforeRevision = store.sceneRevision
+    const beforeUndoCount = store.undoStack.length
+    const beforeNode = JSON.parse(JSON.stringify(store.getNodeById(created.node.id)))
+
+    const moved = store.moveSurfaceImageNode({
+      nodeId: created.node.id,
+      worldPosition: new THREE.Vector3(20, 20, 20),
+    })
+
+    expect(moved).toMatchObject({
+      changed: false,
+      reason: 'OUTSIDE_TARGET_SURFACE',
+    })
+    expect(store.sceneRevision).toBe(beforeRevision)
+    expect(store.undoStack).toHaveLength(beforeUndoCount)
+    const unchangedNode = store.getNodeById(created.node.id)!
+    expect(unchangedNode.position).toEqual(beforeNode.position)
+    expect(unchangedNode.rotation.x).toBeCloseTo(beforeNode.rotation.x, 8)
+    expect(unchangedNode.rotation.y).toBeCloseTo(beforeNode.rotation.y, 8)
+    expect(unchangedNode.rotation.z).toBeCloseTo(beforeNode.rotation.z, 8)
+    expect(unchangedNode.scale).toEqual(beforeNode.scale)
+    expect(unchangedNode.userData).toEqual(beforeNode.userData)
+    clearRuntimeObjectRegistry()
   })
 })
