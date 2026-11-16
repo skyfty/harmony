@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSceneStore } from '@/stores/sceneStore'
+import type { ProjectAsset } from '@/types/project-asset'
 
 describe('Agent scene transactions', () => {
   beforeEach(() => {
@@ -79,6 +80,39 @@ describe('Agent scene transactions', () => {
     })
     expect(store.viewportSettings.cameraProjection).toBe('orthographic')
     expect(store.viewportSettings.cameraControlMode).toBe('orbit')
+    vi.clearAllTimers()
+  })
+
+  it('tracks a local asset import as one undoable catalog revision', async () => {
+    const store = useSceneStore()
+    const before = store.snapshotAssetCatalog()
+    const initialRevision = store.sceneRevision
+    const initialUndoCount = store.undoStack.length
+    const asset: ProjectAsset = {
+      id: 'sha256-agent-asset',
+      name: 'Agent texture',
+      type: 'image',
+      downloadUrl: 'agent-texture.png',
+      previewColor: '#ffffff',
+      thumbnail: null,
+      description: 'Agent texture',
+      extension: 'png',
+      gleaned: true,
+      source: { type: 'local' },
+    }
+
+    store.registerAsset(asset, { autoSave: false })
+    store.commitAssetCatalogImport(before)
+
+    expect(store.findAssetInCatalog(asset.id)?.name).toBe('Agent texture')
+    expect(store.sceneRevision).toBe(initialRevision + 1)
+    expect(store.undoStack).toHaveLength(initialUndoCount + 1)
+
+    await store.undo()
+    expect(store.findAssetInCatalog(asset.id)).toBeNull()
+
+    await store.redo()
+    expect(store.findAssetInCatalog(asset.id)?.name).toBe('Agent texture')
     vi.clearAllTimers()
   })
 })

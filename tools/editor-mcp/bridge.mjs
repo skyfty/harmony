@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import {
   HARMONY_AGENT_DEFAULT_PORT,
+  HARMONY_AGENT_MAX_ASSET_IMPORT_REQUEST_BYTES,
   HARMONY_AGENT_MAX_ITEM_BYTES,
   HARMONY_AGENT_PROTOCOL_VERSION,
 } from '../../schema/dist/editorAgentProtocol.js'
@@ -16,6 +17,7 @@ const WRITE_METHODS = new Set([
   'scene.save',
   'camera.set',
   'tool.set_active',
+  'asset.import_local',
 ])
 const REQUEST_TIMEOUT_MS = 120_000
 
@@ -143,7 +145,7 @@ export class EditorBridge {
     let totalBytes = 0
     for await (const chunk of request) {
       totalBytes += chunk.length
-      if (totalBytes > HARMONY_AGENT_MAX_ITEM_BYTES) {
+      if (totalBytes > HARMONY_AGENT_MAX_ASSET_IMPORT_REQUEST_BYTES) {
         response.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' })
         response.end(JSON.stringify({ error: errorPayload('BAD_REQUEST', 'Request body is too large') }))
         return
@@ -151,12 +153,21 @@ export class EditorBridge {
       chunks.push(chunk)
     }
 
+    const requestBodyBytes = Buffer.concat(chunks)
     let payload
     try {
-      payload = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      payload = JSON.parse(requestBodyBytes.toString('utf8'))
     } catch {
       response.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify({ error: errorPayload('BAD_REQUEST', 'Malformed JSON request') }))
+      return
+    }
+    if (
+      payload?.method !== 'asset.import_local'
+      && requestBodyBytes.byteLength > HARMONY_AGENT_MAX_ITEM_BYTES
+    ) {
+      response.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ error: errorPayload('BAD_REQUEST', 'Request body is too large') }))
       return
     }
 

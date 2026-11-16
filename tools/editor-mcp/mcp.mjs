@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { readFile, realpath, stat } from 'node:fs/promises'
+import { extname, isAbsolute, basename } from 'node:path'
 import { z } from 'zod'
 import {
+  HARMONY_AGENT_MAX_ASSET_IMPORT_FILE_BYTES,
+  HARMONY_AGENT_MAX_ASSET_IMPORT_FILES,
+  HARMONY_AGENT_MAX_ASSET_IMPORT_TOTAL_BYTES,
   HARMONY_AGENT_OPERATING_POLICY,
   HARMONY_AGENT_PROTOCOL_VERSION,
   HARMONY_AGENT_TOOLS,
@@ -34,6 +39,94 @@ function errorResult(error) {
       text: JSON.stringify(normalized, null, 2),
     }],
   }
+}
+
+function inferAssetMimeType(filename) {
+  switch (extname(filename).slice(1).toLowerCase()) {
+    case 'png': return 'image/png'
+    case 'jpg':
+    case 'jpeg': return 'image/jpeg'
+    case 'webp': return 'image/webp'
+    case 'bmp': return 'image/bmp'
+    case 'gif': return 'image/gif'
+    case 'ktx2': return 'image/ktx2'
+    case 'glb': return 'model/gltf-binary'
+    case 'gltf': return 'model/gltf+json'
+    case 'fbx': return 'application/octet-stream'
+    case 'json': return 'application/json'
+    case 'zip': return 'application/zip'
+    default: return 'application/octet-stream'
+  }
+}
+
+function inferAssetType(filename, requestedType = 'auto') {
+  if (requestedType && requestedType !== 'auto') return requestedType
+  switch (extname(filename).slice(1).toLowerCase()) {
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'webp':
+    case 'bmp':
+    case 'gif':
+      return 'image'
+    case 'ktx2':
+      return 'texture'
+    case 'glb':
+    case 'gltf':
+    case 'fbx':
+      return 'model'
+    default:
+      return 'file'
+  }
+}
+
+async function readLocalAssetItems(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error('items must contain at least one local file')
+  }
+  if (items.length > HARMONY_AGENT_MAX_ASSET_IMPORT_FILES) {
+    throw new Error(`At most ${HARMONY_AGENT_MAX_ASSET_IMPORT_FILES} files may be imported at once`)
+  }
+
+  let totalBytes = 0
+  const payloadItems = []
+  for (const [index, item] of items.entries()) {
+    if (!item || typeof item.path !== 'string' || !isAbsolute(item.path)) {
+      throw new Error(`items[${index}].path must be an absolute local file path`)
+    }
+    const resolvedPath = await realpath(item.path)
+    const fileStats = await stat(resolvedPath)
+    if (!fileStats.isFile()) {
+      throw new Error(`items[${index}].path does not point to a regular file`)
+    }
+    if (fileStats.size <= 0) {
+      throw new Error(`items[${index}].path is empty`)
+    }
+    if (fileStats.size > HARMONY_AGENT_MAX_ASSET_IMPORT_FILE_BYTES) {
+      throw new Error(`items[${index}] exceeds the per-file size limit`)
+    }
+    totalBytes += fileStats.size
+    if (totalBytes > HARMONY_AGENT_MAX_ASSET_IMPORT_TOTAL_BYTES) {
+      throw new Error('The selected files exceed the asset import batch size limit')
+    }
+    const sourceName = item.name?.trim() || basename(resolvedPath)
+    const sourceExtension = extname(resolvedPath)
+    const requestedExtension = extname(sourceName)
+    const name = requestedExtension || !sourceExtension
+      ? sourceName
+      : `${sourceName}${sourceExtension}`
+    const type = inferAssetType(name, item.type)
+    const buffer = await readFile(resolvedPath)
+    payloadItems.push({
+      path: resolvedPath,
+      name,
+      type,
+      mimeType: inferAssetMimeType(name),
+      size: buffer.byteLength,
+      base64: buffer.toString('base64'),
+    })
+  }
+  return payloadItems
 }
 
 async function executeTool(action) {
@@ -147,6 +240,38 @@ async function main() {
       annotations: { readOnlyHint: true },
     },
     async (args) => executeTool(() => call('catalog.search', args)),
+  )
+
+  server.registerTool(
+    HARMONY_AGENT_TOOLS.assetImportLocal,
+    {
+      title: 'Import local assets into Harmony AssetsPanel',
+      description: 'Import absolute local file paths into the current scene AssetsPanel library. Files are cached locally and become available to materials and scene nodes without uploading to the server.',
+      inputSchema: z.object({
+        expectedRevision: z.number().int().nonnegative().optional(),
+        directoryId: z.string().min(1).optional(),
+        select: z.boolean().default(true),
+        items: z.array(z.object({
+          path: z.string().min(1),
+          name: z.string().min(1).optional(),
+          type: z.enum(['auto', 'image', 'texture', 'model', 'mesh', 'prefab', 'file']).default('auto'),
+        })).min(1).max(HARMONY_AGENT_MAX_ASSET_IMPORT_FILES),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async ({ items, expectedRevision, directoryId, select }) => executeTool(async () => {
+      const payloadItems = await readLocalAssetItems(items)
+      return call('asset.import_local', {
+        items: payloadItems,
+        expectedRevision,
+        directoryId,
+        select,
+      })
+    }),
   )
 
   server.registerTool(

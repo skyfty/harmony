@@ -114,6 +114,7 @@ import {
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type {
   SceneHistoryEntry,
+  SceneAssetCatalogSnapshot,
   SceneHistoryNodeLocation,
   SceneHistoryNodeStructureOp,
   SceneHistoryTransformSnapshot,
@@ -8801,6 +8802,32 @@ function createContentHistoryEntry(store: SceneState): SceneHistoryEntry {
   }
 }
 
+function createAssetCatalogSnapshot(store: SceneState): SceneAssetCatalogSnapshot {
+  return {
+    assetCatalog: cloneAssetCatalog(store.assetCatalog),
+    assetManifest: cloneAssetManifest(store.assetManifest),
+    assetRegistry: cloneSceneAssetRegistry(store.assetRegistry),
+    activeDirectoryId: store.activeDirectoryId,
+    selectedAssetId: store.selectedAssetId,
+  }
+}
+
+function restoreAssetCatalogSnapshot(store: SceneState, snapshot: SceneAssetCatalogSnapshot): void {
+  store.assetCatalog = cloneAssetCatalog(snapshot.assetCatalog)
+  store.assetManifest = cloneAssetManifest(snapshot.assetManifest)
+  store.assetRegistry = cloneSceneAssetRegistry(snapshot.assetRegistry)
+  store.activeDirectoryId = snapshot.activeDirectoryId
+  store.selectedAssetId = snapshot.selectedAssetId
+  const nextTree = buildSceneProjectTree(store.assetManifest, store.assetCatalog, store.packageDirectoryCache)
+  store.projectTree = nextTree
+  if (store.activeDirectoryId && !findDirectory(nextTree, store.activeDirectoryId)) {
+    store.activeDirectoryId = defaultDirectoryId
+  }
+  if (store.selectedAssetId && !findAssetInTree(nextTree, store.selectedAssetId)) {
+    store.selectedAssetId = null
+  }
+}
+
 function resolveGroundSettingsFromNodes(nodes: SceneNode[], fallback: GroundSettings): GroundSettings {
   const base = cloneGroundSettings(fallback)
   const groundNode = findGroundNode(nodes)
@@ -9071,6 +9098,11 @@ function captureRedoEntryFor(store: SceneState, entry: SceneHistoryEntry): Scene
   switch (entry.kind) {
     case 'content-snapshot':
       return createContentHistoryEntry(store)
+    case 'asset-catalog':
+      return {
+        kind: 'asset-catalog',
+        snapshot: createAssetCatalogSnapshot(store),
+      }
     case 'batch': {
       const captured: SceneHistoryEntry[] = []
       entry.entries.forEach((child) => {
@@ -9152,6 +9184,10 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
       replaceSceneNodes(store, cloneSceneNodes(entry.nodes))
       store.materials = cloneSceneMaterials(entry.materials)
       store.groundSettings = cloneGroundSettings(entry.groundSettings)
+      break
+    }
+    case 'asset-catalog': {
+      restoreAssetCatalogSnapshot(store, entry.snapshot)
       break
     }
     case 'batch': {
@@ -11040,6 +11076,19 @@ export const useSceneStore = defineStore('scene', {
       }
       const entry = createContentHistoryEntry(this)
       this.appendUndoEntry(entry, options)
+    },
+    snapshotAssetCatalog(): SceneAssetCatalogSnapshot {
+      return createAssetCatalogSnapshot(this)
+    },
+    restoreAssetCatalogSnapshot(snapshot: SceneAssetCatalogSnapshot): void {
+      restoreAssetCatalogSnapshot(this, snapshot)
+    },
+    commitAssetCatalogImport(snapshot: SceneAssetCatalogSnapshot): void {
+      this.captureHistoryEntry({
+        kind: 'asset-catalog',
+        snapshot,
+      })
+      commitSceneSnapshot(this, { updateNodes: false })
     },
     captureCoalescedMaterialHistorySnapshot(
       nodeId: string,
@@ -15055,6 +15104,8 @@ export const useSceneStore = defineStore('scene', {
         previewColor?: string
         gleaned?: boolean
         isEditorOnly?: boolean
+        categoryId?: string
+        autoSave?: boolean
         commitOptions?: { updateNodes?: boolean }
       },
     ): Promise<{ asset: ProjectAsset; isNew: boolean }> {
@@ -15096,9 +15147,10 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const registered = this.registerAsset(projectAsset, {
-        categoryId: determineAssetCategoryId(projectAsset),
+        categoryId: metadata.categoryId?.trim() || determineAssetCategoryId(projectAsset),
         source: { type: 'local' },
         isEditorOnly: metadata.isEditorOnly,
+        autoSave: metadata.autoSave,
         commitOptions: metadata.commitOptions ?? { updateNodes: false },
       })
 

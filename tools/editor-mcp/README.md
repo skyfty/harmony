@@ -67,6 +67,7 @@ Read and verification:
 Generic writes:
 
 - `harmony_apply_operations`
+- `harmony_asset_import_local`
 - `harmony_history`
 - `harmony_save_scene`
 
@@ -80,6 +81,8 @@ Domain writes:
 - `harmony_house_rig_edit`
 
 Component schemas report whether a component uses generic or domain editing. Generic writes reject protected complex fields with `FIELD_REQUIRES_DOMAIN_TOOL`.
+
+`harmony_asset_import_local` imports absolute local file paths into the current scene AssetsPanel catalog. It supports images, textures, models, and generic files, reuses the Editor's local cache and thumbnail pipeline, de-duplicates by content hash, and records a successful batch as one undoable asset-catalog revision. The limits are 20 files, 16 MB per file, and 32 MB decoded per batch. This imports scene-local assets only; it does not upload them to the resource server.
 
 `harmony_camera_control` can read the live Three.js camera or set position, target, FOV, distance, orbit angles, projection, navigation mode, and named presets. `harmony_tool_control` reads and activates the same transform and viewport build tools exposed by the Editor UI.
 
@@ -176,4 +179,4 @@ pnpm --dir D:\harmony\tools mcp:editor:smoke
 - JSON-RPC requests require the token stored under `%USERPROFILE%\.harmony-editor-agent\token`.
 - Only one Editor session and one Agent write lease are active at a time.
 - The Editor badge can pause Agent writes without disconnecting read access.
-- Project/scene lifecycle, asset upload, and asset generation are not exposed.
+- Project/scene lifecycle, server asset upload, and asset generation are not exposed.

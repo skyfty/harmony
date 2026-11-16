@@ -1,0 +1,16 @@
+(let* (
+  (image (car (gimp-image-new 1024 192 RGB)))
+  (background (car (gimp-layer-new image "Sign background" 1024 192 RGB-IMAGE 100 LAYER-MODE-NORMAL)))
+  (text-layer (car (gimp-text-layer-new image "游客服务中心" 2451 112 PIXELS)))
+)
+  (gimp-image-insert-layer image background 0 -1)
+  (gimp-context-set-foreground '(18 43 39))
+  (gimp-drawable-fill background FILL-FOREGROUND)
+  (gimp-image-insert-layer image text-layer 0 -1)
+  (gimp-text-layer-set-color text-layer '(218 174 84))
+  (gimp-layer-set-offsets text-layer 42 18)
+  (gimp-image-flatten image)
+  (gimp-file-save RUN-NONINTERACTIVE image
+    "C:/Users/Administrator/.codex/visualizations/2026/11/15/01a1dea7-f8b7-7983-a5f4-a6cc6fe029c1/rc-hall-textures/gimp-sign-test.png")
+  (gimp-image-delete image)
+)

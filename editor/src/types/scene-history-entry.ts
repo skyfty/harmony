@@ -1,5 +1,12 @@
-import type { SceneNode, GroundSettings, Vector3Like } from '@schema/core'
+import type {
+  AssetManifest,
+  GroundSettings,
+  SceneAssetRegistryEntry,
+  SceneNode,
+  Vector3Like,
+} from '@schema/core'
 import type { SceneMaterial } from '@/types/material'
+import type { ProjectAsset } from '@/types/project-asset'
 
 export type SceneHistoryTransformSnapshot = {
   id: string
@@ -33,8 +40,16 @@ export type SceneHistoryNodeStructureOp =
       nodeId: string
     }
 
+export type SceneAssetCatalogSnapshot = {
+  assetCatalog: Record<string, ProjectAsset[]>
+  assetManifest: AssetManifest | null
+  assetRegistry: Record<string, SceneAssetRegistryEntry>
+  activeDirectoryId: string | null
+  selectedAssetId: string | null
+}
+
 // New history model: content-only undo/redo entries.
-// Explicitly excludes: selection, camera, viewport, panels, assets, planning, environment/shadows.
+// Explicitly excludes: selection, camera, viewport, panels, planning, environment/shadows.
 export type SceneHistoryEntry =
   | {
       kind: 'content-snapshot'
@@ -73,4 +88,8 @@ export type SceneHistoryEntry =
       kind: 'node-dynamic-mesh'
       nodeId: string
       dynamicMesh: unknown
+    }
+  | {
+      kind: 'asset-catalog'
+      snapshot: SceneAssetCatalogSnapshot
     }

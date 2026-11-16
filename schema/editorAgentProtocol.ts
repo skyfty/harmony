@@ -11,6 +11,10 @@ export const HARMONY_AGENT_PROTOCOL_VERSION = 1 as const
 export const HARMONY_AGENT_DEFAULT_PORT = 8790
 export const HARMONY_AGENT_MAX_OPERATIONS = 100
 export const HARMONY_AGENT_MAX_ITEM_BYTES = 1_048_576
+export const HARMONY_AGENT_MAX_ASSET_IMPORT_FILES = 20
+export const HARMONY_AGENT_MAX_ASSET_IMPORT_FILE_BYTES = 16 * 1024 * 1024
+export const HARMONY_AGENT_MAX_ASSET_IMPORT_TOTAL_BYTES = 32 * 1024 * 1024
+export const HARMONY_AGENT_MAX_ASSET_IMPORT_REQUEST_BYTES = 48 * 1024 * 1024
 export const HARMONY_AGENT_OPERATING_POLICY =
   'For every Harmony scene-data read or modification, use the Harmony Editor MCP semantic tools first. '
   + 'Do not replace MCP operations with mouse or coordinate automation, arbitrary JavaScript, direct scene-file edits, or raw JSON Patch. '
@@ -75,6 +79,7 @@ export interface HarmonyAgentCapabilities {
   screenshots: boolean
   maxOperations: number
   maxRequestBytes: number
+  maxAssetImportBytes: number
 }
 
 export interface HarmonyEditorSessionHello {
@@ -260,6 +265,52 @@ export interface HarmonyAssetSummary {
 export interface HarmonyAssetSearchResult {
   assets: HarmonyAssetSummary[]
   nextCursor: string | null
+}
+
+export type HarmonyLocalAssetImportType =
+  | 'auto'
+  | 'image'
+  | 'texture'
+  | 'model'
+  | 'mesh'
+  | 'prefab'
+  | 'file'
+
+export interface HarmonyLocalAssetImportItem {
+  path: string
+  name?: string
+  type?: HarmonyLocalAssetImportType
+  mimeType?: string
+  base64?: string
+  size?: number
+}
+
+export interface HarmonyAssetImportLocalRequest {
+  items: HarmonyLocalAssetImportItem[]
+  expectedRevision?: number
+  directoryId?: string
+  select?: boolean
+}
+
+export interface HarmonyAssetImportLocalItemResult {
+  path: string
+  assetId: string
+  name: string
+  type: string
+  extension: string | null
+  size: number
+  isNew: boolean
+  imageWidth: number | null
+  imageHeight: number | null
+}
+
+export interface HarmonyAssetImportLocalResult {
+  beforeRevision: number
+  afterRevision: number
+  saved: boolean
+  importedCount: number
+  reusedCount: number
+  items: HarmonyAssetImportLocalItemResult[]
 }
 
 export interface HarmonyApplyRequest {
@@ -497,6 +548,7 @@ export const HARMONY_AGENT_METHODS = {
   cameraSet: 'camera.set',
   toolGet: 'tool.get',
   toolSet: 'tool.set_active',
+  assetImportLocal: 'asset.import_local',
 } as const
 
 export const HARMONY_AGENT_TOOLS = {
@@ -517,6 +569,7 @@ export const HARMONY_AGENT_TOOLS = {
   terrain: 'harmony_terrain_edit',
   actor: 'harmony_actor_edit',
   houseRig: 'harmony_house_rig_edit',
+  assetImportLocal: 'harmony_asset_import_local',
 } as const
 
 export const HARMONY_AGENT_OPERATION_NAMES = [

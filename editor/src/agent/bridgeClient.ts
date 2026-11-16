@@ -4,6 +4,7 @@ import type {
   HarmonyAgentCapabilities,
   HarmonyAgentDomain,
   HarmonyAgentError,
+  HarmonyAssetImportLocalRequest,
   HarmonyCameraSetRequest,
   HarmonyEditorSessionHello,
   HarmonyHistoryRequest,
@@ -19,10 +20,12 @@ import {
   HARMONY_AGENT_PROTOCOL_VERSION,
   HARMONY_AGENT_TOOLS,
   HARMONY_AGENT_MAX_ITEM_BYTES,
+  HARMONY_AGENT_MAX_ASSET_IMPORT_REQUEST_BYTES,
   HARMONY_AGENT_MAX_OPERATIONS,
 } from '@schema/editorAgentProtocol'
 import { useSceneStore } from '@/stores/sceneStore'
 import { applySceneOperations } from '@/agent/operations'
+import { importLocalAssetsFromAgent } from '@/agent/assetImportOperations'
 import { AgentBridgeError, asAgentError } from '@/agent/errors'
 import { queryScene, searchCatalog } from '@/agent/query'
 import {
@@ -115,6 +118,7 @@ function buildCapabilities(): HarmonyAgentCapabilities {
     screenshots: Boolean(screenshotProvider),
     maxOperations: HARMONY_AGENT_MAX_OPERATIONS,
     maxRequestBytes: HARMONY_AGENT_MAX_ITEM_BYTES,
+    maxAssetImportBytes: HARMONY_AGENT_MAX_ASSET_IMPORT_REQUEST_BYTES,
   }
 }
 
@@ -268,6 +272,15 @@ async function executeRequest(
         captureScreenshot: screenshotProvider ?? undefined,
       })
       return { ...result, sessionId: getSessionId() }
+    }
+    case 'asset.import_local': {
+      if (state.paused) {
+        throw new AgentBridgeError('WRITE_LEASE_DENIED', 'Agent writes are paused in the editor')
+      }
+      return importLocalAssetsFromAgent(
+        store,
+        params as unknown as HarmonyAssetImportLocalRequest,
+      )
     }
     case 'history.apply': {
       if (state.paused) {

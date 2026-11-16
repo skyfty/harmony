@@ -1,4 +1,7 @@
 import { fileURLToPath } from 'node:url'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
@@ -39,6 +42,7 @@ try {
     'harmony_terrain_edit',
     'harmony_actor_edit',
     'harmony_house_rig_edit',
+    'harmony_asset_import_local',
   ]
   for (const name of expected) {
     if (!names.has(name)) {
@@ -127,6 +131,9 @@ try {
     let screenshotBytes = 0
     let cameraChanged = false
     let toolChanged = false
+    let assetImportRevision = null
+    let assetImportUndoneRevision = null
+    let smokeAssetDirectory = null
     const originalCamera = cameraPayload
     const originalToolState = toolStatePayload
     try {
@@ -199,10 +206,50 @@ try {
         },
       })
 
+      smokeAssetDirectory = await mkdtemp(join(tmpdir(), 'harmony-mcp-asset-'))
+      const smokeAssetPath = join(smokeAssetDirectory, 'agent-smoke-texture.png')
+      await writeFile(
+        smokeAssetPath,
+        Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=',
+          'base64',
+        ),
+      )
+      const assetImport = await client.callTool({
+        name: 'harmony_asset_import_local',
+        arguments: {
+          expectedRevision: presetResultPayload.afterRevision,
+          items: [{ path: smokeAssetPath, name: 'Agent Smoke Texture', type: 'image' }],
+        },
+      })
+      const assetImportText = assetImport.content?.find((entry) => entry.type === 'text')?.text ?? ''
+      const assetImportPayload = JSON.parse(assetImportText)
+      if (
+        assetImportPayload.importedCount !== 1
+        || !assetImportPayload.items?.[0]?.assetId
+        || assetImportPayload.afterRevision <= assetImportPayload.beforeRevision
+      ) {
+        throw new Error(`Local asset import failed: ${assetImportText}`)
+      }
+      assetImportRevision = assetImportPayload.afterRevision
+      const assetUndo = await client.callTool({
+        name: 'harmony_history',
+        arguments: {
+          action: 'undo',
+          expectedRevision: assetImportRevision,
+        },
+      })
+      const assetUndoText = assetUndo.content?.find((entry) => entry.type === 'text')?.text ?? ''
+      const assetUndoPayload = JSON.parse(assetUndoText)
+      if (!assetUndoPayload.changed) {
+        throw new Error(`Local asset undo failed: ${assetUndoText}`)
+      }
+      assetImportUndoneRevision = assetUndoPayload.afterRevision
+
       const apply = await client.callTool({
         name: 'harmony_apply_operations',
         arguments: {
-          expectedRevision: presetResultPayload.afterRevision,
+          expectedRevision: assetImportUndoneRevision,
           label: 'MCP bridge smoke test',
           operations: [{
             op: 'node.create',
@@ -277,8 +324,19 @@ try {
         presetRevision: presetResultPayload.afterRevision,
         activeTransformTool: nextTool,
         buildToolActivated: 'wall',
+        assetImportRevision,
+        assetImportUndoneRevision,
       }
     } finally {
+      if (assetImportRevision !== null && assetImportUndoneRevision === null) {
+        await client.callTool({
+          name: 'harmony_history',
+          arguments: {
+            action: 'undo',
+            expectedRevision: assetImportRevision,
+          },
+        }).catch(() => undefined)
+      }
       if (nodeId && undoneRevision === null && appliedRevision !== null) {
         await client.callTool({
           name: 'harmony_history',
@@ -320,6 +378,9 @@ try {
             controlMode: originalCamera.controlMode,
           },
         }).catch(() => undefined)
+      }
+      if (smokeAssetDirectory) {
+        await rm(smokeAssetDirectory, { recursive: true, force: true }).catch(() => undefined)
       }
       await client.callTool({ name: 'harmony_save_scene', arguments: {} }).catch(() => undefined)
     }
