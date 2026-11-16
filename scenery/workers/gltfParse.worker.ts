@@ -3,7 +3,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import {
   collectDescriptorBuffers,
   serializeParsedGltfScene,
-} from '@harmony/schema/gltfParseSerialize'
+} from '@harmony/schema-source/gltfParseSerialize'
 
 const scope = self as unknown as {
   addEventListener: (type: 'message', listener: (event: MessageEvent) => void) => void

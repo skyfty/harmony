@@ -1,12 +1,17 @@
 import { fileURLToPath, URL } from 'node:url';
 import { createRequire } from 'node:module';
-import { defineConfig } from 'vite';
+import { defineConfig, type PluginOption } from 'vite';
 import uni from '@dcloudio/vite-plugin-uni';
 import bundleOptimizer from '@uni-ku/bundle-optimizer';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import { emitMpWorkerAssetPlugin, emitMpWorkerBundlePlugin, toCustomChunkPlugin } from '@harmony/tools/vite';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
+import {
+  createScenerySchemaRuntimeVitePlugin,
+  isScenerySchemaAggregatorVirtualId,
+  isScenerySchemaRuntimeVirtualId,
+} from '../scripts/scenery-schema-runtime-vite';
 
 // https://vitejs.dev/config/
 const uniPlatform = process.env.UNI_PLATFORM;
@@ -25,6 +30,8 @@ const enableSceneryCannonDebugger = process.env.NODE_ENV !== 'production';
 const sceneOptimizerExcludes = [
   '@harmony/schema',
   '@harmony/schema/',
+  '@harmony/schema-source',
+  '@harmony/schema-source/',
   'three',
   'three/examples',
   'three-mesh-bvh',
@@ -37,6 +44,13 @@ const sceneOptimizerExcludes = [
   '@vladkrutenyuk/cannon-es-debugger-pro',
   '@minisheep/three-platform-adapter',
 ];
+const scenerySchemaSubpackage = 'pages/scenery-schema';
+const scenerySchemaChunk = `${scenerySchemaSubpackage}/chunks/schema`;
+const scenerySchemaRuntimeChunk = 'pages/scenery/common/schemaRuntimeFacade';
+const sharedThreeChunk = 'common/vendor-three';
+const sharedThreeExamplesChunk = 'common/vendor-three-examples';
+const sharedThreeAdapterChunk = 'common/vendor-three-adapter';
+const sharedPhysicsCoreChunk = 'common/physics-core';
 
 const rawVueRuntimeAlias = isMp
   ? '@dcloudio/uni-mp-vue/dist-x/vue.runtime.esm.js'
@@ -88,19 +102,31 @@ function resolveAssetFileName(assetInfo: { name?: string }): string | undefined 
 
 function resolveSceneryChunkGroup(normalizedId: string): string | undefined {
   if (normalizedId.includes('/node_modules/three/build/')) {
-    return 'pages/scenery/chunks/three';
+    return sharedThreeChunk;
   }
   if (normalizedId.includes('/node_modules/three/examples/jsm/')) {
-    return 'pages/scenery/chunks/three-examples';
+    return sharedThreeExamplesChunk;
   }
   if (normalizedId.includes('/node_modules/three-mesh-bvh/')) {
-    return 'pages/scenery/chunks/three';
+    return sharedThreeChunk;
   }
   if (normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')) {
-    return 'pages/scenery/chunks/three-adapter';
+    return sharedThreeAdapterChunk;
   }
   if (normalizedId.includes('/src/pages/scenery/schema/')) {
-    return 'pages/scenery/chunks/schema';
+    return scenerySchemaChunk;
+  }
+  if (
+    normalizedId.includes('/schema/')
+    && !normalizedId.includes('/schema/dist/physicsBackendBridge.js')
+    && !normalizedId.includes('/schema/dist/physicsBackendTypes.js')
+    && !normalizedId.includes('/schema/dist/physicsBodySync.js')
+    && !normalizedId.includes('/schema/dist/physicsBridgeVehicleInputSync.js')
+    && !normalizedId.includes('/schema/dist/physicsRuntimeBridge.js')
+    && !normalizedId.includes('/schema/dist/physicsEngine.js')
+    && !normalizedId.includes('/schema/dist/physicsShapeResolvers.js')
+  ) {
+    return scenerySchemaChunk;
   }
   return undefined;
 }
@@ -111,6 +137,12 @@ function resolveManualChunk(id: string): string | undefined {
   }
 
   const normalizedId = id.replaceAll('\\', '/');
+  if (isScenerySchemaAggregatorVirtualId(normalizedId)) {
+    return scenerySchemaChunk;
+  }
+  if (isScenerySchemaRuntimeVirtualId(normalizedId)) {
+    return scenerySchemaRuntimeChunk;
+  }
   if (normalizedId.includes('/.vite/deps/')) {
     if (
       normalizedId.includes('schema')
@@ -134,7 +166,7 @@ function resolveManualChunk(id: string): string | undefined {
         return 'pages/physics-cannon/common/vendor';
       }
       if (normalizedId.includes('schema')) {
-        return 'pages/scenery/chunks/schema';
+        return scenerySchemaChunk;
       }
       if (
         normalizedId.includes('three/examples/jsm')
@@ -143,7 +175,7 @@ function resolveManualChunk(id: string): string | undefined {
         || normalizedId.includes('three')
         || (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro'))
       ) {
-        return resolveSceneryChunkGroup(normalizedId) ?? 'pages/scenery/chunks/three';
+        return resolveSceneryChunkGroup(normalizedId) ?? sharedThreeChunk;
       }
       return resolveSceneryChunkGroup(normalizedId) ?? 'pages/scenery/common/vendor';
     }
@@ -165,6 +197,13 @@ function resolveManualChunk(id: string): string | undefined {
     return sceneryChunkGroup;
   }
 
+  if (normalizedId.includes('/src/pages/scenery/physics-core/')) {
+    return sharedPhysicsCoreChunk;
+  }
+  if (normalizedId.includes('/src/pages/scenery/physics-bridge/')) {
+    return 'common/physics-bridge';
+  }
+
   if (
     normalizedId.includes('/src/pages/scenery/three/')
     || normalizedId.includes('/src/pages/scenery/three-mesh-bvh/')
@@ -174,7 +213,12 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/three-mesh-bvh/')
     || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
   ) {
-    return 'pages/scenery/chunks/three';
+    return (
+      normalizedId.includes('/src/pages/scenery/three-platform-adapter/')
+      || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
+    )
+      ? sharedThreeAdapterChunk
+      : sharedThreeChunk;
   }
 
   if (
@@ -261,6 +305,10 @@ export default defineConfig({
       '@minisheep/three-platform-adapter',
     ],
     alias: [
+      { find: /^@harmony\/schema-source$/, replacement: `${schemaSourcePath}/index.ts` },
+      { find: /^@harmony\/schema-source\/(.*)$/, replacement: `${schemaSourcePath}/$1` },
+      { find: /^@harmony\/schema$/, replacement: 'virtual:harmony-scenery-schema-runtime' },
+      { find: /^@harmony\/schema\/(.*)$/, replacement: 'virtual:harmony-scenery-schema-runtime' },
       ...(useWorkspaceSourceForH5
         ? [
             { find: /^@harmony\/scenery$/, replacement: scenerySourcePath },
@@ -344,9 +392,10 @@ export default defineConfig({
     },
     hmr: true,
   },
-  plugins: [
+  plugins: ([
     glsl(),
     getUniPlugin(),
+    createScenerySchemaRuntimeVitePlugin({ projectRoot: fileURLToPath(new URL('.', import.meta.url)) }),
     bundleOptimizer({
       enable: isMp
         ? {
@@ -366,23 +415,29 @@ export default defineConfig({
     }),
     toCustomChunkPlugin({
       manualChunks: {
-        'pages/scenery/chunks/three': [
+        'common/vendor-three': [
           '**/pages/scenery/three/**',
           '**/pages/scenery/three-mesh-bvh/**',
           '**/three/build/**',
           '**/three-mesh-bvh/**',
         ],
-        'pages/scenery/chunks/three-examples': [
+        'common/vendor-three-examples': [
           '**/three/examples/jsm/**',
         ],
-        'pages/scenery/chunks/three-adapter': [
+        'common/vendor-three-adapter': [
           '**/pages/scenery/three-platform-adapter/**',
           '**/@minisheep/three-platform-adapter/**',
         ],
-        // The schema directory is a junction to the schema package, so this chunk
-        // has to stay inside the scenery subpackage: WeChat rejects a synchronous
-        // require that crosses a subpackage boundary.
-        'pages/scenery/chunks/schema': [
+        'common/physics-core': [
+          '**/pages/scenery/physics-core/**',
+        ],
+        'common/physics-bridge': [
+          '**/pages/scenery/physics-bridge/**',
+        ],
+        // The schema runtime is loaded with require.async after the scenery page
+        // is opened. The shared three runtime stays in the main package so both
+        // subpackages can depend on it without a synchronous sibling require.
+        'pages/scenery-schema/chunks/schema': [
           '**/pages/scenery/schema/**',
         ],
         'pages/physics-ammo/common/vendor': [
@@ -405,9 +460,7 @@ export default defineConfig({
         ],
       },
     }),
-    visualizer({
-      emitFile: true,
-    }),
+    ...(isMp ? [] : [visualizer({ emitFile: true })]),
     // Keep adapter-emitted workers/wasms inside the scenery package boundary.
     threePlatformAdapter({
       assetsOutput: {
@@ -452,10 +505,10 @@ export default defineConfig({
         }
       },
     },
-  ],
+  ] as PluginOption[]),
 });
 
 function getUniPlugin() {
   const maybeModule = uni as unknown as { default?: () => unknown };
-  return typeof maybeModule.default === 'function' ? maybeModule.default() : uni;
+  return (typeof maybeModule.default === 'function' ? maybeModule.default() : uni) as PluginOption;
 }

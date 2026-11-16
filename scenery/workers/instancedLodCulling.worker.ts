@@ -4,7 +4,7 @@ import {
 	type InstancedLodCullingResponse,
 	type InstancedLodCullingSyncRequest,
 	type InstancedLodStaticCandidateSnapshot,
-} from '@harmony/schema/core'
+} from '@harmony/schema-source/core'
 
 declare const worker: unknown;
 

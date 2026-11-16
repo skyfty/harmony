@@ -37,6 +37,7 @@ import { createPunchRecord, getPunchProgress, listControllableAssets } from './u
 import { getDownloadCdnBaseUrl } from './utils/http';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue?async';
 import { createSceneryPhysicsBridge } from './createSceneryPhysicsBridge';
+import { ensureSchemaRuntime } from './uni_modules/scenery/common/schemaRuntime';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
@@ -171,31 +172,37 @@ onLoad((query: Record<string, unknown> | undefined) => {
   pageReady.value = false;
   loadError.value = '';
   void (async () => {
-    const record = (query ?? {}) as Record<string, unknown>;
-    projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
-    packageUrl.value = decodeQueryValue(record.packageUrl);
-    packageCacheKey.value = decodeQueryValue(record.packageCacheKey);
-    sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
-    sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
-    selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string' ? record.vehicleIdentifier : 'car1';
-    resolvedPhysicsEngine.value = resolvePhysicsEngineFromQuery(record.physicsEngine);
-    actorResolutionMode.value = record.actorMode === 'player' ? 'player' : 'local-debug';
+    try {
+      const record = (query ?? {}) as Record<string, unknown>;
+      projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
+      packageUrl.value = decodeQueryValue(record.packageUrl);
+      packageCacheKey.value = decodeQueryValue(record.packageCacheKey);
+      sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
+      sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
+      selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string' ? record.vehicleIdentifier : 'car1';
+      resolvedPhysicsEngine.value = resolvePhysicsEngineFromQuery(record.physicsEngine);
+      actorResolutionMode.value = record.actorMode === 'player' ? 'player' : 'local-debug';
 
-    if (actorResolutionMode.value === 'player') {
-      await loadControllableAssets();
+      if (actorResolutionMode.value === 'player') {
+        await loadControllableAssets();
+        if (loadError.value) {
+          return;
+        }
+      } else {
+        controllableAssets.value = [];
+      }
+
+      await loadPunchProgress();
       if (loadError.value) {
         return;
       }
-    } else {
-      controllableAssets.value = [];
-    }
 
-    await loadPunchProgress();
-    if (loadError.value) {
-      return;
+      await ensureSchemaRuntime();
+      pageReady.value = true;
+    } catch (error) {
+      loadError.value = '场景运行环境加载失败，请检查网络后重试。';
+      console.error('[SceneryPage] Failed to initialize scene runtime', error);
     }
-
-    pageReady.value = true;
   })();
 });
 

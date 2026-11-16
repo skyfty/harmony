@@ -42,6 +42,7 @@
     },
     "mp-weixin" : {
         "appid" : "",
+        "libVersion" : "2.11.2",
         "optimization" : {
             "subPackages" : true
         },

@@ -41,7 +41,8 @@
         }
     },
     "mp-weixin" : {
-        "appid" : "",
+        "appid" : "wxbee5b017bdf26cc1",
+        "libVersion" : "2.11.2",
         "__usePrivacyCheck__" : true,
         "permission" : {
             "scope.userLocation" : {

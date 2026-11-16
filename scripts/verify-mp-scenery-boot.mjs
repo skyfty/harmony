@@ -8,15 +8,14 @@
  * misleading `Component is not found in path ".../SceneryViewer"`.
  *
  * Checks performed:
- *   1. packaging: the scenery runtime is self contained inside the scenery subpackage
- *      (schema chunk included) and the main package stays inside the 2 MB budget;
- *      subpackage sizes are reported against the 2 MB upload / 4 MB preview budgets;
+ *   1. packaging: every main / subpackage stays inside the 2 MB upload budget, including
+ *      the asynchronously loaded schema runtime;
  *   2. module graph: no synchronous `require()` crosses a subpackage boundary. WeChat
  *      only lets a subpackage require the main package, so an edge such as
  *      `pages/scenery -> pages/scenery-schema` fails at runtime with
  *      `module 'pages/scenery-schema/...' is not defined`;
- *   3. boot: the shipped app entry evaluates, then the schema chunk and
- *      `SceneryViewer` load and register themselves.
+ *   3. boot: the shipped app entry evaluates, the schema runtime loads through its
+ *      async facade, then `SceneryViewer` loads and registers itself.
  *
  * Usage:
  *   node scripts/verify-mp-scenery-boot.mjs [appRoot] [--out <dir>]
@@ -28,13 +27,6 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const MAX_PACKAGE_BYTES = 2 * 1024 * 1024;
-/**
- * `bigPackageSizeSupport` (written by the uni-app mp-weixin compiler into
- * project.config.json) raises the preview / real-device-debugging ceiling to 4 MB per
- * package. The scenery runtime carries three.js plus the schema package, so its
- * subpackage is only reported against that ceiling; the main package still has to stay
- * inside the 2 MB upload budget because it is downloaded on every launch.
- */
 const MAX_PREVIEW_PACKAGE_BYTES = 4 * 1024 * 1024;
 /**
  * Synchronous cross-subpackage requires that already ship and can only be reached
@@ -47,14 +39,15 @@ const ALLOWED_CROSS_PACKAGE_REQUIRES = new Set([
   'pages/physics-cannon -> pages/scenery',
 ]);
 /**
- * The canonical location is inside the scenery subpackage. The legacy path is kept as a
- * candidate so a regression reports the real problem (`pages/scenery` requiring a second
- * subpackage) instead of a bare "chunk not found".
+ * The canonical schema runtime is a sibling subpackage loaded through require.async.
+ * The legacy path is kept as a candidate so a regression reports the real problem
+ * instead of a bare "chunk not found".
  */
 const SCHEMA_CHUNK_CANDIDATES = [
-  'pages/scenery/chunks/schema.js',
   'pages/scenery-schema/chunks/schema.js',
+  'pages/scenery/chunks/schema.js',
 ];
+const SCHEMA_RUNTIME_ENTRY = 'pages/scenery/common/schemaRuntimeFacade.js';
 const MESHOPT_WASM_FILE = 'pages/scenery/wasms/meshopt_decoder.wasm.br';
 const MESHOPT_ASSET_KEY = 'wasm:meshopt_decoder.wasm';
 
@@ -196,6 +189,7 @@ function checkPackaging(outDir, appJson, schemaChunk) {
       fail(`main package over the 2 MB upload limit: ${label}`);
       continue;
     }
+    fail(`${owner} is over the 2 MB upload limit: ${label}`);
     info(`[warn] package size ${label} (over the 2 MB upload limit)`);
     if (size > MAX_PREVIEW_PACKAGE_BYTES) {
       info(
@@ -224,6 +218,16 @@ function checkPackaging(outDir, appJson, schemaChunk) {
     if (!existsSync(join(outDir, root))) {
       info(`[warn] declared subpackage root "${root}" has no files in this build`);
     }
+  }
+
+  if (existsSync(join(outDir, 'stats.html'))) {
+    fail('stats.html must not be emitted into a mini-program upload package');
+  } else {
+    info('[ok] mini-program package does not contain stats.html');
+  }
+
+  if (!existsSync(join(outDir, SCHEMA_RUNTIME_ENTRY))) {
+    fail(`scenery schema runtime entry is missing: ${SCHEMA_RUNTIME_ENTRY}`);
   }
 }
 
@@ -408,7 +412,7 @@ function createMiniRuntime(outDir, { stubThreeGlobals = true } = {}) {
  * evaluated exactly the way WeChat evaluates it: the app-entry polyfills (including
  * the shipped `TextDecoder`) are installed before the scenery subpackage runs.
  */
-function runBootPhase(outDir, schemaChunk) {
+async function runBootPhase(outDir, schemaChunk) {
   const runtime = createMiniRuntime(outDir, { stubThreeGlobals: false });
   try {
     runtime.load('app.js');
@@ -418,11 +422,20 @@ function runBootPhase(outDir, schemaChunk) {
   info('[ok] app entry evaluates with the shipped polyfills');
 
   try {
-    runtime.load(schemaChunk.relativePath);
+    const schemaRuntime = runtime.load(SCHEMA_RUNTIME_ENTRY);
+    if (typeof schemaRuntime.ensureSchemaRuntime !== 'function') {
+      throw new Error('schema runtime facade does not export ensureSchemaRuntime');
+    }
+    await schemaRuntime.ensureSchemaRuntime();
+    const firstAssetCache = schemaRuntime.AssetCache;
+    await schemaRuntime.ensureSchemaRuntime();
+    if (typeof firstAssetCache !== 'function' || schemaRuntime.AssetCache !== firstAssetCache) {
+      throw new Error('schema runtime did not preserve a stable initialized export');
+    }
   } catch (error) {
-    throw new Error(`scenery schema chunk still fails to load: ${error?.message}`);
+    throw new Error(`scenery schema runtime still fails to load: ${error?.message}`);
   }
-  info(`[ok] scenery schema chunk loads (${schemaChunk.relativePath})`);
+  info(`[ok] scenery schema runtime loads asynchronously (${schemaChunk.relativePath})`);
 
   try {
     runtime.load('pages/scenery/uni_modules/scenery/components/SceneryViewer.js');
@@ -435,7 +448,7 @@ function runBootPhase(outDir, schemaChunk) {
   info('[ok] SceneryViewer module graph loads and registers the component');
 }
 
-function main() {
+async function main() {
   const options = parseArgs(process.argv.slice(2));
   const appRoot = resolve(options.appRoot ?? process.cwd());
   const outDir = resolveOutputDir(appRoot, options.outDir);
@@ -487,7 +500,7 @@ if (phaseArgIndex !== -1) {
   const schemaChunk = resolveSchemaChunk(outDir);
   try {
     if (phase === 'boot') {
-      runBootPhase(outDir, schemaChunk);
+      await runBootPhase(outDir, schemaChunk);
     } else {
       throw new Error(`unknown phase "${phase}"`);
     }
@@ -498,4 +511,7 @@ if (phaseArgIndex !== -1) {
   process.exit(0);
 }
 
-main();
+main().catch((error) => {
+  console.error(error?.stack ?? error?.message ?? String(error));
+  process.exit(1);
+});

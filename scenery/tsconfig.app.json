@@ -32,6 +32,8 @@
       "@schema": ["../schema/index.ts"],
       "@harmony/schema": ["../schema/index.ts"],
       "@harmony/schema/*": ["../schema/*"],
+      "@harmony/schema-source": ["../schema/index.ts"],
+      "@harmony/schema-source/*": ["../schema/*"],
       "@harmony/physics-core": ["../physics-core/src/index.ts"],
       "@harmony/physics-core/*": ["../physics-core/src/*"],
       "@harmony/physics-ammo": ["../physics-ammo/src/index.ts"],

@@ -50,7 +50,7 @@
       <view class="scenery-fallback__card">
         <text class="scenery-fallback__title">{{ scenicTitle || '景区导览' }}</text>
         <text class="scenery-fallback__message">
-          {{ sceneryLoadError || '当前场景暂时无法预览，请返回后重试。其他景区信息和账户功能仍可正常使用。' }}
+          {{ sceneryFallbackMessage }}
         </text>
         <button class="scenery-fallback__button" @tap="handleBack">返回景区详情</button>
       </view>
@@ -80,6 +80,7 @@ import { listUserSkinSelections } from '@/api/mini/skins';
 import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
 import { ensureMiniCapability } from '@/platform/runtime';
 import type { ExternalSkin } from '@harmony/schema/core';
+import { ensureSchemaRuntime } from './uni_modules/scenery/common/schemaRuntime';
 
 defineOptions({
   name: 'SceneryPage',
@@ -113,16 +114,20 @@ const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const multiuserIdentity = ref<{ userId: string; displayName?: string | null } | null>(null);
 const resolvedPhysicsEngine = ref<'ammo' | 'cannon' | 'auto' | undefined>(undefined);
 const sceneryEnabled = ref(false);
+const sceneryRuntimeLoading = ref(false);
 const sceneryLoadError = ref('');
-const isH5 = ref(false);
 const latestWatchSnapshotShareImageUrl = ref('');
 
-// #ifdef H5
-isH5.value = true;
-// #endif
-
 const hasRenderableSceneInput = computed(() => Boolean(projectId.value.trim() || packageUrl.value.trim()));
-const sceneryVisible = computed(() => hasRenderableSceneInput.value && !sceneryLoadError.value && (isH5.value || sceneryEnabled.value));
+const sceneryVisible = computed(() => (
+  hasRenderableSceneInput.value && !sceneryLoadError.value && sceneryEnabled.value
+));
+const sceneryFallbackMessage = computed(() => (
+  sceneryLoadError.value
+  || (sceneryRuntimeLoading.value
+    ? '正在准备场景运行环境，请稍候…'
+    : '当前场景暂时无法预览，请返回后重试。其他景区信息和账户功能仍可正常使用。')
+));
 
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
@@ -424,6 +429,37 @@ function resolvePhysicsEngineFromQuery(value: unknown): 'ammo' | 'cannon' | 'aut
   return undefined;
 }
 
+let sceneryRuntimeLoadToken = 0;
+
+async function initializeSceneryRuntime(): Promise<void> {
+  const loadToken = ++sceneryRuntimeLoadToken;
+  sceneryRuntimeLoading.value = true;
+  sceneryLoadError.value = '';
+  try {
+    // #ifdef MP-WEIXIN
+    const enabled = await ensureMiniCapability('scenery');
+    if (!enabled) {
+      return;
+    }
+    // #endif
+    await ensureSchemaRuntime();
+    if (loadToken === sceneryRuntimeLoadToken) {
+      sceneryEnabled.value = true;
+    }
+  } catch (error) {
+    if (loadToken !== sceneryRuntimeLoadToken) {
+      return;
+    }
+    sceneryEnabled.value = false;
+    sceneryLoadError.value = '场景运行环境加载失败，请检查网络后重新进入。';
+    console.error('[SceneryPage] Failed to initialize scene runtime', error);
+  } finally {
+    if (loadToken === sceneryRuntimeLoadToken) {
+      sceneryRuntimeLoading.value = false;
+    }
+  }
+}
+
 onLoad((query: Record<string, unknown> | undefined) => {
   syncBackButtonTop();
   sceneryLoadError.value = '';
@@ -450,16 +486,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   }).catch(() => {
     selectedSkins.value = [];
   });
-  // #ifdef MP-WEIXIN
-  void ensureMiniCapability('scenery').then((enabled) => {
-    sceneryEnabled.value = enabled;
-  }).catch(() => {
-    sceneryEnabled.value = false;
-  });
-  // #endif
-  // #ifdef H5
-  sceneryEnabled.value = true;
-  // #endif
+  void initializeSceneryRuntime();
 
   const record: Record<string, unknown> = query ?? {};
   const qrQuery = typeof record.q === 'string' ? extractQueryFromQrLink(record.q) : {};
@@ -562,6 +589,7 @@ onShow(() => {
 });
 
 onUnload(() => {
+  sceneryRuntimeLoadToken += 1;
   const dwellMs = enterAt.value > 0 ? Math.max(Date.now() - enterAt.value, 0) : 0;
   clearSceneryShareContext();
   latestWatchSnapshotShareImageUrl.value = '';

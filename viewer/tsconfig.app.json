@@ -33,6 +33,8 @@
       "@schema/*": ["../schema/*"],
       "@harmony/schema": ["./src/pages/scenery/schema/index.ts"],
       "@harmony/schema/*": ["./src/pages/scenery/schema/*"],
+      "@harmony/schema-source": ["../schema/index.ts"],
+      "@harmony/schema-source/*": ["../schema/*"],
       "@harmony/utils": ["./src/pages/scenery/utils/index.ts"],
       "@harmony/scenery-storage": ["./src/pages/scenery/runtime/sceneStorageProxy.ts"],
       "@harmony/utils/http": ["./src/pages/scenery/utils/http.ts"],
