@@ -281,6 +281,11 @@ import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick 
 import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
+import {
+	createPunchCelebrationRuntime,
+	type PunchCelebrationTarget,
+} from '@schema/particles/punchCelebrationRuntime'
+import { shouldPlayPunchCelebration } from '@schema/particles/punchCelebration'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { createProceduralLandscapeDemOrthoResolver } from '@/utils/demOrthoTextureLoader'
 import {
@@ -2897,6 +2902,30 @@ const VEHICLE_TRAVEL_EPSILON = 1e-5
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+const punchCelebrationRuntime = createPunchCelebrationRuntime()
+function resolvePunchCelebrationTarget(): PunchCelebrationTarget | null {
+	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+		const object = nodeObjectMap.get(vehicleDriveState.nodeId)
+		if (object) {
+			return {
+				nodeId: vehicleDriveState.nodeId,
+				object,
+			}
+		}
+	}
+	const characterNodeId = resolveDefaultControlledCharacterNodeId()
+	if (!characterNodeId) {
+		return null
+	}
+	const bindingNodeId = resolveCharacterControllerBindingNodeId(characterNodeId)
+	const object = nodeObjectMap.get(bindingNodeId ?? characterNodeId) ?? nodeObjectMap.get(characterNodeId)
+	return object
+		? {
+				nodeId: characterNodeId,
+				object,
+			}
+		: null
+}
 const behaviorObserverContextScratch = new THREE.Vector3()
 function resolveScenePreviewBehaviorObserverContext(): BehaviorObserverContext {
 	const candidates: BehaviorObserverCandidate[] = []
@@ -3686,6 +3715,15 @@ function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds
 function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }>): void {
 	if (!punchNodeIds.has(event.nodeId)) {
 		return
+	}
+	const wasAlreadyPunched = punchedNodeIds.value.has(event.nodeId)
+	if (shouldPlayPunchCelebration(event.celebrationEffectId, event.celebrationOnlyFirst, wasAlreadyPunched)) {
+		if (!punchCelebrationRuntime.play(event.celebrationEffectId, scene, resolvePunchCelebrationTarget)) {
+			console.warn('[ScenePreview] Punch celebration target is unavailable', {
+				nodeId: event.nodeId,
+				effectId: event.celebrationEffectId,
+			})
+		}
 	}
 	const sceneId = resolveActivePunchSceneId()
 	browserStoredPunchedNodeIds.value = sceneId
@@ -13398,6 +13436,7 @@ function startAnimationLoop() {
 		syncCameraFarToSceneFog(activeCamera)
 		updateBillboardInstanceCameraWorldPosition(activeCamera.position)
 		updatePunchBadgeOverlayEntries(activeCamera, delta)
+		punchCelebrationRuntime.tick(delta, { cameraWorldPosition: activeCamera.position })
 		syncSceneSignboards(currentScene, activeCamera)
 		tickSignboardBillboardMotion((typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000)
 		updateInfoBoardOverlayPlacement(activeCamera)
@@ -13424,6 +13463,7 @@ function stopAnimationLoop() {
 }
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
+	punchCelebrationRuntime.clear()
 	resetExternalAnimationAssetCache()
 	resetSkinRuntime()
 	clearBehaviorDelayTimers()

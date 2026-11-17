@@ -33,9 +33,15 @@ import type {
   SwitchControlNodeBehaviorParams,
   RestoreControlNodeBehaviorParams,
   CouponBehaviorParams,
+  PunchBehaviorParams,
 } from '../core'
 import { normalizeControlNodeTransitionPreset, normalizeWatchRestorePositionSource } from '../core'
-import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
+import {
+  behaviorMapToList,
+  cloneBehaviorList,
+  ensureBehaviorParams,
+  normalizePunchBehaviorParams,
+} from './definitions'
 
 export type BehaviorTriggerContext = {
   pointerEvent?: PointerEvent | MouseEvent | TouchEvent
@@ -381,6 +387,8 @@ export type BehaviorRuntimeEvent =
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
+      celebrationEffectId: PunchBehaviorParams['celebrationEffectId']
+      celebrationOnlyFirst: boolean
       punchedAt: string
     }
   | {
@@ -1282,6 +1290,8 @@ function createPunchEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
 ): Extract<BehaviorRuntimeEvent, { type: 'punch' }> {
+  const params = behavior.script.params as Partial<PunchBehaviorParams> | undefined
+  const celebration = normalizePunchBehaviorParams(params)
   return {
     type: 'punch',
     nodeId: state.nodeId,
@@ -1289,6 +1299,8 @@ function createPunchEvent(
     sequenceId: state.id,
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
+    celebrationEffectId: celebration.celebrationEffectId,
+    celebrationOnlyFirst: celebration.celebrationOnlyFirst,
     punchedAt: new Date().toISOString(),
   }
 }

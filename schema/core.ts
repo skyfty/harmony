@@ -1204,8 +1204,14 @@ export interface ReleaseCharacterBehaviorParams {
   // no configuration required
 }
 
+export type PunchCelebrationEffectId = 'none' | 'confettiBurst'
+
 export interface PunchBehaviorParams {
-  // no configuration required
+  /** Particle celebration played when the punch behavior fires. */
+  celebrationEffectId: PunchCelebrationEffectId
+
+  /** Suppress celebration after this punch node has already been marked as punched. */
+  celebrationOnlyFirst: boolean
 }
 
 export interface CouponBehaviorParams {

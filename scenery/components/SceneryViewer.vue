@@ -1068,6 +1068,11 @@ import {
   applyParticleRuntimeCommand,
   setParticleTextureResolver,
 } from '@harmony/schema/components/definitions/particleSystemComponent';
+import {
+  createPunchCelebrationRuntime,
+  type PunchCelebrationTarget,
+} from '@harmony/schema/particles/punchCelebrationRuntime';
+import { shouldPlayPunchCelebration } from '@harmony/schema/particles/punchCelebration';
 import { warpGateComponentDefinition } from '@harmony/schema/components/definitions/warpGateComponent';
 import { setGroundTextureSourceResolver } from '@harmony/schema/groundTextureSourceResolver';
 import {
@@ -5427,6 +5432,30 @@ type BehaviorSoundInstance = {
 const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>();
 const nodeAnimationRuntime = new SceneAnimationRuntimeManager();
 const pendingParticleRuntimeCommands: Array<{ nodeId: string; command: { type: 'play' | 'stop' | 'burst'; componentId: string | null; emitterId?: string | null; count?: number; restart?: boolean; softStop?: boolean } }> = [];
+const punchCelebrationRuntime = createPunchCelebrationRuntime();
+function resolvePunchCelebrationTarget(): PunchCelebrationTarget | null {
+  if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
+    const object = nodeObjectMap.get(vehicleDriveNodeId.value);
+    if (object) {
+      return {
+        nodeId: vehicleDriveNodeId.value,
+        object,
+      };
+    }
+  }
+  const characterNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!characterNodeId) {
+    return null;
+  }
+  const bindingNodeId = resolveCharacterControllerBindingNodeId(characterNodeId);
+  const object = nodeObjectMap.get(bindingNodeId ?? characterNodeId) ?? nodeObjectMap.get(characterNodeId);
+  return object
+    ? {
+        nodeId: characterNodeId,
+        object,
+      }
+    : null;
+}
 
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>();
 const behaviorProximityState = new Map<string, BehaviorProximityState>();
@@ -18783,6 +18812,7 @@ function updateBehaviorProximity(): void {
 }
 
 function resetEffectRuntimeTickers(): void {
+  punchCelebrationRuntime.clear();
 }
 
 function refreshEffectRuntimeTickers(): void {
@@ -23868,6 +23898,19 @@ async function handleExitSceneEvent(): Promise<void> {
 }
 
 function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }>): void {
+  const wasAlreadyPunched = punchedNodeIds.value.has(event.nodeId);
+  if (shouldPlayPunchCelebration(event.celebrationEffectId, event.celebrationOnlyFirst, wasAlreadyPunched)) {
+    if (!punchCelebrationRuntime.play(
+      event.celebrationEffectId,
+      renderContext?.scene ?? null,
+      resolvePunchCelebrationTarget,
+    )) {
+      console.warn('[SceneryViewer] Punch celebration target is unavailable', {
+        nodeId: event.nodeId,
+        effectId: event.celebrationEffectId,
+      });
+    }
+  }
   if (punchNodeIds.has(event.nodeId)) {
     const sceneId = resolveActivePunchSceneId();
     browserStoredPunchedNodeIds.value = sceneId
@@ -26555,6 +26598,9 @@ function startRenderLoop(
             previewComponentManager.update(deltaSeconds);
           }
           flushParticleRuntimeCommands();
+          punchCelebrationRuntime.tick(deltaSeconds, {
+            cameraWorldPosition: camera.position,
+          });
           if (countWaterRuntimeHandles() > 0) {
             waterRuntime.update(deltaSeconds, { renderer, scene, camera });
           }

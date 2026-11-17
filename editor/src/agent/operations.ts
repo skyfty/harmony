@@ -10,6 +10,7 @@ import {
   type SceneNode,
   type SceneNodeComponentState,
   type SceneNodeMaterial,
+  type SceneBehaviorScriptBinding,
   type Vector3Like,
 } from '@schema/core'
 import {
@@ -47,6 +48,7 @@ import {
 } from '@schema/editorAgentProtocol'
 import { createTextureSettings } from '@schema/material'
 import { PARTICLE_COMPONENT_MAX_BURST } from '@schema/particles/particleSchema'
+import { ensureBehaviorParams } from '@schema/behaviors/definitions'
 import { getRuntimeObject, resolveSceneNodeWorldMatrix, useSceneStore } from '@/stores/sceneStore'
 import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
 import { AgentBridgeError } from '@/agent/errors'
@@ -927,6 +929,33 @@ async function executeDomainOperation(
               'VALIDATION_FAILED',
               'Each behavior step requires id, action, sequenceId, and script',
             )
+          }
+          if (step.script.type === 'punch') {
+            const params = step.script.params
+            if (params !== undefined && params !== null && !isRecord(params)) {
+              throw new AgentBridgeError('VALIDATION_FAILED', 'Punch params must be an object')
+            }
+            if (isRecord(params)) {
+              const effectId = params.celebrationEffectId
+              if (
+                effectId !== undefined
+                && effectId !== null
+                && effectId !== 'none'
+                && effectId !== 'confettiBurst'
+              ) {
+                throw new AgentBridgeError(
+                  'VALIDATION_FAILED',
+                  'Punch celebrationEffectId must be "none" or "confettiBurst"',
+                )
+              }
+              if ('celebrationOnlyFirst' in params && typeof params.celebrationOnlyFirst !== 'boolean') {
+                throw new AgentBridgeError(
+                  'VALIDATION_FAILED',
+                  'Punch celebrationOnlyFirst must be a boolean',
+                )
+              }
+            }
+            step.script = ensureBehaviorParams(step.script as SceneBehaviorScriptBinding)
           }
         }
         const added = store.addNodeComponent(nodeId, 'behavior')

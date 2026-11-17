@@ -121,6 +121,15 @@ const DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_END_METERS = 8
 const DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_SUPPRESSED_GAIN = 0.15
 const DEFAULT_PLAY_SOUND_DISTANCE_RESPONSE_CURVE_POWER = 1
 
+export function normalizePunchBehaviorParams(
+  value: Partial<PunchBehaviorParams> | null | undefined,
+): PunchBehaviorParams {
+  return {
+    celebrationEffectId: value?.celebrationEffectId === 'none' ? 'none' : 'confettiBurst',
+    celebrationOnlyFirst: value?.celebrationOnlyFirst !== false,
+  }
+}
+
 function normalizeAssetId(value: string | null | undefined): string | null {
   if (typeof value !== 'string') {
     return null
@@ -771,7 +780,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     description: 'Emit a punch event so external systems can record scene check-in data.',
     icon: 'mdi-map-marker-check-outline',
     createDefaultParams(): PunchBehaviorParams {
-      return {}
+      return normalizePunchBehaviorParams(null)
     },
   },
   {
@@ -1280,7 +1289,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
     case 'punch':
       return {
         type: 'punch',
-        params: {},
+        params: normalizePunchBehaviorParams(binding.params as Partial<PunchBehaviorParams> | undefined),
       }
     case 'coupon': {
       const params = binding.params as Partial<CouponBehaviorParams> | undefined
@@ -1776,7 +1785,7 @@ export function ensureBehaviorParams(
       case 'punch':
         return {
           type: 'punch',
-          params: {},
+          params: normalizePunchBehaviorParams(script.params as Partial<PunchBehaviorParams> | undefined),
         }
       case 'coupon': {
         const params = script.params as Partial<CouponBehaviorParams> | undefined

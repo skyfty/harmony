@@ -43,6 +43,7 @@ import RestoreControlNodeParams from '@/components/inspector/behavior/RestoreCon
 import RestoreCameraParams from '@/components/inspector/behavior/RestoreCameraParams.vue'
 import ReleaseCharacterParams from '@/components/inspector/behavior/ReleaseCharacterParams.vue'
 import DebusParams from '@/components/inspector/behavior/DebusParams.vue'
+import PunchParams from '@/components/inspector/behavior/PunchParams.vue'
 import CouponParams from '@/components/inspector/behavior/CouponParams.vue'
 import ShowCockpitParams from '@/components/inspector/behavior/ShowCockpitParams.vue'
 import HideCockpitParams from '@/components/inspector/behavior/HideCockpitParams.vue'
@@ -132,6 +133,7 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   restoreControlNode: RestoreControlNodeParams,
   releaseCharacter: ReleaseCharacterParams,
   debus: DebusParams,
+  punch: PunchParams,
   coupon: CouponParams,
 }
 
