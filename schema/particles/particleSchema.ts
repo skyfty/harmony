@@ -99,7 +99,7 @@ export interface ParticleSystemComponentProps {
 }
 
 export const PARTICLE_COMPONENT_MAX_PARTICLES = 1000
-export const PARTICLE_COMPONENT_MAX_BURST = 48
+export const PARTICLE_COMPONENT_MAX_BURST = 128
 export const PARTICLE_COMPONENT_MAX_SCENE_ACTIVE = 12
 export const PARTICLE_SCENE_SOFT_PARTICLE_LIMIT = 800
 

@@ -46,6 +46,7 @@ import {
   HARMONY_AGENT_MAX_ITEM_BYTES,
 } from '@schema/editorAgentProtocol'
 import { createTextureSettings } from '@schema/material'
+import { PARTICLE_COMPONENT_MAX_BURST } from '@schema/particles/particleSchema'
 import { getRuntimeObject, resolveSceneNodeWorldMatrix, useSceneStore } from '@/stores/sceneStore'
 import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
 import { AgentBridgeError } from '@/agent/errors'
@@ -781,7 +782,7 @@ async function executeDomainOperation(
         const emitterId = typeof args.emitterId === 'string' && args.emitterId.trim().length
           ? args.emitterId.trim()
           : undefined
-        const count = readOptionalNumber(args, 'count', 0, 48)
+        const count = readOptionalNumber(args, 'count', 0, PARTICLE_COMPONENT_MAX_BURST)
           ?? runtime.props.exposedParams.burstCount
         runtime.restart()
         runtime.burst(count, emitterId)

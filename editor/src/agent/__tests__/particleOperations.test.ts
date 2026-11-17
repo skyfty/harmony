@@ -12,7 +12,10 @@ import {
   type ParticleSystemComponentProps,
 } from '@schema/components'
 import type { BehaviorComponentProps, SceneNodeComponentState } from '@schema/core'
-import { allocateParticleBurstCounts } from '@schema/particles/particleRuntime'
+import {
+  allocateParticleBurstCounts,
+  createParticleSystemRuntime,
+} from '@schema/particles/particleRuntime'
 import { applySceneOperations } from '@/agent/operations'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 
@@ -66,13 +69,25 @@ describe('Particle Agent operations', () => {
       },
       budget: {
         qualityTier: 'mini-safe',
-        maxParticles: 42,
+        maxParticles: 112,
       },
     })
-    expect(celebration?.props.emitters).toHaveLength(3)
+    expect(celebration?.props.emitters).toHaveLength(4)
     expect(celebration?.props.emitters.reduce((sum, emitter) => sum + emitter.maxParticles, 0))
-      .toBeLessThanOrEqual(42)
-    expect(celebration?.props.exposedParams.burstCount).toBe(36)
+      .toBe(112)
+    expect(celebration?.props.exposedParams.burstCount).toBe(96)
+    expect(celebration?.props.exposedParams.lifetime).toBeGreaterThanOrEqual(3.4)
+    expect(celebration?.props.emitters.every((emitter) =>
+      (emitter.physics?.force.y ?? 0) <= -0.05,
+    )).toBe(true)
+    expect(celebration?.props.emitters.every((emitter) =>
+      emitter.shape === 'sphere'
+      && emitter.radius <= 0.1
+      && emitter.velocityMode === 'radial'
+      && Math.abs(emitter.direction.x) < 0.001
+      && Math.abs(emitter.direction.z) < 0.001
+      && emitter.spread >= 2.8,
+    )).toBe(true)
   })
 
   it('normalizes legacy render props and deep-clones paper settings', () => {
@@ -95,7 +110,7 @@ describe('Particle Agent operations', () => {
   })
 
   it('distributes one burst across all emitters without exceeding capacities', () => {
-    expect(allocateParticleBurstCounts(36, [14, 14, 14])).toEqual([12, 12, 12])
+    expect(allocateParticleBurstCounts(96, [28, 28, 28, 28])).toEqual([24, 24, 24, 24])
     expect(allocateParticleBurstCounts(7, [2, 6])).toEqual([2, 5])
     expect(allocateParticleBurstCounts(20, [0, 0])).toEqual([0, 0])
   })
@@ -140,7 +155,7 @@ describe('Particle Agent operations', () => {
                     targetNodeId: node.id,
                     componentId: component?.id ?? null,
                     emitterId: null,
-                    count: 36,
+                    count: 96,
                   },
                 },
               },
@@ -167,7 +182,7 @@ describe('Particle Agent operations', () => {
       params: {
         targetNodeId: node.id,
         componentId: component?.id,
-        count: 36,
+        count: 96,
       },
     })
     expect(flushSpy).toHaveBeenCalledOnce()
@@ -215,7 +230,7 @@ describe('Particle Agent operations', () => {
       stop: vi.fn(),
       restart,
       burst,
-      getParticleCount: vi.fn(() => 36),
+      getParticleCount: vi.fn(() => 96),
       tick,
       setPlaybackActive: vi.fn(),
       setExposedParams: vi.fn(),
@@ -233,7 +248,7 @@ describe('Particle Agent operations', () => {
           args: {
             nodeId: node.id,
             componentId: component?.id,
-            count: 36,
+            count: 96,
           },
         },
       ],
@@ -241,14 +256,45 @@ describe('Particle Agent operations', () => {
 
     expect(result.afterRevision).toBe(revision)
     expect(restart).toHaveBeenCalledOnce()
-    expect(burst).toHaveBeenCalledWith(36, undefined)
+    expect(burst).toHaveBeenCalledWith(96, undefined)
     expect(tick).toHaveBeenCalledTimes(5)
     expect(result.results[0]).toMatchObject({
       presetId: 'celebrationConfettiLite',
-      count: 36,
-      particleCount: 36,
+      count: 96,
+      particleCount: 96,
       previewed: true,
     })
     vi.clearAllTimers()
+  })
+
+  it('creates the dense paper burst and lets paper fall after the upward phase', () => {
+    const runtime = createParticleSystemRuntime(
+      createParticlePresetProps('celebrationConfettiLite'),
+    )
+    runtime.restart()
+    runtime.burst(96)
+    for (let frame = 0; frame < 10; frame += 1) {
+      runtime.tick(1 / 30)
+    }
+    const renderGroup = runtime.group.getObjectByName('Effect:ParticleRenderGroup')
+    const earlyPositions = renderGroup?.children
+      .filter((child) => child.type === 'Mesh')
+      .map((child) => child.position.clone()) ?? []
+    expect(earlyPositions).toHaveLength(96)
+    const horizontalSpan = Math.max(...earlyPositions.map((position) => Math.hypot(position.x, position.z)))
+    expect(horizontalSpan).toBeGreaterThan(0.5)
+    const earlyAverageY = earlyPositions.reduce((sum, position) => sum + position.y, 0)
+      / earlyPositions.length
+    for (let frame = 0; frame < 60; frame += 1) {
+      runtime.tick(1 / 30)
+    }
+    const fallingPositions = renderGroup?.children
+      .filter((child) => child.type === 'Mesh')
+      .map((child) => child.position.clone()) ?? []
+    expect(fallingPositions.length).toBeGreaterThan(0)
+    const fallingAverageY = fallingPositions.reduce((sum, position) => sum + position.y, 0)
+      / fallingPositions.length
+    expect(fallingAverageY).toBeLessThan(earlyAverageY)
+    runtime.dispose()
   })
 })
