@@ -74,7 +74,11 @@ import {
 } from '@harmony/utils/mini-client';
 import { parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
-import { getSelectedControllable, getSelectedControllableIdentifier, type ControllableType } from '@/utils/controllableSelection';
+import { getSelectedControllable, type ControllableType } from '@/utils/controllableSelection';
+import {
+  normalizeSceneryControllableType,
+  resolveSceneryControllableSelection,
+} from '@/utils/sceneryControllableSelection';
 import { listControllableAssets, type ControllableAsset } from '@/api/mini/controllableAssets';
 import { listUserSkinSelections } from '@/api/mini/skins';
 import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
@@ -508,38 +512,24 @@ onLoad((query: Record<string, unknown> | undefined) => {
   sceneSpotId.value = decodeQueryValue(mergedRecord.sceneSpotId);
   sceneId.value = decodeQueryValue(mergedRecord.sceneId);
   resolvedPhysicsEngine.value = resolvePhysicsEngineFromQuery(mergedRecord.physicsEngine);
-  const requestedControllableType = mergedRecord.controllableType === 'vehicle'
-    || mergedRecord.controllableType === 'character'
-    || mergedRecord.controllableType === 'ship'
-    || mergedRecord.controllableType === 'aircraft'
-    ? mergedRecord.controllableType as ControllableType
-    : null;
-  {
-    const selectedControllable = (requestedControllableType ? getSelectedControllable(requestedControllableType) : null)
-      ?? getSelectedControllable('vehicle')
-      ?? getSelectedControllable('character')
-      ?? getSelectedControllable('ship')
-      ?? getSelectedControllable('aircraft')
-      ?? null;
-    const selectedType = selectedControllable && typeof (selectedControllable as { type?: unknown }).type === 'string'
-      ? (selectedControllable as { type: string }).type
-      : '';
-    selectedControllableType.value = selectedType === 'character'
-      || selectedType === 'ship'
-      || selectedType === 'aircraft'
-      ? selectedType
-      : 'vehicle';
-    selectedVehicleIdentifier.value = typeof mergedRecord.controllableIdentifier === 'string'
-      ? decodeQueryValue(mergedRecord.controllableIdentifier)
-      : typeof selectedControllable?.identifier === 'string'
-        ? selectedControllable.identifier.trim()
-        : getSelectedControllableIdentifier(selectedControllableType.value);
-    const selectedPrefabUrl = selectedControllable && typeof selectedControllable === 'object'
-      ? (selectedControllable as { prefabUrl?: unknown }).prefabUrl
-      : null;
-    selectedVehiclePrefabUrl.value = normalizePrefabUrl(selectedPrefabUrl);
-    selectedControllablePrefabUrl.value = normalizePrefabUrl(selectedPrefabUrl);
-  }
+  const requestedControllableType = normalizeSceneryControllableType(
+    decodeQueryValue(mergedRecord.controllableType),
+  );
+  const selection = resolveSceneryControllableSelection({
+    requestedType: requestedControllableType,
+    requestedIdentifier: decodeQueryValue(mergedRecord.controllableIdentifier),
+    storedSelections: {
+      vehicle: getSelectedControllable('vehicle'),
+      character: getSelectedControllable('character'),
+      ship: getSelectedControllable('ship'),
+      aircraft: getSelectedControllable('aircraft'),
+    },
+  });
+  selectedControllableType.value = selection.type as ControllableType;
+  selectedVehicleIdentifier.value = selection.identifier;
+  const selectedPrefabUrl = selection.selectedAsset?.prefabUrl;
+  selectedVehiclePrefabUrl.value = normalizePrefabUrl(selectedPrefabUrl);
+  selectedControllablePrefabUrl.value = normalizePrefabUrl(selectedPrefabUrl);
   explicitPrefabUrl.value = decodeQueryValue(mergedRecord.prefabUrl);
   explicitPrefabTargetNodeId.value = decodeQueryValue(mergedRecord.prefabTargetNodeId);
   explicitPrefabTargetNodeName.value = decodeQueryValue(mergedRecord.prefabTargetNodeName);

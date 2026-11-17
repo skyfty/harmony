@@ -754,7 +754,10 @@ import {
   type ExternalControllableAsset,
   type ExternalSkin,
 } from '@harmony/schema/core';
-import type { ResolvedSteerBinding } from '@harmony/schema/steerBindingIndex';
+import {
+  resolveDefaultSteerBindingFromNodes,
+  type ResolvedSteerBinding,
+} from '@harmony/schema/steerBindingIndex';
 import { type NodePrefabData } from '@harmony/schema/runtimePrefab';
 import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, DEFAULT_ASSET_CACHE_MAX_ENTRIES, configureAssetBlobDownloader, configureAssetDownloadHostMirrors, fetchAssetBlob, type AssetCacheEntry } from '@harmony/schema/assetCache';
@@ -7080,35 +7083,11 @@ function resolveDefaultSteerBinding(
   defaultSteerIdentifier: string | null,
   targetType: SteerControllableTargetType,
 ): ResolvedSteerBinding | null {
-  const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : [];
-  let fallback: ResolvedSteerBinding | null = null;
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    const steerComponent = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE);
-    if (steerComponent) {
-      const steerProps = clampSteerComponentProps(steerComponent.props ?? null);
-      if (steerProps.targetType === targetType && steerProps.targetNodeId && steerProps.autoEnterOnSceneLoad) {
-        const binding: ResolvedSteerBinding = {
-          steerNodeId: node.id,
-          steerNode: node,
-          steerComponent,
-          steerProps,
-          targetNodeId: steerProps.targetNodeId,
-        };
-        if (defaultSteerIdentifier && steerProps.defaultIdentifier === defaultSteerIdentifier) {
-          return binding;
-        }
-        fallback ??= binding;
-      }
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return fallback;
+  return resolveDefaultSteerBindingFromNodes(
+    document.nodes,
+    defaultSteerIdentifier,
+    targetType,
+  );
 }
 
 function resolveDefaultSteerTargetType(): SteerControllableTargetType {
@@ -7416,7 +7395,6 @@ async function prepareRenderPayloadForGuideRouteActors(payload: ScenePreviewPayl
     defaultSteerIdentifier,
     resolveDefaultSteerTargetType(),
   );
-
   const nextDocument = JSON.parse(JSON.stringify(payload.document)) as SceneJsonExportDocument;
   let finalTargetNodeId = binding?.targetNodeId ?? null;
 
@@ -7468,7 +7446,10 @@ async function prepareRenderPayloadForGuideRouteActors(payload: ScenePreviewPayl
           steerHostComponent.props = clampSteerComponentProps({
             ...(steerHostComponent.props ?? {}),
             targetNodeId: replacementTargetNodeId,
-            defaultIdentifier: defaultSteerIdentifier ?? binding.steerProps.defaultIdentifier ?? null,
+            defaultIdentifier: selectedAsset.identifier?.trim()
+              || defaultSteerIdentifier
+              || binding.steerProps.defaultIdentifier
+              || null,
           });
           nextDocument.updatedAt = new Date().toISOString();
           finalTargetNodeId = replacementTargetNodeId;

@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { basename, resolve } from 'node:path'
 
 const RUNTIME_VIRTUAL_ID = 'virtual:harmony-scenery-schema-runtime'
 const AGGREGATOR_VIRTUAL_ID = 'virtual:harmony-scenery-schema-aggregator'
@@ -44,22 +44,33 @@ export function createScenerySchemaRuntimeVitePlugin(
     options.projectRoot,
     'src/pages/scenery-schema/chunks/schema.ts',
   )
-  const imports = collectSchemaRuntimeImports(sourceRoot)
-  const moduleNames = [...imports.moduleNames].sort()
-  const valueNames = [...imports.valueModules.keys()]
-    .filter((name) => name !== 'default')
-    .sort()
-  const virtualRuntimeSource = createVirtualRuntimeSource(moduleNames, valueNames)
-  const virtualAggregatorSource = createVirtualAggregatorSource(moduleNames)
+
+  function collectVirtualSources(): {
+    runtimeSource: string
+    aggregatorSource: string
+  } {
+    // Re-scan whenever Vite loads a virtual module so a newly imported schema
+    // symbol is available after HMR instead of requiring a dev-server restart.
+    const imports = collectSchemaRuntimeImports(sourceRoot)
+    const moduleNames = [...imports.moduleNames].sort()
+    const valueNames = [...imports.valueModules.keys()]
+      .filter((name) => name !== 'default')
+      .sort()
+    return {
+      runtimeSource: createVirtualRuntimeSource(moduleNames, valueNames),
+      aggregatorSource: createVirtualAggregatorSource(moduleNames),
+    }
+  }
 
   return {
     name: 'harmony-scenery-schema-runtime',
     enforce: 'pre',
     resolveId(source, importer) {
-      if (source === RUNTIME_VIRTUAL_ID) {
+      const normalizedSource = normalizeVirtualId(source)
+      if (normalizedSource === RUNTIME_VIRTUAL_ID) {
         return runtimeVirtualPath
       }
-      if (source === AGGREGATOR_VIRTUAL_ID) {
+      if (normalizedSource === AGGREGATOR_VIRTUAL_ID) {
         return aggregatorVirtualPath
       }
       if (!isSchemaImport(source) || !isSceneryRuntimeImporter(importer, sourceRoot)) {
@@ -68,11 +79,13 @@ export function createScenerySchemaRuntimeVitePlugin(
       return runtimeVirtualPath
     },
     load(id) {
-      if (id === runtimeVirtualPath) {
-        return virtualRuntimeSource
+      // During H5 development Vite forwards virtual module requests back as
+      // `/src/...` URLs instead of the absolute paths returned by resolveId.
+      if (isScenerySchemaRuntimeVirtualId(id)) {
+        return collectVirtualSources().runtimeSource
       }
-      if (id === aggregatorVirtualPath) {
-        return virtualAggregatorSource
+      if (isScenerySchemaAggregatorVirtualId(id)) {
+        return collectVirtualSources().aggregatorSource
       }
       return undefined
     },
@@ -120,6 +133,10 @@ export function createScenerySchemaRuntimeVitePlugin(
   }
 }
 
+function normalizeVirtualId(id: string): string {
+  return id.replaceAll('\\', '/').replace(/^\0/, '')
+}
+
 function collectSchemaRuntimeImports(sourceRoot: string): SchemaImportInfo {
   const moduleNames = new Set<string>()
   const valueModules = new Map<string, string>()
@@ -155,7 +172,13 @@ function collectSchemaRuntimeImports(sourceRoot: string): SchemaImportInfo {
   return { moduleNames, valueModules }
 }
 
-function walkSourceFiles(directory: string): string[] {
+function walkSourceFiles(directory: string, visitedDirectories = new Set<string>()): string[] {
+  const canonicalDirectory = resolve(realpathSync(directory))
+  if (visitedDirectories.has(canonicalDirectory)) {
+    return []
+  }
+  visitedDirectories.add(canonicalDirectory)
+
   const files: string[] = []
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.name === 'workers' || entry.name === 'node_modules' || entry.name === 'dist') {
@@ -163,10 +186,15 @@ function walkSourceFiles(directory: string): string[] {
     }
     const absolutePath = resolve(directory, entry.name)
     if (entry.isSymbolicLink()) {
-      continue
+      // H5 development links the shared scenery package into `uni_modules`.
+      // Its runtime lives behind that junction, so scan it while still ignoring
+      // unrelated mirror links such as schema, physics and three.
+      if (basename(directory) !== 'uni_modules' || !statSync(absolutePath).isDirectory()) {
+        continue
+      }
     }
-    if (entry.isDirectory()) {
-      files.push(...walkSourceFiles(absolutePath))
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      files.push(...walkSourceFiles(absolutePath, visitedDirectories))
     } else if (entry.isFile() && /\.(?:ts|vue)$/.test(entry.name)) {
       files.push(absolutePath)
     }

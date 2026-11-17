@@ -395,6 +395,7 @@ export default defineConfig({
   plugins: ([
     glsl(),
     getUniPlugin(),
+    // Rescan schema runtime imports on demand so dev HMR can expose newly added symbols.
     createScenerySchemaRuntimeVitePlugin({ projectRoot: fileURLToPath(new URL('.', import.meta.url)) }),
     bundleOptimizer({
       enable: isMp
