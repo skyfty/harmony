@@ -52,6 +52,10 @@ import type {
   RuntimePrefabPlacementOptions,
 } from '../core'
 import { normalizeControlNodeTransitionPreset, normalizeWatchRestorePositionSource } from '../core'
+import {
+  DEFAULT_PUNCH_SUCCESS_PROMPT_ENABLED,
+  normalizePunchSuccessPromptDuration,
+} from './punchSuccessPrompt'
 
 export interface BehaviorActionDefinition {
   id: BehaviorEventType
@@ -127,6 +131,12 @@ export function normalizePunchBehaviorParams(
   return {
     celebrationEffectId: value?.celebrationEffectId === 'none' ? 'none' : 'confettiBurst',
     celebrationOnlyFirst: value?.celebrationOnlyFirst !== false,
+    showSuccessPrompt: typeof value?.showSuccessPrompt === 'boolean'
+      ? value.showSuccessPrompt
+      : DEFAULT_PUNCH_SUCCESS_PROMPT_ENABLED,
+    successPromptDurationSeconds: normalizePunchSuccessPromptDuration(
+      value?.successPromptDurationSeconds,
+    ),
   }
 }
 

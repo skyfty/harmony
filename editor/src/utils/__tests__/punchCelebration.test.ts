@@ -6,6 +6,11 @@ import {
   normalizePunchBehaviorParams,
 } from '@schema/behaviors/definitions'
 import {
+  DEFAULT_PUNCH_SUCCESS_PROMPT_DURATION_SECONDS,
+  formatPunchSuccessPromptText,
+  resolvePunchSuccessPromptContent,
+} from '@schema/behaviors/punchSuccessPrompt'
+import {
   registerBehaviorComponent,
   resetBehaviorRuntime,
   triggerBehaviorAction,
@@ -35,12 +40,16 @@ describe('Punch celebration behavior', () => {
     expect(normalizePunchBehaviorParams(undefined)).toEqual({
       celebrationEffectId: 'confettiBurst',
       celebrationOnlyFirst: true,
+      showSuccessPrompt: true,
+      successPromptDurationSeconds: DEFAULT_PUNCH_SUCCESS_PROMPT_DURATION_SECONDS,
     })
     expect(ensureBehaviorParams({ type: 'punch', params: {} } as never)).toEqual({
       type: 'punch',
       params: {
         celebrationEffectId: 'confettiBurst',
         celebrationOnlyFirst: true,
+        showSuccessPrompt: true,
+        successPromptDurationSeconds: DEFAULT_PUNCH_SUCCESS_PROMPT_DURATION_SECONDS,
       },
     })
     expect(ensureBehaviorParams({
@@ -48,13 +57,39 @@ describe('Punch celebration behavior', () => {
       params: {
         celebrationEffectId: 'none',
         celebrationOnlyFirst: false,
+        showSuccessPrompt: false,
+        successPromptDurationSeconds: 4,
       },
     })).toEqual({
       type: 'punch',
       params: {
         celebrationEffectId: 'none',
         celebrationOnlyFirst: false,
+        showSuccessPrompt: false,
+        successPromptDurationSeconds: 4,
       },
+    })
+  })
+
+  it('formats the Punch success prompt from the location label', () => {
+    expect(formatPunchSuccessPromptText('青龙山大门')).toBe('青龙山大门打卡成功')
+    expect(formatPunchSuccessPromptText('  延古寺  ')).toBe('延古寺打卡成功')
+    expect(formatPunchSuccessPromptText('')).toBe('打卡成功')
+    expect(formatPunchSuccessPromptText(null)).toBe('打卡成功')
+  })
+
+  it('resolves structured Punch success prompt content with a fallback title', () => {
+    expect(resolvePunchSuccessPromptContent(' 青龙山大门 ')).toEqual({
+      eyebrow: '完成',
+      title: '青龙山大门',
+      status: '打卡成功',
+      message: '青龙山大门打卡成功',
+    })
+    expect(resolvePunchSuccessPromptContent('')).toEqual({
+      eyebrow: '完成',
+      title: '本次打卡',
+      status: '打卡成功',
+      message: '打卡成功',
     })
   })
 
@@ -75,6 +110,8 @@ describe('Punch celebration behavior', () => {
       type: 'punch',
       celebrationEffectId: 'confettiBurst',
       celebrationOnlyFirst: true,
+      showSuccessPrompt: true,
+      successPromptDurationSeconds: DEFAULT_PUNCH_SUCCESS_PROMPT_DURATION_SECONDS,
     })
     unregisterBehaviorComponent('punch-node')
     resetBehaviorRuntime()

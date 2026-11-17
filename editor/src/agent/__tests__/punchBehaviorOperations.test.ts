@@ -31,6 +31,8 @@ function createPunchBehaviors(celebrationEffectId?: string) {
         : {
             celebrationEffectId,
             celebrationOnlyFirst: false,
+            showSuccessPrompt: false,
+            successPromptDurationSeconds: 4,
           },
     },
   }]
@@ -81,6 +83,8 @@ describe('Punch behavior Agent operations', () => {
       params: {
         celebrationEffectId: 'confettiBurst',
         celebrationOnlyFirst: true,
+        showSuccessPrompt: true,
+        successPromptDurationSeconds: 2.5,
       },
     })
     expect(flushSpy).toHaveBeenCalledOnce()
@@ -104,6 +108,35 @@ describe('Punch behavior Agent operations', () => {
         },
       }],
     })).rejects.toThrow('Punch celebrationEffectId')
+    expect(store.sceneRevision).toBe(revision)
+    vi.clearAllTimers()
+  })
+
+  it('rejects an invalid Punch success prompt duration without changing the scene revision', async () => {
+    const store = useSceneStore()
+    const node = createTestNode(store, 'Invalid punch prompt test node')
+    const revision = store.sceneRevision
+    const behaviors = createPunchBehaviors('confettiBurst')
+    behaviors[0]!.script.params = {
+      celebrationEffectId: 'confettiBurst',
+      celebrationOnlyFirst: false,
+      showSuccessPrompt: true,
+      successPromptDurationSeconds: -1,
+    }
+
+    await expect(applySceneOperations(store, {
+      expectedRevision: revision,
+      label: 'Configure punch prompt',
+      operations: [{
+        op: 'domain.apply',
+        domain: 'behavior',
+        action: 'replace',
+        args: {
+          nodeId: node.id,
+          behaviors,
+        },
+      }],
+    })).rejects.toThrow('Punch successPromptDurationSeconds')
     expect(store.sceneRevision).toBe(revision)
     vi.clearAllTimers()
   })

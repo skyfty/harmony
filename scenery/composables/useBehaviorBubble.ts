@@ -7,7 +7,11 @@ export type BubbleAnchorMode = 'screenFixed' | 'nodeAnchored';
 
 export interface BehaviorBubbleState {
   visible: boolean;
+  transient: boolean;
   message: string;
+  eyebrow: string;
+  title: string;
+  status: string;
   token: string | null;
   variant: BubbleVariant;
   animation: BubbleAnimation;
@@ -18,6 +22,16 @@ export interface BehaviorBubbleState {
   offsetY: number;
 }
 
+export interface TransientBehaviorBubbleOptions {
+  message: string;
+  eyebrow?: string;
+  title?: string;
+  status?: string;
+  durationSeconds: number;
+  variant?: BubbleVariant;
+  animation?: BubbleAnimation;
+}
+
 export function useBehaviorBubble(deps: {
   resolveBehaviorToken: (token: string, resolution: BehaviorEventResolution) => void;
   loadTextAssetContent: (assetId: string) => Promise<string | null>;
@@ -26,7 +40,11 @@ export function useBehaviorBubble(deps: {
 }) {
   const state = reactive<BehaviorBubbleState>({
     visible: false,
+    transient: false,
     message: '',
+    eyebrow: '',
+    title: '',
+    status: '',
     token: null,
     variant: 'info',
     animation: 'float',
@@ -63,7 +81,11 @@ export function useBehaviorBubble(deps: {
     clearTimers();
     const token = state.token;
     state.visible = false;
+    state.transient = false;
     state.message = '';
+    state.eyebrow = '';
+    state.title = '';
+    state.status = '';
     state.token = null;
     state.variant = 'info';
     state.animation = 'float';
@@ -101,6 +123,37 @@ export function useBehaviorBubble(deps: {
     }
   }
 
+  function presentTransient(options: TransientBehaviorBubbleOptions): void {
+    dismiss({ type: 'continue' });
+    const message = typeof options.message === 'string' ? options.message.trim() : '';
+    if (!message) {
+      return;
+    }
+    const durationSeconds = Number.isFinite(options.durationSeconds)
+      ? Math.max(0, options.durationSeconds)
+      : 0;
+    const durationMs = durationSeconds * 1000;
+    if (durationMs <= 0) {
+      return;
+    }
+    state.message = message;
+    state.transient = true;
+    state.eyebrow = typeof options.eyebrow === 'string' ? options.eyebrow.trim() : '';
+    state.title = typeof options.title === 'string' ? options.title.trim() : '';
+    state.status = typeof options.status === 'string' ? options.status.trim() : '';
+    state.variant = options.variant ?? 'info';
+    state.animation = options.animation ?? 'float';
+    state.anchorMode = 'screenFixed';
+    state.offsetX = 0;
+    state.offsetY = 0;
+    state.visible = true;
+    dismissTimer = setTimeout(() => {
+      if (state.visible && state.token == null) {
+        dismiss();
+      }
+    }, durationMs);
+  }
+
   function present(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): void {
     const repeatKey = buildSeenKey(event);
     if (!event.params.repeat && seenKeys.has(repeatKey)) {
@@ -114,7 +167,11 @@ export function useBehaviorBubble(deps: {
     dismiss({ type: 'continue' });
     const fallbackMessage = typeof event.params.content === 'string' ? event.params.content : '';
     state.token = event.token;
+    state.transient = false;
     state.message = fallbackMessage;
+    state.eyebrow = '';
+    state.title = '';
+    state.status = '';
     state.variant = event.params.styleVariant;
     state.animation = event.params.animationPreset;
     state.anchorMode = event.params.anchorMode;
@@ -164,6 +221,7 @@ export function useBehaviorBubble(deps: {
     style,
     seenKeys,
     present,
+    presentTransient,
     dismiss,
     clearState,
     cleanup,

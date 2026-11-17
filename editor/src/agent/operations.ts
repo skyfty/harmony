@@ -913,7 +913,6 @@ async function executeDomainOperation(
     }
     case 'behavior': {
       const nodeId = readString(args, 'nodeId')
-      const node = findNodeOrThrow(store, nodeId)
       if (operation.action === 'replace') {
         const behaviors = args.behaviors
         if (!Array.isArray(behaviors)) {
@@ -954,10 +953,30 @@ async function executeDomainOperation(
                   'Punch celebrationOnlyFirst must be a boolean',
                 )
               }
+              if ('showSuccessPrompt' in params && typeof params.showSuccessPrompt !== 'boolean') {
+                throw new AgentBridgeError(
+                  'VALIDATION_FAILED',
+                  'Punch showSuccessPrompt must be a boolean',
+                )
+              }
+              if (
+                'successPromptDurationSeconds' in params
+                && (
+                  typeof params.successPromptDurationSeconds !== 'number'
+                  || !Number.isFinite(params.successPromptDurationSeconds)
+                  || params.successPromptDurationSeconds < 0
+                )
+              ) {
+                throw new AgentBridgeError(
+                  'VALIDATION_FAILED',
+                  'Punch successPromptDurationSeconds must be a non-negative finite number',
+                )
+              }
             }
             step.script = ensureBehaviorParams(step.script as SceneBehaviorScriptBinding)
           }
         }
+        const node = findNodeOrThrow(store, nodeId)
         const added = store.addNodeComponent(nodeId, 'behavior')
         const component = added?.component ?? resolveComponent(node, undefined, 'behavior')
         store.updateNodeComponentProps(nodeId, component.id, { behaviors })

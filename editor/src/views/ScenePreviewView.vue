@@ -286,6 +286,7 @@ import {
 	type PunchCelebrationTarget,
 } from '@schema/particles/punchCelebrationRuntime'
 import { shouldPlayPunchCelebration } from '@schema/particles/punchCelebration'
+import { resolvePunchSuccessPromptContent } from '@schema/behaviors/punchSuccessPrompt'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { createProceduralLandscapeDemOrthoResolver } from '@/utils/demOrthoTextureLoader'
 import {
@@ -2042,7 +2043,11 @@ const behaviorAlertShowCancel = ref(false)
 const behaviorAlertConfirmText = ref('Confirm')
 const behaviorAlertCancelText = ref('Cancel')
 const behaviorBubbleVisible = ref(false)
+const behaviorBubbleTransient = ref(false)
 const behaviorBubbleMessage = ref('')
+const behaviorBubbleEyebrow = ref('')
+const behaviorBubbleTitle = ref('')
+const behaviorBubbleStatus = ref('')
 const behaviorBubbleToken = ref<string | null>(null)
 const behaviorBubbleVariant = ref<'info' | 'success' | 'warning' | 'danger'>('info')
 const behaviorBubbleAnimation = ref<'fade' | 'float' | 'scale' | 'shake'>('float')
@@ -3724,6 +3729,13 @@ function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }
 				effectId: event.celebrationEffectId,
 			})
 		}
+	}
+	if (event.showSuccessPrompt) {
+		const displayName = resolveSceneSignboardLabel(event.nodeId)
+		presentTransientBehaviorBubble({
+			...resolvePunchSuccessPromptContent(displayName === event.nodeId ? '' : displayName),
+			durationSeconds: event.successPromptDurationSeconds,
+		})
 	}
 	const sceneId = resolveActivePunchSceneId()
 	browserStoredPunchedNodeIds.value = sceneId
@@ -7058,7 +7070,11 @@ function clearBehaviorBubbleState(): string | null {
 	clearBehaviorBubbleTimers()
 	const token = behaviorBubbleToken.value
 	behaviorBubbleVisible.value = false
+	behaviorBubbleTransient.value = false
 	behaviorBubbleMessage.value = ''
+	behaviorBubbleEyebrow.value = ''
+	behaviorBubbleTitle.value = ''
+	behaviorBubbleStatus.value = ''
 	behaviorBubbleToken.value = null
 	behaviorBubbleVariant.value = 'info'
 	behaviorBubbleAnimation.value = 'float'
@@ -7839,7 +7855,11 @@ function presentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: 'sho
 	dismissBehaviorBubble({ type: 'continue' })
 	const fallbackMessage = typeof event.params.content === 'string' ? event.params.content : ''
 	behaviorBubbleToken.value = event.token
+	behaviorBubbleTransient.value = false
 	behaviorBubbleMessage.value = fallbackMessage
+	behaviorBubbleEyebrow.value = ''
+	behaviorBubbleTitle.value = ''
+	behaviorBubbleStatus.value = ''
 	behaviorBubbleVariant.value = event.params.styleVariant
 	behaviorBubbleAnimation.value = event.params.animationPreset
 	behaviorBubbleAnchorMode.value = event.params.anchorMode
@@ -7877,6 +7897,38 @@ function presentBehaviorBubble(event: Extract<BehaviorRuntimeEvent, { type: 'sho
 		behaviorBubbleDelayTimer = null
 		showBubble()
 	}, delayMs)
+}
+
+function presentTransientBehaviorBubble(options: {
+	message: string
+	eyebrow: string
+	title: string
+	status: string
+	durationSeconds: number
+}) {
+	dismissBehaviorBubble({ type: 'continue' })
+	const trimmedMessage = typeof options.message === 'string' ? options.message.trim() : ''
+	const normalizedDuration = Number.isFinite(options.durationSeconds) ? Math.max(0, options.durationSeconds) : 0
+	if (!trimmedMessage || normalizedDuration <= 0) {
+		return
+	}
+	behaviorBubbleToken.value = null
+	behaviorBubbleTransient.value = true
+	behaviorBubbleMessage.value = trimmedMessage
+	behaviorBubbleEyebrow.value = options.eyebrow.trim()
+	behaviorBubbleTitle.value = options.title.trim()
+	behaviorBubbleStatus.value = options.status.trim()
+	behaviorBubbleVariant.value = 'success'
+	behaviorBubbleAnimation.value = 'float'
+	behaviorBubbleAnchorMode.value = 'screenFixed'
+	behaviorBubbleOffsetX.value = 0
+	behaviorBubbleOffsetY.value = 0
+	behaviorBubbleVisible.value = true
+	behaviorBubbleDismissTimer = window.setTimeout(() => {
+		if (behaviorBubbleVisible.value && behaviorBubbleToken.value == null) {
+			dismissBehaviorBubble()
+		}
+	}, normalizedDuration * 1000)
 }
 
 function presentBehaviorAlert(event: Extract<BehaviorRuntimeEvent, { type: 'show-alert' }>) {
@@ -18324,7 +18376,12 @@ watch(watchExclusiveUiActive, (active) => {
 				</div>
 			</div>
 		</div>
-		<div v-if="behaviorBubbleVisible" class="scene-preview__bubble-layer" aria-live="polite">
+		<div
+			v-if="behaviorBubbleVisible"
+			class="scene-preview__bubble-layer"
+			:class="{ 'scene-preview__bubble-layer--transient': behaviorBubbleTransient }"
+			aria-live="polite"
+		>
 			<div
 				class="scene-preview__bubble"
 				:class="[
@@ -18333,8 +18390,20 @@ watch(watchExclusiveUiActive, (active) => {
 					`scene-preview__bubble--anim-${behaviorBubbleAnimation}`,
 				]"
 				:style="behaviorBubbleStyle"
+				:role="behaviorBubbleTransient ? 'status' : undefined"
+				:aria-label="behaviorBubbleTransient ? behaviorBubbleMessage : undefined"
 			>
-				<p class="scene-preview__bubble-message">{{ behaviorBubbleMessage }}</p>
+				<div v-if="behaviorBubbleTransient" class="scene-preview__success-prompt">
+					<span class="scene-preview__success-prompt-eyebrow">{{ behaviorBubbleEyebrow }}</span>
+					<strong class="scene-preview__success-prompt-title">{{ behaviorBubbleTitle }}</strong>
+					<div class="scene-preview__success-prompt-divider" aria-hidden="true">
+						<span class="scene-preview__success-prompt-rule" />
+						<span class="scene-preview__success-prompt-diamond" />
+						<span class="scene-preview__success-prompt-rule" />
+					</div>
+					<div class="scene-preview__success-prompt-status">{{ behaviorBubbleStatus }}</div>
+				</div>
+				<p v-else class="scene-preview__bubble-message">{{ behaviorBubbleMessage }}</p>
 			</div>
 		</div>
 		<div class="scene-preview__stats">
@@ -19851,6 +19920,173 @@ watch(watchExclusiveUiActive, (active) => {
 	z-index: 2160;
 	pointer-events: none;
 	overflow: hidden;
+}
+
+.scene-preview__bubble-layer--transient {
+	z-index: 2300;
+}
+
+.scene-preview__bubble-layer--transient .scene-preview__bubble {
+	top: 50%;
+	width: min(340px, calc(100% - 40px));
+	max-width: min(340px, calc(100% - 40px));
+	padding: 10px 18px 16px;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
+	color: #effff8;
+	transform: translate(
+		calc(-50% + var(--behavior-bubble-offset-x, 0px)),
+		calc(-50% + var(--behavior-bubble-offset-y, 0px))
+	);
+}
+
+.scene-preview__bubble-layer--transient .scene-preview__bubble::before {
+	content: '';
+	position: absolute;
+	inset: -46px -64px;
+	border-radius: 50%;
+	background:
+		radial-gradient(ellipse at center, rgba(115, 231, 170, 0.2), rgba(9, 52, 35, 0.08) 48%, transparent 72%);
+	pointer-events: none;
+	z-index: -1;
+}
+
+.scene-preview__success-prompt {
+	position: relative;
+	display: flex;
+	width: 100%;
+	flex-direction: column;
+	align-items: center;
+	text-align: center;
+}
+
+.scene-preview__success-prompt-eyebrow {
+	color: rgba(196, 255, 224, 0.86);
+	font-size: 0.72rem;
+	font-weight: 700;
+	line-height: 1.2;
+	letter-spacing: 0.32em;
+	text-shadow: 0 2px 10px rgba(41, 210, 133, 0.34);
+	animation: scene-preview-success-prompt-fade-up 300ms 30ms ease-out both;
+}
+
+.scene-preview__success-prompt-title {
+	margin-top: 7px;
+	color: #f4fff9;
+	font-size: clamp(1.34rem, 1.8vw, 1.62rem);
+	font-weight: 750;
+	line-height: 1.3;
+	letter-spacing: 0.025em;
+	text-shadow:
+		0 2px 12px rgba(1, 17, 10, 0.58),
+		0 0 22px rgba(115, 231, 170, 0.18);
+	word-break: break-word;
+	text-wrap: balance;
+	animation: scene-preview-success-prompt-fade-up 340ms 90ms ease-out both;
+}
+
+.scene-preview__success-prompt-divider {
+	display: flex;
+	width: min(250px, 84%);
+	align-items: center;
+	gap: 8px;
+	margin: 11px 0 10px;
+	transform-origin: center;
+	animation: scene-preview-success-prompt-line 360ms 190ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.scene-preview__success-prompt-rule {
+	flex: 1 1 auto;
+	height: 1px;
+	background: linear-gradient(90deg, transparent, rgba(185, 255, 218, 0.78));
+}
+
+.scene-preview__success-prompt-rule:last-child {
+	background: linear-gradient(90deg, rgba(185, 255, 218, 0.78), transparent);
+}
+
+.scene-preview__success-prompt-diamond {
+	width: 7px;
+	height: 7px;
+	flex: 0 0 7px;
+	border: 1px solid rgba(185, 255, 218, 0.8);
+	background: rgba(115, 231, 170, 0.18);
+	box-shadow: 0 0 10px rgba(115, 231, 170, 0.38);
+	transform: rotate(45deg);
+}
+
+.scene-preview__success-prompt-status {
+	width: min(286px, 100%);
+	padding: 8px 18px;
+	border: 1px solid rgba(157, 255, 207, 0.2);
+	border-radius: 8px;
+	background: linear-gradient(90deg, rgba(31, 103, 70, 0.08), rgba(115, 231, 170, 0.2), rgba(31, 103, 70, 0.08));
+	box-shadow: inset 0 1px 0 rgba(227, 255, 240, 0.12);
+	backdrop-filter: blur(14px) saturate(1.12);
+	-webkit-backdrop-filter: blur(14px) saturate(1.12);
+	color: #dffff0;
+	font-size: 0.86rem;
+	font-weight: 700;
+	line-height: 1.35;
+	letter-spacing: 0.18em;
+	animation: scene-preview-success-prompt-fade-up 320ms 260ms ease-out both;
+}
+
+.scene-preview__bubble-layer--transient .scene-preview__bubble--anim-float {
+	animation: scene-preview-transient-bubble-float 480ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes scene-preview-transient-bubble-float {
+	from {
+		opacity: 0;
+		transform: translate(
+			calc(-50% + var(--behavior-bubble-offset-x, 0px)),
+			calc(-50% + var(--behavior-bubble-offset-y, 0px) + 12px)
+		);
+	}
+	to {
+		opacity: 1;
+		transform: translate(
+			calc(-50% + var(--behavior-bubble-offset-x, 0px)),
+			calc(-50% + var(--behavior-bubble-offset-y, 0px))
+		);
+	}
+}
+
+@keyframes scene-preview-success-prompt-fade-up {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes scene-preview-success-prompt-line {
+	from {
+		opacity: 0;
+		transform: scaleX(0.2);
+	}
+	to {
+		opacity: 1;
+		transform: scaleX(1);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.scene-preview__bubble-layer--transient .scene-preview__bubble,
+	.scene-preview__success-prompt-eyebrow,
+	.scene-preview__success-prompt-title,
+	.scene-preview__success-prompt-divider,
+	.scene-preview__success-prompt-status {
+		animation: none;
+	}
 }
 
 .scene-preview__bubble {

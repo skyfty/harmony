@@ -389,6 +389,8 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
       celebrationEffectId: PunchBehaviorParams['celebrationEffectId']
       celebrationOnlyFirst: boolean
+      showSuccessPrompt: boolean
+      successPromptDurationSeconds: number
       punchedAt: string
     }
   | {
@@ -1301,6 +1303,8 @@ function createPunchEvent(
     behaviorId: behavior.id,
     celebrationEffectId: celebration.celebrationEffectId,
     celebrationOnlyFirst: celebration.celebrationOnlyFirst,
+    showSuccessPrompt: celebration.showSuccessPrompt,
+    successPromptDurationSeconds: celebration.successPromptDurationSeconds,
     punchedAt: new Date().toISOString(),
   }
 }

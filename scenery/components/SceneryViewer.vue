@@ -347,7 +347,12 @@
           </view>
         </view>
       </view>
-      <view v-if="behaviorBubbleVisible" class="viewer-bubble-layer" aria-live="polite">
+      <view
+        v-if="behaviorBubbleVisible"
+        class="viewer-bubble-layer"
+        :class="{ 'viewer-bubble-layer--transient': behaviorBubbleTransient }"
+        aria-live="polite"
+      >
         <view
           class="viewer-bubble"
           :class="[
@@ -356,8 +361,22 @@
             `viewer-bubble--anim-${behaviorBubbleAnimation}`,
           ]"
           :style="behaviorBubbleStyle"
+          :role="behaviorBubbleTransient ? 'status' : undefined"
+          :aria-label="behaviorBubbleTransient ? behaviorBubbleMessage : undefined"
         >
-          <text class="viewer-bubble__message">{{ behaviorBubbleMessage }}</text>
+          <view v-if="behaviorBubbleTransient" class="viewer-success-prompt">
+            <text class="viewer-success-prompt__eyebrow">{{ behaviorBubbleEyebrow }}</text>
+            <text class="viewer-success-prompt__title">{{ behaviorBubbleTitle }}</text>
+            <view class="viewer-success-prompt__divider" aria-hidden="true">
+              <view class="viewer-success-prompt__rule" />
+              <view class="viewer-success-prompt__diamond" />
+              <view class="viewer-success-prompt__rule" />
+            </view>
+            <view class="viewer-success-prompt__status">
+              <text class="viewer-success-prompt__status-text">{{ behaviorBubbleStatus }}</text>
+            </view>
+          </view>
+          <text v-else class="viewer-bubble__message">{{ behaviorBubbleMessage }}</text>
         </view>
       </view>
       <view
@@ -1076,6 +1095,7 @@ import {
   type PunchCelebrationTarget,
 } from '@harmony/schema/particles/punchCelebrationRuntime';
 import { shouldPlayPunchCelebration } from '@harmony/schema/particles/punchCelebration';
+import { resolvePunchSuccessPromptContent } from '@harmony/schema/behaviors/punchSuccessPrompt';
 import { warpGateComponentDefinition } from '@harmony/schema/components/definitions/warpGateComponent';
 import { setGroundTextureSourceResolver } from '@harmony/schema/groundTextureSourceResolver';
 import {
@@ -3752,7 +3772,11 @@ const behaviorBubble = useBehaviorBubble({
   canPresent: (event) => canPresentBehaviorBubble(event),
 });
 const behaviorBubbleVisible = behaviorBubble.visible;
+const behaviorBubbleTransient = behaviorBubble.transient;
 const behaviorBubbleMessage = behaviorBubble.message;
+const behaviorBubbleEyebrow = behaviorBubble.eyebrow;
+const behaviorBubbleTitle = behaviorBubble.title;
+const behaviorBubbleStatus = behaviorBubble.status;
 const behaviorBubbleVariant = behaviorBubble.variant;
 const behaviorBubbleAnimation = behaviorBubble.animation;
 const behaviorBubbleAnchorMode = behaviorBubble.anchorMode;
@@ -8095,6 +8119,7 @@ function handleLanternTouchCancel(): void {
 
 const dismissBehaviorBubble = behaviorBubble.dismiss;
 const presentBehaviorBubble = behaviorBubble.present;
+const presentTransientBehaviorBubble = behaviorBubble.presentTransient;
 
 function resolveBehaviorBubbleAnchorNodeId(event: Extract<BehaviorRuntimeEvent, { type: 'show-bubble' }>): string | null {
   const targetNodeId = event.params.targetNodeId?.trim();
@@ -23892,6 +23917,15 @@ function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }
       });
     }
   }
+  if (event.showSuccessPrompt) {
+    const displayName = resolveSceneSignboardLabel(event.nodeId);
+    presentTransientBehaviorBubble({
+      ...resolvePunchSuccessPromptContent(displayName === event.nodeId ? '' : displayName),
+      durationSeconds: event.successPromptDurationSeconds,
+      variant: 'success',
+      animation: 'float',
+    });
+  }
   if (punchNodeIds.has(event.nodeId)) {
     const sceneId = resolveActivePunchSceneId();
     browserStoredPunchedNodeIds.value = sceneId
@@ -28502,6 +28536,180 @@ onUnmounted(() => {
   z-index: 1500;
   pointer-events: none;
   overflow: hidden;
+}
+
+.viewer-bubble-layer--transient {
+  z-index: 2200;
+}
+
+.viewer-bubble-layer--transient .viewer-bubble {
+  top: 50%;
+  width: min(620rpx, calc(100% - 48rpx));
+  max-width: min(620rpx, calc(100% - 48rpx));
+  padding: 16rpx 24rpx 28rpx;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  color: #effff8;
+  transform: translate(
+    calc(-50% + var(--behavior-bubble-offset-x, 0px)),
+    calc(-50% + var(--behavior-bubble-offset-y, 0px))
+  );
+}
+
+.viewer-bubble-layer--transient .viewer-bubble::before {
+  content: '';
+  position: absolute;
+  inset: -72rpx -92rpx;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse at center, rgba(115, 231, 170, 0.2), rgba(9, 52, 35, 0.08) 48%, transparent 72%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.viewer-success-prompt {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.viewer-success-prompt__eyebrow {
+  display: block;
+  color: rgba(196, 255, 224, 0.86);
+  font-size: 24rpx;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 8rpx;
+  text-shadow: 0 4rpx 18rpx rgba(41, 210, 133, 0.34);
+  animation: viewer-success-prompt-fade-up 300ms 30ms ease-out both;
+}
+
+.viewer-success-prompt__title {
+  display: block;
+  max-width: 100%;
+  margin-top: 12rpx;
+  color: #f4fff9;
+  font-size: 42rpx;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 1rpx;
+  text-shadow:
+    0 4rpx 22rpx rgba(1, 17, 10, 0.58),
+    0 0 34rpx rgba(115, 231, 170, 0.18);
+  word-break: break-word;
+  animation: viewer-success-prompt-fade-up 340ms 90ms ease-out both;
+}
+
+.viewer-success-prompt__divider {
+  display: flex;
+  width: min(440rpx, 84%);
+  align-items: center;
+  gap: 14rpx;
+  margin: 18rpx 0;
+  transform-origin: center;
+  animation: viewer-success-prompt-line 360ms 190ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.viewer-success-prompt__rule {
+  flex: 1 1 auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(185, 255, 218, 0.78));
+}
+
+.viewer-success-prompt__rule:last-child {
+  background: linear-gradient(90deg, rgba(185, 255, 218, 0.78), transparent);
+}
+
+.viewer-success-prompt__diamond {
+  width: 12rpx;
+  height: 12rpx;
+  flex: 0 0 12rpx;
+  border: 1px solid rgba(185, 255, 218, 0.8);
+  background: rgba(115, 231, 170, 0.18);
+  box-shadow: 0 0 18rpx rgba(115, 231, 170, 0.38);
+  transform: rotate(45deg);
+}
+
+.viewer-success-prompt__status {
+  width: min(520rpx, 100%);
+  padding: 12rpx 24rpx;
+  box-sizing: border-box;
+  border: 1px solid rgba(157, 255, 207, 0.2);
+  border-radius: 14rpx;
+  background: linear-gradient(90deg, rgba(31, 103, 70, 0.08), rgba(115, 231, 170, 0.2), rgba(31, 103, 70, 0.08));
+  box-shadow: inset 0 1px 0 rgba(227, 255, 240, 0.12);
+  backdrop-filter: blur(20rpx) saturate(1.12);
+  -webkit-backdrop-filter: blur(20rpx) saturate(1.12);
+  animation: viewer-success-prompt-fade-up 320ms 260ms ease-out both;
+}
+
+.viewer-success-prompt__status-text {
+  display: block;
+  color: #dffff0;
+  font-size: 28rpx;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 6rpx;
+}
+
+.viewer-bubble-layer--transient .viewer-bubble--anim-float {
+  animation: viewer-transient-bubble-float 480ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes viewer-transient-bubble-float {
+  from {
+    opacity: 0;
+    transform: translate(
+      calc(-50% + var(--behavior-bubble-offset-x, 0px)),
+      calc(-50% + var(--behavior-bubble-offset-y, 0px) + 18rpx)
+    );
+  }
+  to {
+    opacity: 1;
+    transform: translate(
+      calc(-50% + var(--behavior-bubble-offset-x, 0px)),
+      calc(-50% + var(--behavior-bubble-offset-y, 0px))
+    );
+  }
+}
+
+@keyframes viewer-success-prompt-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14rpx);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes viewer-success-prompt-line {
+  from {
+    opacity: 0;
+    transform: scaleX(0.2);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer-bubble-layer--transient .viewer-bubble,
+  .viewer-success-prompt__eyebrow,
+  .viewer-success-prompt__title,
+  .viewer-success-prompt__divider,
+  .viewer-success-prompt__status {
+    animation: none;
+  }
 }
 
 .viewer-bubble {

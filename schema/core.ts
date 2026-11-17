@@ -1212,6 +1212,12 @@ export interface PunchBehaviorParams {
 
   /** Suppress celebration after this punch node has already been marked as punched. */
   celebrationOnlyFirst: boolean
+
+  /** Display a transient success bubble when the punch behavior fires. */
+  showSuccessPrompt: boolean
+
+  /** Success bubble display duration in seconds after it becomes visible. */
+  successPromptDurationSeconds: number
 }
 
 export interface CouponBehaviorParams {
