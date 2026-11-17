@@ -118,6 +118,10 @@ const velocityModeOptions = [
   { label: 'Radial', value: 'radial' },
   { label: 'Vector', value: 'vector' },
 ] as const
+const renderModeOptions = [
+  { label: 'Sprite', value: 'sprite' },
+  { label: 'Paper', value: 'paper' },
+] as const
 
 type NumberInputConfig = {
   min: number
@@ -162,6 +166,11 @@ const EMITTER_FORCE_INPUTS: NumberInputConfig = {
   min: -100,
   max: 100,
   step: 0.1,
+}
+
+const PAPER_NUMBER_INPUTS: Record<'aspectRatio' | 'tumbleCyclesPerSecond', NumberInputConfig> = {
+  aspectRatio: { min: 0.2, max: 1, step: 0.05 },
+  tumbleCyclesPerSecond: { min: 0, max: 4, step: 0.05 },
 }
 
 function resolveEmitterForce(emitter: ParticleEmitterConfig) {
@@ -659,7 +668,57 @@ function handleRemoveComponent() {
 
         <div class="particle-system-panel__section">
           <div class="particle-system-panel__section-title">Visual</div>
-          <div class="particle-system-panel__texture-tile">
+          <v-select
+            :model-value="normalizedProps.render.renderMode"
+            :items="renderModeOptions"
+            item-title="label"
+            item-value="value"
+            label="Render Mode"
+            density="compact"
+            variant="underlined"
+            hide-details
+            :disabled="!componentEnabled"
+            @update:model-value="applyPatch({ render: { renderMode: $event === 'paper' ? 'paper' : 'sprite' } })"
+          />
+          <div
+            v-if="normalizedProps.render.renderMode === 'paper'"
+            class="particle-system-panel__field-list particle-system-panel__paper-fields"
+          >
+            <v-text-field
+              :model-value="normalizedProps.render.paper?.aspectRatio ?? 0.55"
+              label="Paper Height / Width"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              v-bind="PAPER_NUMBER_INPUTS.aspectRatio"
+              @update:model-value="applyPatch({ render: { paper: {
+                ...normalizedProps.render.paper,
+                aspectRatio: Number($event) || 0,
+                tumbleCyclesPerSecond: normalizedProps.render.paper?.tumbleCyclesPerSecond ?? 1.1,
+              } } })"
+            />
+            <v-text-field
+              :model-value="normalizedProps.render.paper?.tumbleCyclesPerSecond ?? 1.1"
+              label="Paper Tumble"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              v-bind="PAPER_NUMBER_INPUTS.tumbleCyclesPerSecond"
+              @update:model-value="applyPatch({ render: { paper: {
+                ...normalizedProps.render.paper,
+                aspectRatio: normalizedProps.render.paper?.aspectRatio ?? 0.55,
+                tumbleCyclesPerSecond: Number($event) || 0,
+              } } })"
+            />
+          </div>
+          <div
+            v-else
+            class="particle-system-panel__texture-tile"
+          >
             <button
               type="button"
               class="particle-system-panel__texture-thumb"

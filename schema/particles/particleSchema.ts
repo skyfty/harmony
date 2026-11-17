@@ -7,7 +7,7 @@ export const PARTICLE_SYSTEM_ACTIVE_FLAG = '__harmonyParticleSystemActive'
 
 export type ParticleQualityTier = 'mini-safe' | 'balanced' | 'desktop-rich'
 export type ParticleBlendMode = 'normal' | 'additive' | 'alpha'
-export type ParticleRenderMode = 'sprite'
+export type ParticleRenderMode = 'sprite' | 'paper'
 export type ParticleEmitterShape = 'point' | 'box' | 'sphere'
 export type ParticleVelocityMode = 'radial' | 'vector'
 export type ParticleSpace = 'local' | 'world'
@@ -41,6 +41,12 @@ export interface ParticleRenderProps {
   depthWrite: boolean
   sortOffset: number
   renderMode: ParticleRenderMode
+  paper?: ParticlePaperRenderProps
+}
+
+export interface ParticlePaperRenderProps {
+  aspectRatio: number
+  tumbleCyclesPerSecond: number
 }
 
 export interface ParticleExposedParams {
@@ -120,12 +126,18 @@ export const DEFAULT_PARTICLE_TRANSFORM: ParticleTransformProps = {
   scaleMultiplier: 1,
 }
 
+export const DEFAULT_PARTICLE_PAPER_RENDER: ParticlePaperRenderProps = {
+  aspectRatio: 0.55,
+  tumbleCyclesPerSecond: 1.1,
+}
+
 export const DEFAULT_PARTICLE_RENDER: ParticleRenderProps = {
   textureAssetId: null,
   blendMode: 'additive',
   depthWrite: false,
   sortOffset: 0,
   renderMode: 'sprite',
+  paper: { ...DEFAULT_PARTICLE_PAPER_RENDER },
 }
 
 export const DEFAULT_PARTICLE_EXPOSED_PARAMS: ParticleExposedParams = {
@@ -215,6 +227,30 @@ function normalizeQualityTier(value: unknown): ParticleQualityTier {
 
 function normalizeVelocityMode(value: unknown): ParticleVelocityMode {
   return value === 'vector' ? 'vector' : 'radial'
+}
+
+function normalizeParticleRenderMode(value: unknown): ParticleRenderMode {
+  return value === 'paper' ? 'paper' : 'sprite'
+}
+
+export function clampParticlePaperRenderProps(
+  value: Partial<ParticlePaperRenderProps> | null | undefined,
+): ParticlePaperRenderProps {
+  const source = value ?? {}
+  return {
+    aspectRatio: clampNumber(
+      source.aspectRatio,
+      0.2,
+      1,
+      DEFAULT_PARTICLE_PAPER_RENDER.aspectRatio,
+    ),
+    tumbleCyclesPerSecond: clampNumber(
+      source.tumbleCyclesPerSecond,
+      0,
+      4,
+      DEFAULT_PARTICLE_PAPER_RENDER.tumbleCyclesPerSecond,
+    ),
+  }
 }
 
 function normalizeParticleEmitterConfig(
@@ -310,7 +346,8 @@ export function clampParticleSystemComponentProps(
       blendMode: normalizeBlendMode(render.blendMode),
       depthWrite: normalizeBoolean(render.depthWrite, DEFAULT_PARTICLE_RENDER.depthWrite),
       sortOffset: clampNumber(render.sortOffset, -100, 100, DEFAULT_PARTICLE_RENDER.sortOffset),
-      renderMode: 'sprite',
+      renderMode: normalizeParticleRenderMode(render.renderMode),
+      paper: clampParticlePaperRenderProps(render.paper),
     },
     exposedParams: {
       color: normalizeHexColor(exposedParams.color, DEFAULT_PARTICLE_EXPOSED_PARAMS.color),
@@ -354,7 +391,10 @@ export function cloneParticleSystemComponentProps(props: ParticleSystemComponent
       rotationOffset: { ...props.transform.rotationOffset },
       scaleMultiplier: props.transform.scaleMultiplier,
     },
-    render: { ...props.render },
+    render: {
+      ...props.render,
+      paper: { ...(props.render.paper ?? DEFAULT_PARTICLE_PAPER_RENDER) },
+    },
     exposedParams: { ...props.exposedParams },
     emitters: props.emitters.map(cloneParticleEmitterConfig),
   }

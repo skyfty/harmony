@@ -12,7 +12,15 @@ import {
   type SceneNodeMaterial,
   type Vector3Like,
 } from '@schema/core'
-import { componentManager } from '@schema/components'
+import {
+  PARTICLE_SYSTEM_COMPONENT_TYPE,
+  PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
+  componentManager,
+  createParticlePresetProps,
+  getParticlePresetDefinition,
+  resolveParticleRuntimeEntry,
+  type ParticleRuntimeRegistryEntry,
+} from '@schema/components'
 import {
   HOUSE_RIG_COMPONENT_TYPE,
   getHouseRigRuntimeSnapshot,
@@ -38,7 +46,7 @@ import {
   HARMONY_AGENT_MAX_ITEM_BYTES,
 } from '@schema/editorAgentProtocol'
 import { createTextureSettings } from '@schema/material'
-import { resolveSceneNodeWorldMatrix, useSceneStore } from '@/stores/sceneStore'
+import { getRuntimeObject, resolveSceneNodeWorldMatrix, useSceneStore } from '@/stores/sceneStore'
 import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
 import { AgentBridgeError } from '@/agent/errors'
 import { setAgentCameraState, setAgentTool } from '@/agent/viewportControl'
@@ -748,6 +756,57 @@ async function executeDomainOperation(
   }
   switch (operation.domain) {
     case 'builder': {
+      if (operation.action === 'preview_particle') {
+        const nodeId = readString(args, 'nodeId')
+        const node = findNodeOrThrow(store, nodeId)
+        const component = resolveComponent(
+          node,
+          typeof args.componentId === 'string' ? args.componentId : undefined,
+          PARTICLE_SYSTEM_COMPONENT_TYPE,
+        )
+        const runtimeObject = getRuntimeObject(nodeId)
+        if (runtimeObject) {
+          componentManager.ensureRuntimeAttached(node, runtimeObject)
+        }
+        const registry = runtimeObject?.userData?.[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] as
+          | Record<string, ParticleRuntimeRegistryEntry>
+          | undefined
+        const runtime = resolveParticleRuntimeEntry(registry, component.id)
+        if (!runtime) {
+          throw new AgentBridgeError(
+            'OPERATION_NOT_SUPPORTED',
+            `Particle runtime ${component.id} is not available on node ${nodeId}`,
+          )
+        }
+        const emitterId = typeof args.emitterId === 'string' && args.emitterId.trim().length
+          ? args.emitterId.trim()
+          : undefined
+        const count = readOptionalNumber(args, 'count', 0, 48)
+          ?? runtime.props.exposedParams.burstCount
+        runtime.restart()
+        runtime.burst(count, emitterId)
+        const warmupFrames = Math.round(readOptionalNumber(args, 'warmupFrames', 0, 30) ?? 5)
+        for (let frame = 0; frame < warmupFrames; frame += 1) {
+          runtime.tick(1 / 30)
+        }
+        if (typeof requestAnimationFrame === 'function') {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => resolve())
+            })
+          })
+        }
+        return {
+          nodeId,
+          componentId: component.id,
+          presetId: runtime.props.presetId,
+          emitterId: emitterId ?? null,
+          count,
+          particleCount: runtime.getParticleCount?.() ?? null,
+          diagnostics: runtime.getParticleDiagnostics?.() ?? null,
+          previewed: true,
+        }
+      }
       if (operation.action === 'update_floor_geometry') {
         const nodeId = readString(args, 'nodeId')
         const node = findNodeOrThrow(store, nodeId)
@@ -812,12 +871,40 @@ async function executeDomainOperation(
       }
       if (operation.action === 'apply_preset') {
         const nodeId = readString(args, 'nodeId')
-        const assetId = readString(args, 'assetId')
         const componentType = readString(args, 'componentType')
+        if (componentType === PARTICLE_SYSTEM_COMPONENT_TYPE) {
+          const presetId = readString(args, 'presetId')
+          const preset = getParticlePresetDefinition(presetId)
+          if (!preset) {
+            throw new AgentBridgeError('VALIDATION_FAILED', `Unknown particle preset ${presetId}`)
+          }
+          const node = findNodeOrThrow(store, nodeId)
+          const component = resolveComponent(
+            node,
+            typeof args.componentId === 'string' ? args.componentId : undefined,
+            PARTICLE_SYSTEM_COMPONENT_TYPE,
+          )
+          const props = createParticlePresetProps(preset.id)
+          return {
+            nodeId,
+            componentId: component.id,
+            presetId: preset.id,
+            changed: store.updateNodeComponentProps(
+              nodeId,
+              component.id,
+              props as unknown as Partial<Record<string, unknown>>,
+            ),
+          }
+        }
+        const assetId = readString(args, 'assetId')
         if (componentType === 'wall') return store.applyWallPresetToNode(nodeId, assetId)
         if (componentType === 'floor') return store.applyFloorPresetToNode(nodeId, assetId)
         if (componentType === 'landform') return store.applyLandformPresetToNode(nodeId, assetId)
         if (componentType === 'road') return store.applyRoadPresetToNode(nodeId, assetId)
+        throw new AgentBridgeError(
+          'OPERATION_NOT_SUPPORTED',
+          `Unsupported builder preset componentType ${componentType}`,
+        )
       }
       break
     }
@@ -1551,6 +1638,11 @@ export async function applySceneOperations(
           operation.action === 'runtime_stats'
           || operation.action === 'analyze_transition'
         )
+      )
+      && !(
+        operation.op === 'domain.apply'
+        && operation.domain === 'builder'
+        && operation.action === 'preview_particle'
       )
     ),
   )

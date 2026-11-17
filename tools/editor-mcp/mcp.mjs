@@ -351,7 +351,7 @@ async function main() {
     HARMONY_AGENT_TOOLS.builder,
     'builder',
     'Edit Harmony builders',
-    'Create or configure walls, floors, roads, landforms, water, and their presets through existing editor builders. Floor polygons can be updated semantically with update_floor_geometry.',
+    'Create or configure walls, floors, roads, landforms, water, particle systems, and their presets through existing editor builders. Apply particle presets with componentType particleSystem and presetId, and trigger a transient animation with preview_particle. Floor polygons can be updated semantically with update_floor_geometry.',
   )
   domainTool(
     HARMONY_AGENT_TOOLS.behavior,

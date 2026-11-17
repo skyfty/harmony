@@ -56,6 +56,12 @@ describe('component Agent profiles', () => {
       domain: 'actor',
       tool: 'harmony_actor_edit',
     })
+    expect(componentManager.getAgentProfile('particleSystem')).toMatchObject({
+      editMode: 'domain',
+      domain: 'builder',
+      tool: 'harmony_builder_edit',
+      actions: expect.arrayContaining(['apply_preset', 'preview_particle', 'patch_component']),
+    })
     expect(componentManager.getAgentProfile('houseRig')).toMatchObject({
       editMode: 'domain',
       domain: 'houseRig',

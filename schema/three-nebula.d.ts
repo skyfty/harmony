@@ -20,4 +20,18 @@ declare module 'three-nebula' {
   export const BoxZone: any
   export const SphereZone: any
   export const SpriteRenderer: any
+  export class MeshRenderer {
+    constructor(container: any, THREE: any)
+    container: any
+    _body: any
+    _targetPool: any
+    _materialPool: any
+    init(system: any): void
+    onParticleCreated(particle: any): void
+    onParticleUpdate(particle: any): void
+    onParticleDead(particle: any): void
+    onSystemUpdate(system: any): void
+    scale(particle: any): void
+    destroy?(): void
+  }
 }

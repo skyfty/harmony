@@ -2,7 +2,7 @@ import * as THREE from 'three'
 // three-nebula ships without stable bundled typings in this build path.
 // Keep the runtime import and rely on the local ambient declaration file.
 // @ts-ignore
-import System, { Alpha, Body, BoxZone, Color as NebulaColor, Emitter, Force, Life, Mass, PointZone, Position, RadialVelocity, Radius, Rate, Scale, Span, SphereZone, SpriteRenderer, Vector3D, VectorVelocity } from 'three-nebula'
+import System, { Alpha, Body, BoxZone, Color as NebulaColor, Emitter, Force, Life, Mass, MeshRenderer, PointZone, Position, RadialVelocity, Radius, Rate, Scale, Span, SphereZone, SpriteRenderer, Vector3D, VectorVelocity } from 'three-nebula'
 import type { ParticleBudgetDecision, ParticleBudgetRuntimeStats } from './particleBudget'
 import { applyEmitterBudget, resolveParticleBudgetDecision } from './particleBudget'
 import { getParticleTextureResolver } from './particleTextureResolver'
@@ -26,14 +26,63 @@ export type ParticleRuntimeRegistryEntry = {
   stop(options?: { soft?: boolean }): void
   restart(): void
   burst(count?: number, emitterId?: string): void
+  getParticleCount?(): number
+  getParticleDiagnostics?(): ParticleRuntimeDiagnostics
   tick(delta: number, frameState?: { cameraWorldPosition: { x: number; y: number; z: number } | null }, runtimeStats?: ParticleBudgetRuntimeStats): void
   setPlaybackActive(active: boolean): void
   setExposedParams(patch: Partial<ParticleExposedParams>): void
   dispose(): void
 }
 
+export type ParticleRuntimeDiagnostics = {
+  active: boolean
+  particleCount: number
+  groupVisible: boolean
+  sample: {
+    age: number
+    position: { x: number; y: number; z: number }
+    velocity: { x: number; y: number; z: number }
+    alpha: number
+    scale: number
+    color: { r: number; g: number; b: number }
+    targetVisible: boolean
+  } | null
+}
+
 export interface ParticleSystemRuntimeHandle extends ParticleRuntimeRegistryEntry {
   group: THREE.Group
+}
+
+export function allocateParticleBurstCounts(
+  totalCount: number,
+  capacities: readonly number[],
+): number[] {
+  const normalizedTotal = Math.max(0, Math.trunc(Number(totalCount) || 0))
+  const normalizedCapacities = capacities.map((capacity) =>
+    Math.max(0, Math.trunc(Number(capacity) || 0)),
+  )
+  const allocation = normalizedCapacities.map(() => 0)
+  let remaining = Math.min(
+    normalizedTotal,
+    normalizedCapacities.reduce((sum, capacity) => sum + capacity, 0),
+  )
+  while (remaining > 0) {
+    let assigned = false
+    for (let index = 0; index < allocation.length && remaining > 0; index += 1) {
+      const capacity = normalizedCapacities[index] ?? 0
+      const current = allocation[index] ?? 0
+      if (current >= capacity) {
+        continue
+      }
+      allocation[index] = current + 1
+      remaining -= 1
+      assigned = true
+    }
+    if (!assigned) {
+      break
+    }
+  }
+  return allocation
 }
 
 const sharedTextureCache = new Map<string, THREE.Texture>()
@@ -125,6 +174,133 @@ function getBlendMode(mode: ParticleSystemComponentProps['render']['blendMode'])
     return THREE.NormalBlending
   }
   return THREE.AdditiveBlending
+}
+
+type PaperParticle = {
+  target?: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial> | null
+  radius?: number
+  scale?: number
+  alpha?: number
+  age?: number
+  color?: THREE.Color
+  useAlpha?: boolean
+  useColor?: boolean
+  rotation?: THREE.Vector3
+  __harmonyPaperSeed?: {
+    x: number
+    y: number
+    z: number
+    wobble: number
+    direction: number
+  }
+}
+
+class PaperRenderer extends MeshRenderer {
+  private readonly paperProps: ParticleSystemComponentProps['render']
+
+  constructor(
+    container: THREE.Object3D,
+    THREE_API: typeof THREE,
+    props: ParticleSystemComponentProps,
+  ) {
+    super(container, THREE_API)
+    this.paperProps = props.render
+    const material = new THREE_API.MeshBasicMaterial({
+      color: props.exposedParams.color,
+      transparent: true,
+      opacity: props.exposedParams.opacity,
+      depthWrite: props.render.depthWrite,
+      side: THREE_API.DoubleSide,
+      blending: getBlendMode(props.render.blendMode),
+    })
+    const geometry = new THREE_API.PlaneGeometry(1, props.render.paper?.aspectRatio ?? 0.55)
+    const body = new THREE_API.Mesh(geometry, material)
+    body.renderOrder = props.render.sortOffset
+    ;(this as unknown as { _body: THREE.Mesh })._body = body
+  }
+
+  onParticleCreated(particle: PaperParticle): void {
+    super.onParticleCreated(particle)
+    if (!particle.target) {
+      return
+    }
+    particle.__harmonyPaperSeed = {
+      x: Math.random() * Math.PI * 2,
+      y: Math.random() * Math.PI * 2,
+      z: Math.random() * Math.PI * 2,
+      wobble: 0.45 + Math.random() * 0.75,
+      direction: Math.random() < 0.5 ? -1 : 1,
+    }
+    particle.target.renderOrder = this.paperProps.sortOffset
+    this.applyPaperTransform(particle)
+  }
+
+  onParticleUpdate(particle: PaperParticle): void {
+    super.onParticleUpdate(particle)
+    this.applyPaperTransform(particle)
+  }
+
+  scale(particle: PaperParticle): void {
+    if (!particle.target) {
+      return
+    }
+    const size = Math.max(0.001, Number(particle.radius) || 0.1)
+    const scale = Math.max(0.001, Number(particle.scale) || 1)
+    particle.target.scale.set(size * scale, size * scale, 1)
+  }
+
+  private applyPaperTransform(particle: PaperParticle): void {
+    const target = particle.target
+    const seed = particle.__harmonyPaperSeed
+    if (!target || !seed) {
+      return
+    }
+    const age = Math.max(0, Number(particle.age) || 0)
+    const spin = age * (this.paperProps.paper?.tumbleCyclesPerSecond ?? 1.1) * Math.PI * 2
+    const wobble = Math.sin(age * Math.PI * 2.4 + seed.wobble) * 0.55
+    target.rotation.set(
+      seed.x + wobble,
+      seed.y + spin * seed.direction,
+      seed.z + spin * 0.37 * seed.direction,
+    )
+    this.scale(particle)
+    if (particle.useAlpha && typeof particle.alpha === 'number') {
+      target.material.opacity = particle.alpha
+      target.material.transparent = true
+    }
+    if (particle.useColor && particle.color) {
+      target.material.color.copy(particle.color)
+    }
+  }
+
+  destroy(): void {
+    const materialPool = (this as unknown as { _materialPool?: { list?: Record<string, THREE.Material[]> } })._materialPool
+    const targetPool = (this as unknown as { _targetPool?: { list?: Record<string, THREE.Mesh[]> } })._targetPool
+    const materials = new Set<THREE.Material>()
+    Object.values(materialPool?.list ?? {}).forEach((entries) => {
+      entries.forEach((material) => materials.add(material))
+    })
+    Object.values(targetPool?.list ?? {}).forEach((entries) => {
+      entries.forEach((target) => {
+        const targetMaterial = (target as THREE.Mesh).material
+        if (Array.isArray(targetMaterial)) {
+          targetMaterial.forEach((material) => materials.add(material))
+        } else if (targetMaterial) {
+          materials.add(targetMaterial)
+        }
+      })
+    })
+    materials.forEach((material) => material.dispose())
+    const body = (this as unknown as { _body?: THREE.Mesh })._body
+    body?.geometry?.dispose()
+    if (Array.isArray(body?.material)) {
+      body.material.forEach((material) => material.dispose())
+    } else {
+      body?.material?.dispose()
+    }
+    materialPool?.list && Object.keys(materialPool.list).forEach((key) => delete materialPool.list?.[key])
+    targetPool?.list && Object.keys(targetPool.list).forEach((key) => delete targetPool.list?.[key])
+  }
 }
 
 function isWeatherParticlePreset(presetId: string): boolean {
@@ -275,14 +451,17 @@ function buildEmitter(config: ParticleEmitterConfig, props: ParticleSystemCompon
   const colorA = sanitizeParticleColor(budgeted.color)
   const colorB = sanitizeParticleColor(budgeted.color2)
   emitter.setRate(createEmissionRate(budgeted.emissionRate, props.budget.updateHz))
-  emitter.setInitializers([
-    new Body(createSpriteBody(props, texture)),
+  const initializers = [
+    ...(props.render.renderMode === 'paper' ? [] : [new Body(createSpriteBody(props, texture))]),
     new Position(createZone(budgeted)),
     new Mass(1),
-    new Radius(Math.max(1, budgeted.particleSize * 18)),
+    new Radius(props.render.renderMode === 'paper'
+      ? Math.max(0.01, budgeted.particleSize)
+      : Math.max(1, budgeted.particleSize * 18)),
     new Life(Math.max(0.05, budgeted.lifetime * 0.6), budgeted.lifetime),
     createVelocity(budgeted),
-  ])
+  ]
+  emitter.setInitializers(initializers)
   const behaviours = [
     new Alpha(budgeted.alphaStart, budgeted.alphaEnd),
     new Scale(budgeted.scaleStart, budgeted.scaleEnd),
@@ -396,7 +575,9 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
   private buildSystem(): void {
     this.disposeSystemOnly()
     this.system = new System()
-    this.renderer = new SpriteRenderer(this.renderGroup, THREE)
+    this.renderer = this.props.render.renderMode === 'paper'
+      ? new PaperRenderer(this.renderGroup, THREE, this.props)
+      : new SpriteRenderer(this.renderGroup, THREE)
     this.emitters = this.props.emitters.map((entry) => ({
       id: entry.id,
       emitter: buildEmitter(entry, this.props, this.currentTexture),
@@ -530,38 +711,120 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
   }
 
   burst(count?: number, emitterId?: string): void {
-    const target = emitterId ? this.emitters.find((entry) => entry.id === emitterId) : this.emitters[0]
-    if (!target?.emitter) {
+    if (!this.emitters.length) {
       return
     }
-    const burstCount = Math.max(0, Math.min(count ?? this.props.exposedParams.burstCount, this.props.budget.maxParticles))
-    const emitter = target.emitter as {
-      particles?: Array<unknown>
-      isEmitting?: boolean
-      createParticle?: () => unknown
-      emit?: (totalEmitTimes?: number, life?: number) => unknown
+    const targetEntries = emitterId
+      ? this.emitters.filter((entry) => entry.id === emitterId)
+      : this.emitters
+    if (!targetEntries.length) {
+      return
     }
-    if (typeof emitter.isEmitting === 'boolean' && !emitter.isEmitting) {
-      emitter.isEmitting = true
+    const requestedTotal = Math.max(
+      0,
+      Math.min(
+        count ?? this.props.exposedParams.burstCount,
+        this.props.budget.maxParticles,
+      ),
+    )
+    const currentParticles = this.emitters.reduce((sum, entry) => {
+      const particles = (entry.emitter as { particles?: Array<unknown> }).particles
+      return sum + (Array.isArray(particles) ? particles.length : 0)
+    }, 0)
+    const totalAvailableParticles = Math.max(0, this.props.budget.maxParticles - currentParticles)
+    const capacities = targetEntries.map((entry) => {
+      const particles = (entry.emitter as { particles?: Array<unknown> }).particles
+      const current = Array.isArray(particles) ? particles.length : 0
+      return Math.max(0, this.props.budget.maxParticles - current)
+    })
+    const totalCapacity = capacities.reduce((sum, capacity) => sum + capacity, 0)
+    const totalToCreate = Math.min(requestedTotal, totalAvailableParticles, totalCapacity)
+    if (totalToCreate <= 0) {
+      return
     }
-    const currentParticles = Array.isArray(emitter.particles) ? emitter.particles.length : 0
-    const availableParticles = Math.max(0, this.props.budget.maxParticles - currentParticles)
-    const createCount = Math.min(burstCount, availableParticles)
-    if (typeof emitter.createParticle === 'function') {
-      let createdParticles = 0
-      while (createdParticles < createCount) {
-        emitter.createParticle()
-        createdParticles += 1
+    const allocations = allocateParticleBurstCounts(totalToCreate, capacities)
+    targetEntries.forEach((target, index) => {
+      const emitterCreateCount = allocations[index] ?? 0
+      if (emitterCreateCount <= 0) {
+        return
       }
-    } else if (typeof emitter.emit === 'function') {
-      emitter.emit(Math.max(1, burstCount))
-    } else if (this.system && typeof this.system.emit === 'function') {
-      this.system.emit({
-        totalTime: 0.05,
-      })
-    }
+      const emitter = target.emitter as {
+        particles?: Array<unknown>
+        isEmitting?: boolean
+        createParticle?: () => unknown
+        emit?: (totalEmitTimes?: number, life?: number) => unknown
+      }
+      if (typeof emitter.isEmitting === 'boolean' && !emitter.isEmitting) {
+        emitter.isEmitting = true
+      }
+      if (typeof emitter.createParticle === 'function') {
+        let createdParticles = 0
+        while (createdParticles < emitterCreateCount) {
+          emitter.createParticle()
+          createdParticles += 1
+        }
+      } else if (typeof emitter.emit === 'function') {
+        emitter.emit(Math.max(1, emitterCreateCount))
+      } else if (this.system && typeof this.system.emit === 'function') {
+        this.system.emit({
+          totalTime: 0.05,
+        })
+      }
+    })
     this.active = true
     this.updateUserData()
+  }
+
+  getParticleCount(): number {
+    return this.emitters.reduce((sum, entry) => {
+      const particles = (entry.emitter as { particles?: Array<unknown> }).particles
+      return sum + (Array.isArray(particles) ? particles.length : 0)
+    }, 0)
+  }
+
+  getParticleDiagnostics(): ParticleRuntimeDiagnostics {
+    const sample = this.emitters
+      .flatMap((entry) => {
+        const particles = (entry.emitter as { particles?: Array<{
+          position?: { x: number; y: number; z: number }
+          velocity?: { x: number; y: number; z: number }
+          age?: number
+          alpha?: number
+          scale?: number
+          color?: { r: number; g: number; b: number }
+          target?: THREE.Object3D | null
+        }> }).particles
+        return Array.isArray(particles) ? particles : []
+      })
+      .find((particle) => particle.position)
+    return {
+      active: this.active,
+      particleCount: this.getParticleCount(),
+      groupVisible: this.group.visible,
+      sample: sample?.position
+        ? {
+            age: sample.age ?? 0,
+            position: {
+              x: sample.position.x,
+              y: sample.position.y,
+              z: sample.position.z,
+            },
+            velocity: {
+              x: sample.velocity?.x ?? 0,
+              y: sample.velocity?.y ?? 0,
+              z: sample.velocity?.z ?? 0,
+            },
+            alpha: sample.alpha ?? 0,
+            scale: sample.scale ?? 0,
+            color: {
+              r: sample.color?.r ?? 0,
+              g: sample.color?.g ?? 0,
+              b: sample.color?.b ?? 0,
+            },
+            targetVisible: sample.target?.visible ?? false,
+          }
+        : null,
+    }
   }
 
   setPlaybackActive(active: boolean): void {
