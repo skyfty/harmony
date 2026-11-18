@@ -8,6 +8,7 @@ import {
   Mesh,
   Object3D,
   Vector3,
+  type AnimationClip,
   type Camera,
   type Material,
   type WebGLRenderer,
@@ -78,6 +79,10 @@ export interface ModelInstanceGroup {
   boundingBox: Box3
   radius: number
   meshes: InstancedMesh[]
+  hasSkinnedMesh: boolean
+  hasAnimations: boolean
+  staticInstancingEligible: boolean
+  animationClipNames: string[]
 }
 
 export interface ModelInstanceBinding {
@@ -631,13 +636,65 @@ function mapEntryToGroup(entry: ModelAssetEntry): ModelInstanceGroup {
     boundingBox: entry.boundingBox.clone(),
     radius: entry.radius,
     meshes: entry.handles.map((handle) => handle.mesh),
+    hasSkinnedMesh: entry.hasSkinnedMesh,
+    hasAnimations: entry.hasAnimations,
+    staticInstancingEligible: entry.staticInstancingEligible,
+    animationClipNames: [...entry.animationClipNames],
+  }
+}
+
+function inspectModelAnimations(root: Object3D): {
+  hasAnimations: boolean
+  animationClipNames: string[]
+} {
+  const names: string[] = []
+  const seen = new Set<string>()
+  let hasAnimations = false
+  const appendName = (value: unknown) => {
+    if (typeof value !== 'string') {
+      return
+    }
+    const normalized = value.trim()
+    if (!normalized || seen.has(normalized)) {
+      return
+    }
+    seen.add(normalized)
+    names.push(normalized)
+  }
+
+  root.traverse((child) => {
+    const animations = (child as unknown as { animations?: AnimationClip[] })?.animations
+    if (Array.isArray(animations) && animations.length) {
+      hasAnimations = true
+      animations.forEach((clip) => appendName(clip?.name))
+    }
+    const userDataNames = child.userData?.__animations
+    if (Array.isArray(userDataNames) && userDataNames.length) {
+      hasAnimations = true
+      userDataNames.forEach(appendName)
+    }
+  })
+  return {
+    hasAnimations,
+    animationClipNames: names,
   }
 }
 
 function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEntry {
   prepared.updateMatrixWorld(true)
-  const submeshes = extractSubmeshes(prepared)
-  const boundingBox = computeParsedSubmeshBounds(submeshes)
+  let hasSkinnedMesh = false
+  prepared.traverse((child) => {
+    if ((child as Mesh & { isSkinnedMesh?: boolean }).isSkinnedMesh === true) {
+      hasSkinnedMesh = true
+    }
+  })
+  const { hasAnimations, animationClipNames } = inspectModelAnimations(prepared)
+  const staticInstancingEligible = !hasSkinnedMesh && !hasAnimations
+  const submeshes = staticInstancingEligible ? extractSubmeshes(prepared) : []
+  const objectBounds = new Box3().setFromObject(prepared)
+  const boundingBox = objectBounds.isEmpty()
+    ? computeParsedSubmeshBounds(submeshes)
+    : objectBounds
   const radius = boundingBox.getSize(new Vector3()).length() * 0.5
 
   const initialCapacity = modelObjectCacheConfig.defaultInstanceCapacity
@@ -688,6 +745,10 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
     radius,
     handles,
     meshes: handles.map((handle) => handle.mesh),
+    hasSkinnedMesh,
+    hasAnimations,
+    staticInstancingEligible,
+    animationClipNames,
   }
 }
 
@@ -758,6 +819,9 @@ function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
   root.traverse((child: Object3D) => {
     const mesh = child as Mesh
     if (!(mesh as any)?.isMesh) {
+      return
+    }
+    if ((mesh as Mesh & { isSkinnedMesh?: boolean }).isSkinnedMesh === true) {
       return
     }
     if (!mesh.geometry) {

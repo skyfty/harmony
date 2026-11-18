@@ -210,7 +210,7 @@ import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { refreshRuntimeModelInstancingPolicy } from '@schema/runtimeModelInstancing'
 import { useClipboardStore } from './clipboardStore'
-import { getImportedObjectBounds, loadObjectFromFile } from '@schema/assetImport'
+import { cloneImportedObject, getImportedObjectBounds, loadObjectFromFile } from '@schema/assetImport'
 import { createFileFromEntry } from '@schema/modelAssetLoader'
 import {
   cleanupInactiveSkinAttachments,
@@ -235,6 +235,7 @@ import {
   ensureInstancedMeshesRegistered,
   type ModelInstanceGroup,
 } from '@schema/modelObjectCache'
+import { diagnoseImportedModelScale } from '@schema/modelScaleDiagnostics'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { compileRoadStaticMeshMetadata, createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
@@ -461,6 +462,7 @@ import {
   cloneNominateComponentProps,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   createProceduralLandscapeComponentState,
+  createAnimationComponentState,
   HOUSE_RIG_COMPONENT_TYPE,
   clampHouseRigComponentProps,
   getHouseRigRuntimeSnapshot,
@@ -1835,7 +1837,7 @@ function resolveImportedModelExpandBlock(
       .slice(0, 3)
     const suffix = animations.length > clipNames.length ? ` 等 ${animations.length} 个` : ''
     return {
-      reason: `该模型包含动画（${clipNames.join('、')}${suffix}），暂不支持展开为子节点`,
+      reason: `该模型包含动画（${clipNames.join('、')}${suffix}`,
       note: null,
       skinnedGroups,
       diagnostics: {
@@ -17319,6 +17321,7 @@ export const useSceneStore = defineStore('scene', {
       let registerAssetId: string | null = null
       let modelGroup: ModelInstanceGroup | null = null
       let canUseInstancing = false
+      let importedComponents: SceneNodeComponentMap | undefined
       let metrics: ObjectMetrics | null = runtimeSource ? computeObjectMetrics(runtimeSource) : null
 
       
@@ -17342,13 +17345,49 @@ export const useSceneStore = defineStore('scene', {
           modelGroup = baseObject
         }
 
-        canUseInstancing = Boolean(modelGroup?.meshes.length)
+        if (modelGroup) {
+          const userData = modelGroup.object.userData ?? (modelGroup.object.userData = {})
+          const scaleDiagnostic = diagnoseImportedModelScale(modelGroup.boundingBox)
+          const previousDiagnostic = userData.harmonyModelScaleDiagnostic as
+            | { code?: string }
+            | null
+            | undefined
+          if (scaleDiagnostic) {
+            userData.harmonyModelScaleDiagnostic = scaleDiagnostic
+            if (previousDiagnostic?.code !== scaleDiagnostic.code) {
+              console.warn(
+                `[ModelImport] ${asset.name ?? asset.id}: ${scaleDiagnostic.message}`,
+              )
+            }
+          } else if (previousDiagnostic) {
+            delete userData.harmonyModelScaleDiagnostic
+          }
+
+          if (modelGroup.hasAnimations) {
+            const temporaryNode = {
+              id: payload.nodeId ?? '',
+              name: name ?? asset.name,
+              nodeType: 'Group',
+              sourceAssetId: asset.id,
+            } as SceneNode
+            importedComponents = {
+              [ANIMATION_COMPONENT_TYPE]: createAnimationComponentState(temporaryNode, {
+                defaultClipName: modelGroup.animationClipNames[0] ?? null,
+                autoplay: true,
+                loop: true,
+                timeScale: 1,
+              }),
+            }
+          }
+        }
+
+        canUseInstancing = Boolean(modelGroup?.meshes.length && modelGroup.staticInstancingEligible)
 
         if (canUseInstancing && modelGroup) {
           runtimeSource = createInstancedPlaceholderObject(name ?? payload.asset.name, modelGroup)
           metrics = computeInstancedMetrics(modelGroup)
         } else if (modelGroup) {
-          runtimeSource = modelGroup.object.clone(true)
+          runtimeSource = cloneImportedObject(modelGroup.object)
           metrics = computeObjectMetrics(runtimeSource)
         }
 
@@ -17429,6 +17468,7 @@ export const useSceneStore = defineStore('scene', {
         scale,
         sourceAssetId: sourceAssetId ?? undefined,
         parentId: targetParentId ?? undefined,
+        components: importedComponents,
         editorFlags: payload.editorFlags,
         userData: clonePlainRecord(runtimeSource.userData as Record<string, unknown> | undefined),
       })
