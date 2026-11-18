@@ -3593,8 +3593,11 @@ function areSignboardGuidanceEntriesEqual(
 			|| a.label !== b.label
 			|| a.distanceLabel !== b.distanceLabel
 			|| a.edge !== b.edge
+			|| a.placementMode !== b.placementMode
 			|| Math.abs(a.xPercent - b.xPercent) > 1e-4
 			|| Math.abs(a.yPercent - b.yPercent) > 1e-4
+			|| Math.abs(a.anchorXPercent - b.anchorXPercent) > 1e-4
+			|| Math.abs(a.anchorYPercent - b.anchorYPercent) > 1e-4
 			|| Math.abs(a.arrowAngleDeg - b.arrowAngleDeg) > 1e-3
 			|| Math.abs(a.scale - b.scale) > 1e-4
 			|| Math.abs(a.opacity - b.opacity) > 1e-4
@@ -18352,24 +18355,40 @@ watch(watchExclusiveUiActive, (active) => {
 				v-for="entry in signboardGuidanceEntries"
 				:key="entry.nodeId"
 				class="scene-preview__signboard-guidance"
-				:class="`scene-preview__signboard-guidance--${entry.edge}`"
+				:class="[
+					`scene-preview__signboard-guidance--${entry.edge}`,
+					`scene-preview__signboard-guidance--${entry.placementMode}`,
+				]"
 				role="listitem"
 				:aria-label="`${entry.label}，${entry.distanceLabel}`"
 				:style="{
 					left: `${entry.xPercent}%`,
 					top: `${entry.yPercent}%`,
-					width: `${entry.estimatedWidthPx}px`,
+					width: entry.placementMode === 'anchored' ? `${entry.estimatedWidthPx}px` : '42px',
 					opacity: String(entry.opacity),
 					transform: `translate(-50%, -50%) scale(${entry.scale})`,
 				}"
 			>
 				<div class="scene-preview__signboard-guidance-float">
 					<span
+						v-if="entry.placementMode === 'anchored'"
+						class="scene-preview__signboard-guidance-anchor"
+						:style="{
+							'--guidance-anchor-offset-x': `${((entry.anchorXPercent - entry.xPercent) / 100) * lanternViewportSize.width / entry.scale}px`,
+							'--guidance-anchor-offset-y': `${((entry.anchorYPercent - entry.yPercent) / 100) * lanternViewportSize.height / entry.scale}px`,
+						}"
+						aria-hidden="true"
+					></span>
+					<span
+						v-if="entry.placementMode === 'edge'"
 						class="scene-preview__signboard-guidance-arrow"
 						:style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
 						aria-hidden="true"
 					>↑</span>
-					<div class="scene-preview__signboard-guidance-copy">
+					<div
+						v-if="entry.placementMode === 'anchored'"
+						class="scene-preview__signboard-guidance-copy"
+					>
 						<span class="scene-preview__signboard-guidance-label">{{ entry.label }}</span>
 						<span class="scene-preview__signboard-guidance-distance">{{ entry.distanceLabel }}</span>
 					</div>
@@ -19796,12 +19815,7 @@ watch(watchExclusiveUiActive, (active) => {
 	position: absolute;
 	transform: translate(-50%, -50%);
 	box-sizing: border-box;
-	transition:
-		left 90ms linear,
-		top 90ms linear,
-		opacity 120ms ease,
-		transform 120ms ease-out;
-	will-change: left, top, transform;
+	transition: opacity 120ms ease;
 }
 
 .scene-preview__signboard-guidance-float {
@@ -19812,7 +19826,25 @@ watch(watchExclusiveUiActive, (active) => {
 	min-height: 42px;
 	padding: 4px 12px 5px 2px;
 	isolation: isolate;
-	animation: scene-preview-signboard-guidance-drift 6.4s ease-in-out infinite;
+}
+
+.scene-preview__signboard-guidance-anchor {
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	width: 7px;
+	height: 7px;
+	border: 1px solid rgba(255, 255, 255, 0.9);
+	border-radius: 50%;
+	background: #ffd487;
+	box-shadow:
+		0 0 0 3px rgba(18, 35, 52, 0.56),
+		0 0 12px rgba(116, 213, 255, 0.78);
+	transform: translate(
+		calc(-50% + var(--guidance-anchor-offset-x, 0px)),
+		calc(-50% + var(--guidance-anchor-offset-y, 0px))
+	);
+	pointer-events: none;
 }
 
 .scene-preview__signboard-guidance-arrow {
@@ -19888,11 +19920,6 @@ watch(watchExclusiveUiActive, (active) => {
 		0 2px 7px rgba(0, 0, 0, 0.9);
 }
 
-@keyframes scene-preview-signboard-guidance-drift {
-	0%, 100% { transform: translateY(-0.8px); }
-	50% { transform: translateY(0.8px); }
-}
-
 @media (max-width: 480px) {
 	.scene-preview__signboard-guidance-float {
 		gap: 7px;
@@ -19905,12 +19932,6 @@ watch(watchExclusiveUiActive, (active) => {
 
 	.scene-preview__signboard-guidance-distance {
 		font-size: 0.66rem;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.scene-preview__signboard-guidance-float {
-		animation: none;
 	}
 }
 

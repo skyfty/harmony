@@ -127,13 +127,15 @@ describe('Signboard guidance overlay', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({
       nodeId: 'guidance-boundary',
-      edge: 'top',
+      placementMode: 'anchored',
     })
+    expect(entries[0]?.anchorXPercent).toBeCloseTo(50, 4)
+    expect(entries[0]?.anchorYPercent).toBeCloseTo(50, 4)
     expect(entries[0]?.opacity).toBeLessThan(SIGNBOARD_CARD_FAR_OPACITY)
     expect(entries[0]?.scale).toBeLessThan(SIGNBOARD_CARD_FAR_SCALE)
   })
 
-  it('places only in-view far targets and keeps their arrow bearings', () => {
+  it('anchors in-view far targets to their projected screen positions', () => {
     const entries = resolve([
       candidate('forward', 0, 2, -200, 200),
       candidate('left', -80, 2, -200, 200),
@@ -148,12 +150,63 @@ describe('Signboard guidance overlay', () => {
     const offscreen = byId.get('offscreen')
     const rear = byId.get('rear')
 
-    expect(forward).toMatchObject({ nodeId: 'forward', edge: 'top' })
-    expect(forward?.arrowAngleDeg).toBeCloseTo(0, 4)
-    expect(left?.arrowAngleDeg).toBeCloseTo(-21.8014, 3)
-    expect(right?.arrowAngleDeg).toBeCloseTo(21.8014, 3)
+    expect(forward).toMatchObject({ nodeId: 'forward', placementMode: 'anchored' })
+    expect(left).toMatchObject({ nodeId: 'left', placementMode: 'anchored' })
+    expect(right).toMatchObject({ nodeId: 'right', placementMode: 'anchored' })
+    expect(forward?.anchorXPercent).toBeCloseTo(50, 4)
+    expect(left?.anchorXPercent).toBeLessThan(50)
+    expect(right?.anchorXPercent).toBeGreaterThan(50)
     expect(offscreen).toBeUndefined()
     expect(rear).toBeUndefined()
+  })
+
+  it('uses the exact camera projection as the marker anchor', () => {
+    const camera = createCamera()
+    const anchor = new THREE.Vector3(30, 2, -200)
+    const projected = anchor.clone().project(camera)
+    const entries = computeSignboardGuidanceEntries({
+      candidates: [candidate('projected', anchor.x, anchor.y, anchor.z, 200)],
+      camera,
+      viewportWidth: VIEWPORT.width,
+      viewportHeight: VIEWPORT.height,
+      safeArea: VIEWPORT.safeArea,
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.placementMode).toBe('anchored')
+    expect(entries[0]?.anchorXPercent).toBeCloseTo((projected.x * 0.5 + 0.5) * 100, 6)
+    expect(entries[0]?.anchorYPercent).toBeCloseTo((1 - (projected.y * 0.5 + 0.5)) * 100, 6)
+  })
+
+  it('uses an edge pointer only when the projected target is outside the viewport', () => {
+    const entries = resolve([candidateAtNdcX('edge', 1.18)])
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      nodeId: 'edge',
+      placementMode: 'edge',
+      edge: 'right',
+    })
+    expect(entries[0]?.anchorXPercent).toBeGreaterThan(100)
+    expect(entries[0]?.xPercent).toBeLessThan(100)
+    expect(entries[0]?.arrowAngleDeg).toBeCloseTo(90, 0)
+  })
+
+  it('keeps labels exactly on the target anchor without collision avoidance', () => {
+    const entries = resolve([
+      candidate('first', 0, 2, -300, 300),
+      candidate('second', 0, 2, -300, 300),
+    ])
+
+    expect(entries).toHaveLength(2)
+    expect(entries[0]?.placementMode).toBe('anchored')
+    expect(entries[1]?.placementMode).toBe('anchored')
+    expect(entries[0]?.anchorXPercent).toBeCloseTo(entries[1]?.anchorXPercent ?? 0, 6)
+    expect(entries[0]?.anchorYPercent).toBeCloseTo(entries[1]?.anchorYPercent ?? 0, 6)
+    expect(entries[0]?.xPercent).toBeCloseTo(entries[0]?.anchorXPercent ?? 0, 6)
+    expect(entries[0]?.yPercent).toBeCloseTo(entries[0]?.anchorYPercent ?? 0, 6)
+    expect(entries[1]?.xPercent).toBeCloseTo(entries[1]?.anchorXPercent ?? 0, 6)
+    expect(entries[1]?.yPercent).toBeCloseTo(entries[1]?.anchorYPercent ?? 0, 6)
   })
 
   it('does not show guidance for targets behind the camera', () => {

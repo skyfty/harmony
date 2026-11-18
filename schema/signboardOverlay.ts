@@ -29,6 +29,7 @@ export const SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO = 0.2
 
 export type SignboardReferenceKind = 'camera' | 'vehicle'
 export type SignboardGuidanceEdge = 'top' | 'right' | 'bottom' | 'left'
+export type SignboardGuidancePlacementMode = 'anchored' | 'edge'
 
 export interface SignboardOverlayPlacement {
   xPercent: number
@@ -92,8 +93,11 @@ export interface SignboardGuidanceEntry {
   distanceLabel: string
   xPercent: number
   yPercent: number
+  anchorXPercent: number
+  anchorYPercent: number
   arrowAngleDeg: number
   edge: SignboardGuidanceEdge
+  placementMode: SignboardGuidancePlacementMode
   scale: number
   opacity: number
   estimatedWidthPx: number
@@ -687,19 +691,6 @@ function resolveGuidanceMarkerDimensions(
   return { width, height }
 }
 
-function guidanceRectsOverlap(
-  a: { left: number; top: number; right: number; bottom: number },
-  b: { left: number; top: number; right: number; bottom: number },
-): boolean {
-  const gap = 6
-  return !(
-    a.right + gap <= b.left
-    || a.left >= b.right + gap
-    || a.bottom + gap <= b.top
-    || a.top >= b.bottom + gap
-  )
-}
-
 export function isSignboardAnchorInView(
   anchorWorld: THREE.Vector3 | Vector3Like,
   camera: THREE.Camera,
@@ -778,7 +769,6 @@ export function computeSignboardGuidanceEntries(params: {
     .sort((a, b) => a.distanceMeters - b.distanceMeters || a.nodeId.localeCompare(b.nodeId))
 
   const entries: SignboardGuidanceEntry[] = []
-  const placedRects: Array<{ left: number; top: number; right: number; bottom: number }> = []
   const seenNodeIds = new Set<string>()
 
   for (const candidate of sortedCandidates) {
@@ -786,14 +776,15 @@ export function computeSignboardGuidanceEntries(params: {
       continue
     }
 
-    guidanceCameraSpace
+    guidanceProjected
       .set(candidate.anchorWorld.x, candidate.anchorWorld.y, candidate.anchorWorld.z)
-      .applyMatrix4(params.camera.matrixWorldInverse)
+      .project(params.camera)
     if (
-      !Number.isFinite(guidanceCameraSpace.x)
-      || !Number.isFinite(guidanceCameraSpace.y)
-      || !Number.isFinite(guidanceCameraSpace.z)
-      || guidanceCameraSpace.z >= -1e-5
+      !Number.isFinite(guidanceProjected.x)
+      || !Number.isFinite(guidanceProjected.y)
+      || !Number.isFinite(guidanceProjected.z)
+      || guidanceProjected.z < -1
+      || guidanceProjected.z > 1
     ) {
       continue
     }
@@ -802,9 +793,6 @@ export function computeSignboardGuidanceEntries(params: {
       continue
     }
 
-    guidanceProjected
-      .set(candidate.anchorWorld.x, candidate.anchorWorld.y, candidate.anchorWorld.z)
-      .project(params.camera)
     const viewportLimit = params.previousVisibleNodeIds?.has(candidate.nodeId)
       ? exitViewportLimit
       : enterViewportLimit
@@ -842,86 +830,30 @@ export function computeSignboardGuidanceEntries(params: {
       maxY = minY
     }
 
-    let directionX = guidanceCameraSpace.x
-    let directionY = guidanceCameraSpace.z
-    let directionLength = Math.hypot(directionX, directionY)
-    if (!Number.isFinite(directionLength) || directionLength <= 1e-6) {
-      directionX = 0
-      directionY = -1
-      directionLength = 1
-    }
-    directionX /= directionLength
-    directionY /= directionLength
+    const rawX = (guidanceProjected.x * 0.5 + 0.5) * viewportWidth
+    const rawY = (1 - (guidanceProjected.y * 0.5 + 0.5)) * viewportHeight
+    const anchorInsideViewport = (
+      guidanceProjected.x >= -1
+      && guidanceProjected.x <= 1
+      && guidanceProjected.y >= -1
+      && guidanceProjected.y <= 1
+    )
+    const placementMode: SignboardGuidancePlacementMode = anchorInsideViewport
+      ? 'anchored'
+      : 'edge'
+    const resolvedX = placementMode === 'anchored'
+      ? rawX
+      : Math.min(maxX, Math.max(minX, rawX))
+    const resolvedY = placementMode === 'anchored'
+      ? rawY
+      : Math.min(maxY, Math.max(minY, rawY))
 
-    const centerX = (minX + maxX) / 2
-    const centerY = (minY + maxY) / 2
-    let intersectionDistance = Number.POSITIVE_INFINITY
-    if (directionX > 1e-6) {
-      intersectionDistance = Math.min(intersectionDistance, (maxX - centerX) / directionX)
-    } else if (directionX < -1e-6) {
-      intersectionDistance = Math.min(intersectionDistance, (minX - centerX) / directionX)
-    }
-    if (directionY > 1e-6) {
-      intersectionDistance = Math.min(intersectionDistance, (maxY - centerY) / directionY)
-    } else if (directionY < -1e-6) {
-      intersectionDistance = Math.min(intersectionDistance, (minY - centerY) / directionY)
-    }
-    if (!Number.isFinite(intersectionDistance) || intersectionDistance < 0) {
-      intersectionDistance = 0
-    }
-
+    const directionX = rawX - resolvedX
+    const directionY = rawY - resolvedY
     const edge: SignboardGuidanceEdge = Math.abs(directionX) > Math.abs(directionY)
       ? (directionX < 0 ? 'left' : 'right')
       : (directionY < 0 ? 'top' : 'bottom')
-    const baseX = centerX + directionX * intersectionDistance
-    const baseY = centerY + directionY * intersectionDistance
-    const tangentStep = edge === 'top' || edge === 'bottom'
-      ? Math.max(36, halfWidth)
-      : Math.max(34, height + 8)
-    const inwardStep = Math.max(34, height + 8)
-    const tangentIndexes = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5]
 
-    let resolvedX = baseX
-    let resolvedY = baseY
-    let resolvedRect = {
-      left: baseX - halfWidth,
-      top: baseY - halfHeight,
-      right: baseX + halfWidth,
-      bottom: baseY + halfHeight,
-    }
-    placementSearch:
-    for (let inwardIndex = 0; inwardIndex < 5; inwardIndex += 1) {
-      for (const tangentIndex of tangentIndexes) {
-        const tangentOffset = tangentIndex * tangentStep
-        const inwardOffset = inwardIndex * inwardStep
-        let x = baseX
-        let y = baseY
-        if (edge === 'top' || edge === 'bottom') {
-          x += tangentOffset
-          y += edge === 'top' ? inwardOffset : -inwardOffset
-        } else {
-          x += edge === 'left' ? inwardOffset : -inwardOffset
-          y += tangentOffset
-        }
-        x = Math.min(maxX, Math.max(minX, x))
-        y = Math.min(maxY, Math.max(minY, y))
-        const rect = {
-          left: x - halfWidth,
-          top: y - halfHeight,
-          right: x + halfWidth,
-          bottom: y + halfHeight,
-        }
-        const overlaps = placedRects.some((placed) => guidanceRectsOverlap(rect, placed))
-        if (!overlaps) {
-          resolvedX = x
-          resolvedY = y
-          resolvedRect = rect
-          break placementSearch
-        }
-      }
-    }
-
-    placedRects.push(resolvedRect)
     entries.push({
       nodeId: candidate.nodeId,
       label: candidate.label,
@@ -929,8 +861,11 @@ export function computeSignboardGuidanceEntries(params: {
       distanceLabel: formatSignboardDistance(candidate.distanceMeters),
       xPercent: resolvedX / viewportWidth * 100,
       yPercent: resolvedY / viewportHeight * 100,
+      anchorXPercent: rawX / viewportWidth * 100,
+      anchorYPercent: rawY / viewportHeight * 100,
       arrowAngleDeg: Math.atan2(directionX, -directionY) * 180 / Math.PI,
       edge,
+      placementMode,
       scale: presentation.scale,
       opacity: presentation.opacity,
       estimatedWidthPx: width,

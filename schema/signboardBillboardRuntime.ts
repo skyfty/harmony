@@ -28,39 +28,12 @@ interface SignboardRuntimeEntry {
   anchorPosition: THREE.Vector3
   presentationScale: number
   presentationOpacity: number
-  motionPhase: number
   lastDistanceLabelUpdateMs: number
 }
 
 const signboardEntries = new Map<string, SignboardRuntimeEntry>()
 const signboardAnchorScratch = new THREE.Vector3()
 const signboardCameraScratch = new THREE.Vector3()
-const SIGNBOARD_MOTION_PERIOD_SECONDS = 6.4
-const SIGNBOARD_MOTION_SCALE_AMPLITUDE = 0.008
-const SIGNBOARD_MOTION_BOB_WORLD = 0.012
-const SIGNBOARD_MOTION_OPACITY_AMPLITUDE = 0.015
-let reducedMotionQuery: MediaQueryList | null | undefined
-
-function resolveSignboardMotionPhase(nodeId: string): number {
-  let hash = 2166136261
-  for (let index = 0; index < nodeId.length; index += 1) {
-    hash ^= nodeId.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return ((hash >>> 0) / 4294967295) * Math.PI * 2
-}
-
-function shouldReduceSignboardMotion(): boolean {
-  if (reducedMotionQuery !== undefined) {
-    return reducedMotionQuery?.matches ?? false
-  }
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    reducedMotionQuery = null
-    return false
-  }
-  reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
-  return reducedMotionQuery.matches
-}
 
 function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
   let current = object
@@ -396,7 +369,6 @@ function createSignboardEntry(scene: THREE.Scene, nodeId: string, labelText: str
     anchorPosition: new THREE.Vector3(),
     presentationScale: 1,
     presentationOpacity: 0,
-    motionPhase: resolveSignboardMotionPhase(nodeId),
     lastDistanceLabelUpdateMs: Date.now(),
   }
   drawSignboardTexture(entry, style)
@@ -569,41 +541,23 @@ export function syncSignboardBillboards(params: {
   })
 }
 
-export function tickSignboardBillboardMotion(timeSeconds: number): void {
+export function tickSignboardBillboardMotion(_timeSeconds: number): void {
   if (!signboardEntries.size) {
     return
   }
-  const resolvedTime = Number.isFinite(timeSeconds) ? timeSeconds : 0
-  const motionReduced = shouldReduceSignboardMotion()
 
   signboardEntries.forEach((entry) => {
     if (!entry.sprite.visible) {
       return
     }
-    if (motionReduced) {
-      entry.sprite.position.copy(entry.anchorPosition)
-      entry.sprite.scale.set(
-        entry.worldWidth * entry.presentationScale,
-        entry.worldHeight * entry.presentationScale,
-        1,
-      )
-      entry.material.opacity = entry.presentationOpacity
-      return
-    }
-
-    const cycle = resolvedTime / SIGNBOARD_MOTION_PERIOD_SECONDS * Math.PI * 2 + entry.motionPhase
-    const breathScale = 1 + Math.sin(cycle) * SIGNBOARD_MOTION_SCALE_AMPLITUDE
-    const bob = Math.sin(cycle) * SIGNBOARD_MOTION_BOB_WORLD
-    const glow = 1 + Math.sin(cycle * 0.875 + entry.motionPhase * 0.37) * SIGNBOARD_MOTION_OPACITY_AMPLITUDE
 
     entry.sprite.position.copy(entry.anchorPosition)
-    entry.sprite.position.y += bob
     entry.sprite.scale.set(
-      entry.worldWidth * entry.presentationScale * breathScale,
-      entry.worldHeight * entry.presentationScale * breathScale,
+      entry.worldWidth * entry.presentationScale,
+      entry.worldHeight * entry.presentationScale,
       1,
     )
-    entry.material.opacity = Math.min(1, Math.max(0, entry.presentationOpacity * glow))
+    entry.material.opacity = entry.presentationOpacity
   })
 }
 

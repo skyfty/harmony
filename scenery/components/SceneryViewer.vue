@@ -321,26 +321,42 @@
           v-for="entry in signboardGuidanceEntries"
           :key="entry.nodeId"
           class="viewer-signboard-guidance"
-          :class="`viewer-signboard-guidance--${entry.edge}`"
+          :class="[
+            `viewer-signboard-guidance--${entry.edge}`,
+            `viewer-signboard-guidance--${entry.placementMode}`,
+          ]"
           role="listitem"
           :aria-label="`${entry.label}，${entry.distanceLabel}`"
           :style="{
             left: `${entry.xPercent}%`,
             top: `${entry.yPercent}%`,
-            width: `${entry.estimatedWidthPx}px`,
+            width: entry.placementMode === 'anchored' ? `${entry.estimatedWidthPx}px` : '42px',
             opacity: String(entry.opacity),
             transform: `translate(-50%, -50%) scale(${entry.scale})`,
           }"
         >
           <view class="viewer-signboard-guidance__float">
             <view
+              v-if="entry.placementMode === 'anchored'"
+              class="viewer-signboard-guidance__anchor"
+              :style="{
+                '--guidance-anchor-offset-x': `${((entry.anchorXPercent - entry.xPercent) / 100) * lanternViewportSize.width / entry.scale}px`,
+                '--guidance-anchor-offset-y': `${((entry.anchorYPercent - entry.yPercent) / 100) * lanternViewportSize.height / entry.scale}px`,
+              }"
+              aria-hidden="true"
+            ></view>
+            <view
+              v-if="entry.placementMode === 'edge'"
               class="viewer-signboard-guidance__arrow"
               :style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
               aria-hidden="true"
             >
               <text class="viewer-signboard-guidance__arrow-icon">↑</text>
             </view>
-            <view class="viewer-signboard-guidance__copy">
+            <view
+              v-if="entry.placementMode === 'anchored'"
+              class="viewer-signboard-guidance__copy"
+            >
               <text class="viewer-signboard-guidance__label">{{ entry.label }}</text>
               <text class="viewer-signboard-guidance__distance">{{ entry.distanceLabel }}</text>
             </view>
@@ -8671,8 +8687,11 @@ function areSignboardGuidanceEntriesEqual(
       || a.label !== b.label
       || a.distanceLabel !== b.distanceLabel
       || a.edge !== b.edge
+      || a.placementMode !== b.placementMode
       || Math.abs(a.xPercent - b.xPercent) > 1e-4
       || Math.abs(a.yPercent - b.yPercent) > 1e-4
+      || Math.abs(a.anchorXPercent - b.anchorXPercent) > 1e-4
+      || Math.abs(a.anchorYPercent - b.anchorYPercent) > 1e-4
       || Math.abs(a.arrowAngleDeg - b.arrowAngleDeg) > 1e-3
       || Math.abs(a.scale - b.scale) > 1e-4
       || Math.abs(a.opacity - b.opacity) > 1e-4
@@ -28406,12 +28425,7 @@ onUnmounted(() => {
   position: absolute;
   transform: translate(-50%, -50%);
   box-sizing: border-box;
-  transition:
-    left 0.09s linear,
-    top 0.09s linear,
-    opacity 0.12s ease,
-    transform 0.12s ease-out;
-  will-change: left, top, transform;
+  transition: opacity 0.12s ease;
 }
 
 .viewer-signboard-guidance__float {
@@ -28422,7 +28436,25 @@ onUnmounted(() => {
   min-height: 42px;
   padding: 4px 12px 5px 2px;
   isolation: isolate;
-  animation: viewer-signboard-guidance-drift 6.4s ease-in-out infinite;
+}
+
+.viewer-signboard-guidance__anchor {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  background: #ffd487;
+  box-shadow:
+    0 0 0 3px rgba(18, 35, 52, 0.56),
+    0 0 12px rgba(116, 213, 255, 0.78);
+  transform: translate(
+    calc(-50% + var(--guidance-anchor-offset-x, 0px)),
+    calc(-50% + var(--guidance-anchor-offset-y, 0px))
+  );
+  pointer-events: none;
 }
 
 .viewer-signboard-guidance__arrow {
@@ -28504,11 +28536,6 @@ onUnmounted(() => {
     0 2px 6px rgba(3, 24, 39, 0.76);
 }
 
-@keyframes viewer-signboard-guidance-drift {
-  0%, 100% { transform: translateY(-0.8px); }
-  50% { transform: translateY(0.8px); }
-}
-
 @media (max-width: 480px) {
   .viewer-signboard-guidance__float {
     gap: 7px;
@@ -28521,12 +28548,6 @@ onUnmounted(() => {
 
   .viewer-signboard-guidance__distance {
     font-size: 10px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .viewer-signboard-guidance__float {
-    animation: none;
   }
 }
 
