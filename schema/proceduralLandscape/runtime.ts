@@ -37,9 +37,9 @@ import {
 import type { RoadTraceNode } from './roadTrace'
 import { resolveProceduralLandscapeRoadGeometryLimits } from './roadGeometry'
 import {
-  buildRoadFieldData,
+  buildRoadFieldDataSteps,
   computeRoadEdgeHeights,
-  createRoadFieldTexture,
+  createRoadFieldTextureSteps,
   type RoadEdgeHeights,
   type RoadFieldData,
 } from './roadField'
@@ -2004,7 +2004,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       currentTerrainSourceSignature = `dem-raw:${demSourceKey}`
       gridFailed = false
       captureAppliedTerrainFlatteningIfNeeded()
-      buildWorld()
+      requestWorldBuild()
       dirty.world = false
       dirty.instances = false
       demWorldBuilt = true
@@ -2624,6 +2624,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function resetAll(): void {
+    cancelWorldBuild()
     deferredCameraInteractionWork = false
     disposeSurfaceState()
     disposeWorldState()
@@ -2973,7 +2974,44 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     effectiveForestDensity = props.forest.density
   }
 
-  function buildWorld(): void {
+  let worldBuildSteps: Generator<unknown, void, void> | null = null
+  let worldBuildRestartRequested = false
+
+  function requestWorldBuild(): void {
+    if (worldBuildSteps) {
+      worldBuildRestartRequested = true
+      return
+    }
+    worldBuildRestartRequested = false
+    worldBuildSteps = buildWorldSteps()
+  }
+
+  function cancelWorldBuild(): void {
+    worldBuildSteps = null
+    worldBuildRestartRequested = false
+    landscapeWorldBuilt = false
+  }
+
+  function stepWorldBuild(): boolean {
+    if (!worldBuildSteps) {
+      return true
+    }
+    const result = worldBuildSteps.next()
+    if (!result.done) {
+      return false
+    }
+    worldBuildSteps = null
+    landscapeWorldBuilt = true
+    rebuildRoadDebugLine()
+    if (worldBuildRestartRequested) {
+      worldBuildRestartRequested = false
+      requestWorldBuild()
+      return false
+    }
+    return true
+  }
+
+  function* buildWorldSteps(): Generator<unknown, void, void> {
     if (!grid) {
       return
     }
@@ -3053,6 +3091,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     forestMaskTexture = createDensityDataTexture(densityField)
     variationTexture?.dispose()
     variationTexture = createDensityDataTexture(variationField)
+    yield
 
     roadFieldTexture?.dispose()
     roadFieldTexture = null
@@ -3068,6 +3107,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadSurfaceSampler = null
     roadProximity = null
     roadBucketTable = []
+    yield
 
     const generatedRoute = props.road.generatedRoute
     if (
@@ -3094,6 +3134,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
       guideRouteSurfaceRevision += 1
     }
+    yield
     if (roadResult && roadResult.nodes.length > 1) {
         const halfWidth = roadHalfWidth(props)
         // 贴合地形：高度场（数十公里地形上格距 22m）对折坡/山脊是低通近似，
@@ -3132,6 +3173,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             ? new Array<number>(ROAD_BAND_COLUMN_COUNT).fill(row.y)
             : sampleRoadRowColumns(row, sampledSurfaceHeightAt, halfWidth, ROAD_BAND_COLUMN_COUNT, maxLateralDrop)
         ))
+        yield
         const demRoadbedSpan = usesDemTerrain()
           ? roadHalfWidth(props) + props.road.shoulderWidth
             + Math.max(30, activeGrid.cellSize * 1.5)
@@ -3143,7 +3185,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           roadHalfWidth(props) + props.road.shoulderWidth + props.grass.corridorWidth + 8,
           demRoadbedSpan,
         )
-        roadFieldData = buildRoadFieldData(roadResult.nodes, {
+        roadFieldData = yield* buildRoadFieldDataSteps(roadResult.nodes, {
           minX: grid.minX,
           minZ: grid.minZ,
           sizeX: bounds.sizeX,
@@ -3157,9 +3199,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           centerHeights: roadCenterHeights,
         })
         if (roadFieldData) {
-          roadFieldTexture = createRoadFieldTexture(roadFieldData)
+          roadFieldTexture = yield* createRoadFieldTextureSteps(roadFieldData)
           roadBucketTable = buildRoadBucketTable(roadResult.nodes, ROAD_BUCKET_LENGTH)
         }
+        yield
         // 放置过滤改走精确距离索引：光栅场只在数十公里地形上格边长 40m+，
         // 植被净空（默认 ~10m）完全被量化误差淹没（见 roadProximity.ts）。
         roadProximity = buildRoadProximityIndex(roadResult.nodes, { maxDistance: influence })
@@ -3168,6 +3211,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         } else {
           unwarn('road-proximity-index-mismatch')
         }
+        yield
         if (usesDemTerrain() && hostObject && roadBandRows && roadProximity) {
           demRoadbedTarget = createDemRoadbedTarget({
             roadField: roadProximity,
@@ -3187,6 +3231,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             // steep bends without widening the raster cut.
             coarseClearance: 4,
           })
+          yield
           demRoadbedSideWidth = demRoadbedTarget.sideWidth
           demRoadbedHalfWidth = demRoadbedTarget.meshHalfWidth
           const roadbedWorldOffset = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
@@ -3220,6 +3265,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             edgeSkirtDepth: 0.5,
             hostInverse,
           })
+          yield
           if (roadbed) {
             const clippedRoadbed = clipRoadbedGeometryInsideFloorFlattening(
               roadbed.geometry,
@@ -3253,6 +3299,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
               edgeSkirtDepth: 0.5,
               hostInverse,
             })
+            yield
             if (collisionRoadbed) {
               const clippedCollisionRoadbed = clipRoadbedGeometryInsideFloorFlattening(
                 collisionRoadbed.geometry,
@@ -3306,6 +3353,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
                 }
               }
             }
+            yield
           }
         }
     }
@@ -3359,15 +3407,19 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!roadFieldTexture) {
       roadFieldTexture = createEmptyRoadFieldTexture()
     }
+    yield
 
     buildRoadBand()
+    yield
     guideRouteSurfaceRevision += 1
     applySceneViewDistanceScale()
     applyStaticSurfaceUniforms()
     barrierSignature = resolveBarrierSignature()
     buildWalls()
+    yield
     buildRoadBoundary()
     buildWater()
+    yield
     releaseAllBatches()
     startWorldForest()
     // Every world rebuild (startup, adaptive calibration, road edits, host
@@ -4887,7 +4939,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         ? 'error'
         : gridBuilder || (usesDemTerrain() && stats.demStatus !== 'ready')
           ? 'sampling'
-          : dirty.world || dirty.instances
+          : dirty.world || dirty.instances || worldBuildSteps
             ? 'generating'
             : 'streaming'
     stats.progress = gridBuilder
@@ -5094,7 +5146,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (gridBuilder.result) {
       grid = gridBuilder.result
       gridBuilder = null
-      buildWorld()
+      requestWorldBuild()
       return true
     }
     const error = gridBuilder.error ?? 'unknown'
@@ -5449,7 +5501,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       effectiveForestCoverage = decision.coverage
       effectiveForestDensity = decision.density
       adaptiveState = 'done'
-      buildWorld()
+      requestWorldBuild()
     } else {
       adaptiveState = 'done'
     }
@@ -5512,6 +5564,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
 
+    if (worldBuildSteps) {
+      stepWorldBuild()
+      updateStats()
+      return
+    }
+
     if (dirty.grid) {
       if (usesDemTerrain()) {
         const ready = stepDemBuild()
@@ -5542,10 +5600,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
     }
 
+    if (worldBuildSteps) {
+      stepWorldBuild()
+      updateStats()
+      return
+    }
+
     if (dirty.world) {
       dirty.world = false
-      buildWorld()
-      rebuildRoadDebugLine()
+      requestWorldBuild()
+      stepWorldBuild()
+      updateStats()
+      return
     }
     if (dirty.demMesh) {
       if (!usesDemTerrain() || !demGridData) {

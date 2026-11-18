@@ -39,6 +39,12 @@ import {
   type RigidbodyVector3Tuple,
   type VehicleComponentProps,
 } from './components'
+import {
+  createCooperativeTask,
+  type CooperativeTaskOptions,
+} from './cooperativeTask'
+
+export { CooperativeTaskAbortedError as PhysicsSceneAssetBuildAbortedError } from './cooperativeTask'
 
 type BuildShapeInstance = {
   shapeId: number
@@ -90,17 +96,8 @@ export interface PhysicsSceneAssetBuildProgress {
   detail: string
 }
 
-export interface PhysicsSceneAssetBuildOptions {
+export interface PhysicsSceneAssetBuildOptions extends CooperativeTaskOptions {
   onProgress?: (progress: PhysicsSceneAssetBuildProgress) => void
-}
-
-async function yieldToMainThread(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const schedule = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame
-      : (callback: () => void) => setTimeout(callback, 0)
-    schedule(() => resolve())
-  })
 }
 
 function reportPhysicsSceneAssetProgress(
@@ -860,7 +857,8 @@ export async function buildPhysicsSceneAsset(
   let nextWheelId = 1
   const totalNodes = countSceneNodes(document.nodes)
   let processedNodes = 0
-  let nextYieldAt = 64
+  let nextProgressAt = 16
+  const cooperativeTask = createCooperativeTask(options)
 
   reportPhysicsSceneAssetProgress(options, {
     phase: 'collecting',
@@ -895,6 +893,7 @@ export async function buildPhysicsSceneAsset(
   }
 
   const visitNode = async (node: SceneNode, parentWorldMatrix?: THREE.Matrix4): Promise<void> => {
+    cooperativeTask.assertActive()
     const rigidbodyState = resolvePhysicsSceneRigidbodyComponent(node)
     const localMatrix = getNodeLocalMatrix(node)
     const worldMatrix = parentWorldMatrix
@@ -1060,7 +1059,7 @@ export async function buildPhysicsSceneAsset(
     }
 
     processedNodes += 1
-    if (processedNodes >= nextYieldAt || processedNodes === totalNodes) {
+    if (processedNodes >= nextProgressAt || processedNodes === totalNodes) {
       reportPhysicsSceneAssetProgress(options, {
         phase: 'building',
         loaded: processedNodes,
@@ -1068,9 +1067,9 @@ export async function buildPhysicsSceneAsset(
         label: '正在构建物理场景',
         detail: `正在处理节点 ${processedNodes}/${Math.max(totalNodes, 1)}`,
       })
-      nextYieldAt = processedNodes + 64
-      await yieldToMainThread()
+      nextProgressAt = processedNodes + 16
     }
+    await cooperativeTask.yieldIfNeeded(processedNodes === totalNodes)
 
     const children = Array.isArray(node.children) ? node.children : []
     for (const child of children) {
@@ -1154,6 +1153,7 @@ export async function buildPhysicsSceneAsset(
     label: '物理场景构建完成',
     detail: `已处理 ${processedNodes}/${Math.max(totalNodes, 1)} 个节点`,
   })
+  cooperativeTask.assertActive()
 
   return asset
 }

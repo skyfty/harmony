@@ -686,6 +686,7 @@ import {
   writeWechatWatchSnapshotPngFile,
 } from '../common/utils/wechatWatchSnapshot';
 import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
+import { CooperativeTaskAbortedError } from '@harmony/schema/cooperativeTask';
 import { loadTextureFromSourceUrl } from '@harmony/schema/textureSourceLoader';
 import {
   applyMoveToObjectWorldPose,
@@ -12451,6 +12452,10 @@ async function loadSceneryPhysicsBridgeScene(
           currentLabel: progress.label,
         });
       },
+      now: resolveMonotonicNowMs,
+      timeBudgetMs: 8,
+      yieldToMainThread,
+      shouldAbort: () => requestId !== physicsBridgeSceneRequestId || currentDocument !== document,
     });
     if (
       asset.shapes.length === 0
@@ -12555,6 +12560,9 @@ async function loadSceneryPhysicsBridgeScene(
       physicsBridgeLastMovedAtMs = Date.now();
     }
   } catch (error) {
+    if (error instanceof CooperativeTaskAbortedError) {
+      return;
+    }
     console.warn('[SceneViewer] Failed to load physics bridge scene', error);
   } finally {
     physicsBridgeSceneReloading = false;
@@ -25392,6 +25400,9 @@ async function startRenderIfReady() {
       emit('loaded');
     }
   } catch (initializationError) {
+    if (initializationError instanceof CooperativeTaskAbortedError) {
+      return;
+    }
     console.error('Renderer initialization failed', initializationError);
     console.error(initializationError);
     if (isCurrentInitializationToken(token)) {
@@ -26031,7 +26042,6 @@ async function buildSceneGraphWithProgress(
       if (typeof info.bytesLoaded === 'number' && Number.isFinite(info.bytesLoaded) && info.bytesLoaded >= 0) {
         resourcePreload.loadedBytes = info.bytesLoaded;
       }
-
       const fallbackLabel = info.assetId ? `加载 ${info.assetId}` : '正在加载资源';
       resourcePreload.label = info.message || fallbackLabel;
       setSceneInitState({
@@ -26067,6 +26077,8 @@ async function buildSceneGraphWithProgress(
     } catch (error) {
       throw error;
     }
+  } catch (error) {
+    throw error;
   } finally {
     const fullyLoadedByCount = resourcePreload.total > 0 && resourcePreload.loaded >= resourcePreload.total;
     const fullyLoadedByBytes =
@@ -26271,7 +26283,12 @@ async function mountGraphAndSyncSubsystems(
     cameraWorldPosition: null,
     environment: currentSlowroadsEnvironmentState,
   });
-  previewComponentManager.syncScene(payload.document.nodes ?? []);
+  await previewComponentManager.syncSceneCooperatively(payload.document.nodes ?? [], {
+    now: resolveMonotonicNowMs,
+    timeBudgetMs: 8,
+    yieldToMainThread,
+    shouldAbort: () => token !== initializeToken,
+  });
   await yieldToMainThread();
 
   setSceneInitState({

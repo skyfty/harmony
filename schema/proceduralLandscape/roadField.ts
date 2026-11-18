@@ -92,6 +92,15 @@ export interface BuildRoadFieldOptions {
   halfWidth?: number | null
   /** 现场计算边缘高度时单侧允许的最大高差（米）；缺省不限制。 */
   maxLateralDrop?: number | null
+  /** Deterministic clock used by cooperative generation and tests. */
+  sliceNow?: () => number
+  /** Maximum synchronous work before yielding from the generator. */
+  sliceBudgetMs?: number
+}
+
+export interface RoadFieldTextureOptions {
+  sliceNow?: () => number
+  sliceBudgetMs?: number
 }
 
 export function encodeRoadDistance(distance: number, range: number): number {
@@ -115,10 +124,10 @@ export function decodeRoadHeight(value: number, minY: number, maxY: number): num
   return minY + (clamp(value, 0, 65535) / 65535) * span
 }
 
-export function buildRoadFieldData(
+export function* buildRoadFieldDataSteps(
   path: RoadTraceNode[],
   options: BuildRoadFieldOptions,
-): RoadFieldData | null {
+): Generator<number, RoadFieldData | null, void> {
   if (!Array.isArray(path) || path.length < 2) {
     return null
   }
@@ -152,6 +161,11 @@ export function buildRoadFieldData(
   distance.fill(Number.POSITIVE_INFINITY)
   const roadHeight = new Float32Array(width * height)
   roadHeight.fill(Number.NaN)
+  const now = options.sliceNow ?? ((): number => typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now())
+  const sliceBudgetMs = Math.max(1, options.sliceBudgetMs ?? 8)
+  let sliceStartedAt = now()
 
   for (let i = 0; i < path.length - 1; i += 1) {
     const from = path[i]!
@@ -211,6 +225,10 @@ export function buildRoadFieldData(
         }
       }
     }
+    if (now() - sliceStartedAt >= sliceBudgetMs && i + 1 < path.length - 1) {
+      yield (i + 1) / Math.max(1, path.length - 1)
+      sliceStartedAt = now()
+    }
   }
 
   const field: RoadFieldData = {
@@ -246,8 +264,28 @@ export function buildRoadFieldData(
   return field
 }
 
-export function createRoadFieldTexture(field: RoadFieldData): THREE.DataTexture {
+export function buildRoadFieldData(
+  path: RoadTraceNode[],
+  options: BuildRoadFieldOptions,
+): RoadFieldData | null {
+  const steps = buildRoadFieldDataSteps(path, options)
+  let result = steps.next()
+  while (!result.done) {
+    result = steps.next()
+  }
+  return result.value
+}
+
+export function* createRoadFieldTextureSteps(
+  field: RoadFieldData,
+  options: RoadFieldTextureOptions = {},
+): Generator<number, THREE.DataTexture, void> {
   const rgba = new Uint8Array(field.width * field.height * 4)
+  const now = options.sliceNow ?? ((): number => typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now())
+  const sliceBudgetMs = Math.max(1, options.sliceBudgetMs ?? 8)
+  let sliceStartedAt = now()
   for (let i = 0; i < field.width * field.height; i += 1) {
     const distance = field.distance[i]!
     const height = field.roadHeight[i]!
@@ -260,6 +298,10 @@ export function createRoadFieldTexture(field: RoadFieldData): THREE.DataTexture 
     rgba[i * 4 + 1] = (heightValue >> 8) & 0xff
     rgba[i * 4 + 2] = heightValue & 0xff
     rgba[i * 4 + 3] = 255
+    if ((i & 8191) === 0 && now() - sliceStartedAt >= sliceBudgetMs && i + 1 < field.width * field.height) {
+      yield (i + 1) / Math.max(1, field.width * field.height)
+      sliceStartedAt = now()
+    }
   }
   const texture = new THREE.DataTexture(rgba, field.width, field.height, THREE.RGBAFormat, THREE.UnsignedByteType)
   texture.minFilter = THREE.LinearFilter
@@ -269,4 +311,16 @@ export function createRoadFieldTexture(field: RoadFieldData): THREE.DataTexture 
   texture.generateMipmaps = false
   texture.needsUpdate = true
   return texture
+}
+
+export function createRoadFieldTexture(
+  field: RoadFieldData,
+  options: RoadFieldTextureOptions = {},
+): THREE.DataTexture {
+  const steps = createRoadFieldTextureSteps(field, options)
+  let result = steps.next()
+  while (!result.done) {
+    result = steps.next()
+  }
+  return result.value
 }

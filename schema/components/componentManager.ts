@@ -13,6 +13,7 @@ import type {
 } from '../editorAgentProtocol'
 
 import { stableSerialize } from '../stableSerialize'
+import { createCooperativeTask, type CooperativeTaskOptions } from '../cooperativeTask'
 
 import { Component, type ComponentFrameState, type ComponentRuntimeContext } from './Component'
 
@@ -413,6 +414,24 @@ export class ComponentManager {
       })
     }
     visit(nodes)
+  }
+
+  async syncSceneCooperatively(
+    nodes: SceneNode[],
+    options: CooperativeTaskOptions = {},
+  ): Promise<void> {
+    const cooperativeTask = createCooperativeTask(options)
+    const visit = async (list: SceneNode[]): Promise<void> => {
+      for (const node of list) {
+        cooperativeTask.assertActive()
+        this.syncNode(node)
+        await cooperativeTask.yieldIfNeeded()
+        if (node.children?.length) {
+          await visit(node.children)
+        }
+      }
+    }
+    await visit(nodes)
   }
 
   syncNode(node: SceneNode): void {
