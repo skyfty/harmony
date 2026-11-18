@@ -19927,10 +19927,10 @@ watch(watchExclusiveUiActive, (active) => {
 }
 
 .scene-preview__bubble-layer--transient .scene-preview__bubble {
-	top: 50%;
-	width: min(340px, calc(100% - 40px));
-	max-width: min(340px, calc(100% - 40px));
-	padding: 10px 18px 16px;
+	top: 35%;
+	width: min(380px, calc(100% - 40px));
+	max-width: min(380px, calc(100% - 40px));
+	padding: 12px 22px 18px;
 	border: 0;
 	border-radius: 0;
 	background: transparent;
@@ -19947,7 +19947,7 @@ watch(watchExclusiveUiActive, (active) => {
 .scene-preview__bubble-layer--transient .scene-preview__bubble::before {
 	content: '';
 	position: absolute;
-	inset: -46px -64px;
+	inset: -52px -74px;
 	border-radius: 50%;
 	background:
 		radial-gradient(ellipse at center, rgba(115, 231, 170, 0.2), rgba(9, 52, 35, 0.08) 48%, transparent 72%);
@@ -19966,7 +19966,7 @@ watch(watchExclusiveUiActive, (active) => {
 
 .scene-preview__success-prompt-eyebrow {
 	color: rgba(196, 255, 224, 0.86);
-	font-size: 0.72rem;
+	font-size: 0.8rem;
 	font-weight: 700;
 	line-height: 1.2;
 	letter-spacing: 0.32em;
@@ -19975,9 +19975,9 @@ watch(watchExclusiveUiActive, (active) => {
 }
 
 .scene-preview__success-prompt-title {
-	margin-top: 7px;
+	margin-top: 8px;
 	color: #f4fff9;
-	font-size: clamp(1.34rem, 1.8vw, 1.62rem);
+	font-size: clamp(1.55rem, 2vw, 1.9rem);
 	font-weight: 750;
 	line-height: 1.3;
 	letter-spacing: 0.025em;
@@ -19991,10 +19991,10 @@ watch(watchExclusiveUiActive, (active) => {
 
 .scene-preview__success-prompt-divider {
 	display: flex;
-	width: min(250px, 84%);
+	width: min(280px, 84%);
 	align-items: center;
 	gap: 8px;
-	margin: 11px 0 10px;
+	margin: 13px 0 12px;
 	transform-origin: center;
 	animation: scene-preview-success-prompt-line 360ms 190ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
@@ -20020,16 +20020,16 @@ watch(watchExclusiveUiActive, (active) => {
 }
 
 .scene-preview__success-prompt-status {
-	width: min(286px, 100%);
-	padding: 8px 18px;
+	width: min(320px, 100%);
+	padding: 10px 22px;
 	border: 1px solid rgba(157, 255, 207, 0.2);
-	border-radius: 8px;
+	border-radius: 10px;
 	background: linear-gradient(90deg, rgba(31, 103, 70, 0.08), rgba(115, 231, 170, 0.2), rgba(31, 103, 70, 0.08));
 	box-shadow: inset 0 1px 0 rgba(227, 255, 240, 0.12);
 	backdrop-filter: blur(14px) saturate(1.12);
 	-webkit-backdrop-filter: blur(14px) saturate(1.12);
 	color: #dffff0;
-	font-size: 0.86rem;
+	font-size: 0.96rem;
 	font-weight: 700;
 	line-height: 1.35;
 	letter-spacing: 0.18em;

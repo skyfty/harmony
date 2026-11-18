@@ -28543,10 +28543,10 @@ onUnmounted(() => {
 }
 
 .viewer-bubble-layer--transient .viewer-bubble {
-  top: 50%;
-  width: min(620rpx, calc(100% - 48rpx));
-  max-width: min(620rpx, calc(100% - 48rpx));
-  padding: 16rpx 24rpx 28rpx;
+  top: 35%;
+  width: min(680rpx, calc(100% - 48rpx));
+  max-width: min(680rpx, calc(100% - 48rpx));
+  padding: 18rpx 28rpx 32rpx;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -28563,7 +28563,7 @@ onUnmounted(() => {
 .viewer-bubble-layer--transient .viewer-bubble::before {
   content: '';
   position: absolute;
-  inset: -72rpx -92rpx;
+  inset: -82rpx -108rpx;
   border-radius: 50%;
   background:
     radial-gradient(ellipse at center, rgba(115, 231, 170, 0.2), rgba(9, 52, 35, 0.08) 48%, transparent 72%);
@@ -28583,7 +28583,7 @@ onUnmounted(() => {
 .viewer-success-prompt__eyebrow {
   display: block;
   color: rgba(196, 255, 224, 0.86);
-  font-size: 24rpx;
+  font-size: 26rpx;
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: 8rpx;
@@ -28594,9 +28594,9 @@ onUnmounted(() => {
 .viewer-success-prompt__title {
   display: block;
   max-width: 100%;
-  margin-top: 12rpx;
+  margin-top: 14rpx;
   color: #f4fff9;
-  font-size: 42rpx;
+  font-size: 50rpx;
   font-weight: 700;
   line-height: 1.3;
   letter-spacing: 1rpx;
@@ -28609,10 +28609,10 @@ onUnmounted(() => {
 
 .viewer-success-prompt__divider {
   display: flex;
-  width: min(440rpx, 84%);
+  width: min(500rpx, 84%);
   align-items: center;
   gap: 14rpx;
-  margin: 18rpx 0;
+  margin: 20rpx 0;
   transform-origin: center;
   animation: viewer-success-prompt-line 360ms 190ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
@@ -28638,11 +28638,11 @@ onUnmounted(() => {
 }
 
 .viewer-success-prompt__status {
-  width: min(520rpx, 100%);
-  padding: 12rpx 24rpx;
+  width: min(580rpx, 100%);
+  padding: 16rpx 28rpx;
   box-sizing: border-box;
   border: 1px solid rgba(157, 255, 207, 0.2);
-  border-radius: 14rpx;
+  border-radius: 16rpx;
   background: linear-gradient(90deg, rgba(31, 103, 70, 0.08), rgba(115, 231, 170, 0.2), rgba(31, 103, 70, 0.08));
   box-shadow: inset 0 1px 0 rgba(227, 255, 240, 0.12);
   backdrop-filter: blur(20rpx) saturate(1.12);
@@ -28653,7 +28653,7 @@ onUnmounted(() => {
 .viewer-success-prompt__status-text {
   display: block;
   color: #dffff0;
-  font-size: 28rpx;
+  font-size: 32rpx;
   font-weight: 700;
   line-height: 1.35;
   letter-spacing: 6rpx;
