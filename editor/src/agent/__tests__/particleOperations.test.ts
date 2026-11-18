@@ -76,18 +76,25 @@ describe('Particle Agent operations', () => {
     expect(celebration?.props.emitters.reduce((sum, emitter) => sum + emitter.maxParticles, 0))
       .toBe(112)
     expect(celebration?.props.exposedParams.burstCount).toBe(96)
+    expect(celebration?.props.exposedParams.particleSize).toBeCloseTo(0.235)
     expect(celebration?.props.exposedParams.lifetime).toBeGreaterThanOrEqual(3.4)
     expect(celebration?.props.emitters.every((emitter) =>
       (emitter.physics?.force.y ?? 0) <= -0.05,
     )).toBe(true)
-    expect(celebration?.props.emitters.every((emitter) =>
-      emitter.shape === 'sphere'
-      && emitter.radius <= 0.1
-      && emitter.velocityMode === 'radial'
-      && Math.abs(emitter.direction.x) < 0.001
-      && Math.abs(emitter.direction.z) < 0.001
-      && emitter.spread >= 2.8,
-    )).toBe(true)
+    expect(celebration?.props.emitters.map((emitter) => ({
+      shape: emitter.shape,
+      radius: emitter.radius,
+      velocityMode: emitter.velocityMode,
+      direction: emitter.direction,
+      spread: emitter.spread,
+      particleSize: emitter.particleSize,
+      speed: emitter.speed,
+    }))).toEqual([
+      { shape: 'sphere', radius: 0.12, velocityMode: 'radial', direction: { x: 0, y: 1, z: 0 }, spread: 3.1, particleSize: 0.26, speed: 4.5 },
+      { shape: 'sphere', radius: 0.12, velocityMode: 'radial', direction: { x: 0, y: 1, z: 0 }, spread: 3.1, particleSize: 0.245, speed: 4.75 },
+      { shape: 'sphere', radius: 0.13, velocityMode: 'radial', direction: { x: 0, y: 1, z: 0 }, spread: 3.1, particleSize: 0.22, speed: 4.35 },
+      { shape: 'sphere', radius: 0.12, velocityMode: 'radial', direction: { x: 0, y: 1, z: 0 }, spread: 3.1, particleSize: 0.225, speed: 4.9 },
+    ])
   })
 
   it('normalizes legacy render props and deep-clones paper settings', () => {
