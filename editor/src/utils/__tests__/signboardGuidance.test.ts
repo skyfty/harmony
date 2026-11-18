@@ -149,6 +149,9 @@ describe('Signboard guidance overlay', () => {
     expect(forward?.anchorXPercent).toBeCloseTo(50, 4)
     expect(left?.anchorXPercent).toBeLessThan(50)
     expect(right?.anchorXPercent).toBeGreaterThan(50)
+    expect(forward?.arrowAngleDeg).toBeCloseTo(0, 4)
+    expect(left?.arrowAngleDeg).toBeCloseTo(-21.8014, 3)
+    expect(right?.arrowAngleDeg).toBeCloseTo(21.8014, 3)
     expect(offscreen).toBeUndefined()
     expect(rear).toBeUndefined()
   })
@@ -168,6 +171,31 @@ describe('Signboard guidance overlay', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]?.anchorXPercent).toBeCloseTo((projected.x * 0.5 + 0.5) * 100, 6)
     expect(entries[0]?.anchorYPercent).toBeCloseTo((1 - (projected.y * 0.5 + 0.5)) * 100, 6)
+  })
+
+  it('updates the arrow bearing from the current camera orientation', () => {
+    const camera = createCamera()
+    const anchor = new THREE.Vector3(80, 2, -200)
+    const fromDefaultView = computeSignboardGuidanceEntries({
+      candidates: [candidate('bearing', anchor.x, anchor.y, anchor.z, 200)],
+      camera,
+      viewportWidth: VIEWPORT.width,
+      viewportHeight: VIEWPORT.height,
+      safeArea: VIEWPORT.safeArea,
+    })
+
+    camera.lookAt(anchor)
+    camera.updateMatrixWorld()
+    const fromFacingView = computeSignboardGuidanceEntries({
+      candidates: [candidate('bearing', anchor.x, anchor.y, anchor.z, 200)],
+      camera,
+      viewportWidth: VIEWPORT.width,
+      viewportHeight: VIEWPORT.height,
+      safeArea: VIEWPORT.safeArea,
+    })
+
+    expect(fromDefaultView[0]?.arrowAngleDeg).toBeGreaterThan(0)
+    expect(fromFacingView[0]?.arrowAngleDeg).toBeCloseTo(0, 5)
   })
 
   it('does not render any guidance when the projected target is outside the viewport', () => {

@@ -3593,6 +3593,7 @@ function areSignboardGuidanceEntriesEqual(
 			|| Math.abs(a.yPercent - b.yPercent) > 1e-4
 			|| Math.abs(a.anchorXPercent - b.anchorXPercent) > 1e-4
 			|| Math.abs(a.anchorYPercent - b.anchorYPercent) > 1e-4
+			|| Math.abs(a.arrowAngleDeg - b.arrowAngleDeg) > 1e-3
 			|| Math.abs(a.scale - b.scale) > 1e-4
 			|| Math.abs(a.opacity - b.opacity) > 1e-4
 		) {
@@ -18364,13 +18365,10 @@ watch(watchExclusiveUiActive, (active) => {
 			>
 				<div class="scene-preview__signboard-guidance-float">
 					<span
-						class="scene-preview__signboard-guidance-anchor"
-						:style="{
-							'--guidance-anchor-offset-x': `${((entry.anchorXPercent - entry.xPercent) / 100) * lanternViewportSize.width / entry.scale}px`,
-							'--guidance-anchor-offset-y': `${((entry.anchorYPercent - entry.yPercent) / 100) * lanternViewportSize.height / entry.scale}px`,
-						}"
+						class="scene-preview__signboard-guidance-heading"
+						:style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
 						aria-hidden="true"
-					></span>
+					>↑</span>
 					<div class="scene-preview__signboard-guidance-copy">
 						<span class="scene-preview__signboard-guidance-label">{{ entry.label }}</span>
 						<span class="scene-preview__signboard-guidance-distance">{{ entry.distanceLabel }}</span>
@@ -19811,22 +19809,34 @@ watch(watchExclusiveUiActive, (active) => {
 	isolation: isolate;
 }
 
-.scene-preview__signboard-guidance-anchor {
-	position: absolute;
-	left: 50%;
-	top: 50%;
-	width: 7px;
-	height: 7px;
-	border: 1px solid rgba(255, 255, 255, 0.9);
-	border-radius: 50%;
-	background: #ffd487;
-	box-shadow:
-		0 0 0 3px rgba(18, 35, 52, 0.56),
-		0 0 12px rgba(116, 213, 255, 0.78);
-	transform: translate(
-		calc(-50% + var(--guidance-anchor-offset-x, 0px)),
-		calc(-50% + var(--guidance-anchor-offset-y, 0px))
-	);
+.scene-preview__signboard-guidance-heading {
+	position: relative;
+	z-index: 1;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 34px;
+	flex: 0 0 34px;
+	color: #ffae18;
+	font-size: 30px;
+	font-weight: 900;
+	line-height: 1;
+	transform-origin: 50% 50%;
+	will-change: transform;
+	filter:
+		drop-shadow(0 0 5px rgba(255, 176, 32, 1))
+		drop-shadow(0 0 12px rgba(255, 136, 0, 0.72));
+	text-shadow:
+		-1.5px -1.5px 0 rgba(0, 11, 20, 0.98),
+		1.5px -1.5px 0 rgba(0, 11, 20, 0.98),
+		-1.5px 1.5px 0 rgba(0, 11, 20, 0.98),
+		1.5px 1.5px 0 rgba(0, 11, 20, 0.98),
+		0 -1.5px 0 rgba(0, 11, 20, 0.98),
+		0 1.5px 0 rgba(0, 11, 20, 0.98),
+		-1.5px 0 0 rgba(0, 11, 20, 0.98),
+		1.5px 0 0 rgba(0, 11, 20, 0.98),
+		0 2px 7px rgba(0, 0, 0, 0.88);
 	pointer-events: none;
 }
 

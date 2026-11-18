@@ -91,6 +91,7 @@ export interface SignboardGuidanceEntry {
   yPercent: number
   anchorXPercent: number
   anchorYPercent: number
+  arrowAngleDeg: number
   scale: number
   opacity: number
   estimatedWidthPx: number
@@ -796,6 +797,16 @@ export function computeSignboardGuidanceEntries(params: {
     const { width, height } = resolveGuidanceMarkerDimensions(candidate, viewportWidth, insets)
     const rawX = (guidanceProjected.x * 0.5 + 0.5) * viewportWidth
     const rawY = (1 - (guidanceProjected.y * 0.5 + 0.5)) * viewportHeight
+    guidanceCameraSpace
+      .set(candidate.anchorWorld.x, candidate.anchorWorld.y, candidate.anchorWorld.z)
+      .applyMatrix4(params.camera.matrixWorldInverse)
+    const arrowAngleDeg = (
+      Number.isFinite(guidanceCameraSpace.x)
+      && Number.isFinite(guidanceCameraSpace.z)
+      && Math.hypot(guidanceCameraSpace.x, guidanceCameraSpace.z) > 1e-6
+    )
+      ? Math.atan2(guidanceCameraSpace.x, -guidanceCameraSpace.z) * 180 / Math.PI
+      : 0
 
     entries.push({
       nodeId: candidate.nodeId,
@@ -806,6 +817,7 @@ export function computeSignboardGuidanceEntries(params: {
       yPercent: rawY / viewportHeight * 100,
       anchorXPercent: rawX / viewportWidth * 100,
       anchorYPercent: rawY / viewportHeight * 100,
+      arrowAngleDeg,
       scale: presentation.scale,
       opacity: presentation.opacity,
       estimatedWidthPx: width,

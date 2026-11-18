@@ -333,13 +333,12 @@
         >
           <view class="viewer-signboard-guidance__float">
             <view
-              class="viewer-signboard-guidance__anchor"
-              :style="{
-                '--guidance-anchor-offset-x': `${((entry.anchorXPercent - entry.xPercent) / 100) * lanternViewportSize.width / entry.scale}px`,
-                '--guidance-anchor-offset-y': `${((entry.anchorYPercent - entry.yPercent) / 100) * lanternViewportSize.height / entry.scale}px`,
-              }"
+              class="viewer-signboard-guidance__heading"
+              :style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
               aria-hidden="true"
-            ></view>
+            >
+              <text class="viewer-signboard-guidance__heading-icon">↑</text>
+            </view>
             <view class="viewer-signboard-guidance__copy">
               <text class="viewer-signboard-guidance__label">{{ entry.label }}</text>
               <text class="viewer-signboard-guidance__distance">{{ entry.distanceLabel }}</text>
@@ -8672,6 +8671,7 @@ function areSignboardGuidanceEntriesEqual(
       || Math.abs(a.yPercent - b.yPercent) > 1e-4
       || Math.abs(a.anchorXPercent - b.anchorXPercent) > 1e-4
       || Math.abs(a.anchorYPercent - b.anchorYPercent) > 1e-4
+      || Math.abs(a.arrowAngleDeg - b.arrowAngleDeg) > 1e-3
       || Math.abs(a.scale - b.scale) > 1e-4
       || Math.abs(a.opacity - b.opacity) > 1e-4
     ) {
@@ -28447,23 +28447,38 @@ onUnmounted(() => {
   isolation: isolate;
 }
 
-.viewer-signboard-guidance__anchor {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  border-radius: 50%;
-  background: #ffd487;
-  box-shadow:
-    0 0 0 3px rgba(18, 35, 52, 0.56),
-    0 0 12px rgba(116, 213, 255, 0.78);
-  transform: translate(
-    calc(-50% + var(--guidance-anchor-offset-x, 0px)),
-    calc(-50% + var(--guidance-anchor-offset-y, 0px))
-  );
+.viewer-signboard-guidance__heading {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  filter:
+    drop-shadow(0 0 5px rgba(255, 176, 32, 1))
+    drop-shadow(0 0 12px rgba(255, 136, 0, 0.72));
   pointer-events: none;
+}
+
+.viewer-signboard-guidance__heading-icon {
+  color: #ffae18;
+  font-size: 30px;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow:
+    -1.5px -1.5px 0 rgba(4, 35, 54, 0.98),
+    1.5px -1.5px 0 rgba(4, 35, 54, 0.98),
+    -1.5px 1.5px 0 rgba(4, 35, 54, 0.98),
+    1.5px 1.5px 0 rgba(4, 35, 54, 0.98),
+    0 -1.5px 0 rgba(4, 35, 54, 0.98),
+    0 1.5px 0 rgba(4, 35, 54, 0.98),
+    -1.5px 0 0 rgba(4, 35, 54, 0.98),
+    1.5px 0 0 rgba(4, 35, 54, 0.98),
+    0 2px 7px rgba(1, 19, 31, 0.82);
 }
 
 .viewer-signboard-guidance__copy {
