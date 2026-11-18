@@ -321,23 +321,18 @@
           v-for="entry in signboardGuidanceEntries"
           :key="entry.nodeId"
           class="viewer-signboard-guidance"
-          :class="[
-            `viewer-signboard-guidance--${entry.edge}`,
-            `viewer-signboard-guidance--${entry.placementMode}`,
-          ]"
           role="listitem"
           :aria-label="`${entry.label}，${entry.distanceLabel}`"
           :style="{
             left: `${entry.xPercent}%`,
             top: `${entry.yPercent}%`,
-            width: entry.placementMode === 'anchored' ? `${entry.estimatedWidthPx}px` : '42px',
+            width: `${entry.estimatedWidthPx}px`,
             opacity: String(entry.opacity),
             transform: `translate(-50%, -50%) scale(${entry.scale})`,
           }"
         >
           <view class="viewer-signboard-guidance__float">
             <view
-              v-if="entry.placementMode === 'anchored'"
               class="viewer-signboard-guidance__anchor"
               :style="{
                 '--guidance-anchor-offset-x': `${((entry.anchorXPercent - entry.xPercent) / 100) * lanternViewportSize.width / entry.scale}px`,
@@ -345,18 +340,7 @@
               }"
               aria-hidden="true"
             ></view>
-            <view
-              v-if="entry.placementMode === 'edge'"
-              class="viewer-signboard-guidance__arrow"
-              :style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
-              aria-hidden="true"
-            >
-              <text class="viewer-signboard-guidance__arrow-icon">↑</text>
-            </view>
-            <view
-              v-if="entry.placementMode === 'anchored'"
-              class="viewer-signboard-guidance__copy"
-            >
+            <view class="viewer-signboard-guidance__copy">
               <text class="viewer-signboard-guidance__label">{{ entry.label }}</text>
               <text class="viewer-signboard-guidance__distance">{{ entry.distanceLabel }}</text>
             </view>
@@ -3054,9 +3038,6 @@ function shouldRunInstancedCulling(camera: THREE.Camera, nowMs: number): boolean
 const nodeObjectMap = new Map<string, THREE.Object3D>();
 const signboardNodeIds = new Set<string>();
 const signboardGuidanceEntries = ref<SignboardGuidanceEntry[]>([]);
-const visibleSignboardGuidanceNodeIds = computed(
-  () => new Set(signboardGuidanceEntries.value.map((entry) => entry.nodeId)),
-);
 const punchNodeIds = new Set<string>();
 const SCENERY_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
   backgroundTopColor: 'rgba(255, 255, 255, 0.46)',
@@ -8686,13 +8667,10 @@ function areSignboardGuidanceEntriesEqual(
       a.nodeId !== b.nodeId
       || a.label !== b.label
       || a.distanceLabel !== b.distanceLabel
-      || a.edge !== b.edge
-      || a.placementMode !== b.placementMode
       || Math.abs(a.xPercent - b.xPercent) > 1e-4
       || Math.abs(a.yPercent - b.yPercent) > 1e-4
       || Math.abs(a.anchorXPercent - b.anchorXPercent) > 1e-4
       || Math.abs(a.anchorYPercent - b.anchorYPercent) > 1e-4
-      || Math.abs(a.arrowAngleDeg - b.arrowAngleDeg) > 1e-3
       || Math.abs(a.scale - b.scale) > 1e-4
       || Math.abs(a.opacity - b.opacity) > 1e-4
     ) {
@@ -8718,7 +8696,6 @@ function syncSceneSignboardsWithReference(
     viewportWidth: lanternViewportSize.width,
     viewportHeight: lanternViewportSize.height,
     safeArea: signboardGuidanceSafeArea,
-    previousGuidanceNodeIds: visibleSignboardGuidanceNodeIds.value,
   });
   if (!areSignboardGuidanceEntriesEqual(nextGuidanceEntries, signboardGuidanceEntries.value)) {
     signboardGuidanceEntries.value = nextGuidanceEntries;
@@ -22498,6 +22475,10 @@ function handleVehicleDriveResetTap(): void {
     if (!lanePose) {
       uni.showToast({ title: '未找到车道，已原地重置', icon: 'none' });
     }
+    // A reset places the vehicle back on a potentially sloped road. Keep the
+    // brake hold active until the player requests motion again, otherwise the
+    // dynamic chassis can roll away from the authored starting position.
+    vehicleDriveController.parkAtCurrentPose();
     const resetNodeId = vehicleDriveNodeId.value;
     const resetRigidbody = resetNodeId ? rigidbodyInstances.get(resetNodeId) ?? null : null;
     if (resetRigidbody?.body && resetRigidbody.object) {
@@ -23369,6 +23350,17 @@ function activatePendingDefaultSteerDriveIfNeeded(): void {
   }
   pendingDefaultSteerDriveEvent.value = null;
   handleVehicleDriveEvent(event, { intro: true });
+  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
+  if (
+    targetNodeId
+    && vehicleDriveActive.value
+    && vehicleDriveNodeId.value === targetNodeId
+  ) {
+    // Scene-entry auto-drive means the player is seated, not that the vehicle
+    // should start rolling. The first throttle/steer input releases this hold.
+    vehicleDriveController.parkAtCurrentPose();
+    markPhysicsBridgeBodyDirty(targetNodeId);
+  }
 }
 
 function retryPendingVehicleDriveIfNeeded(): void {
@@ -28455,35 +28447,6 @@ onUnmounted(() => {
     calc(-50% + var(--guidance-anchor-offset-y, 0px))
   );
   pointer-events: none;
-}
-
-.viewer-signboard-guidance__arrow {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 29px;
-  height: 29px;
-  flex: 0 0 29px;
-  color: #dff8ff;
-  transform-origin: 50% 50%;
-  transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.25, 1);
-  filter: drop-shadow(0 0 7px rgba(82, 177, 226, 0.58));
-}
-
-.viewer-signboard-guidance__arrow-icon {
-  color: #effdff;
-  font-size: 21px;
-  font-weight: 800;
-  line-height: 1;
-  text-shadow:
-    -1px -1px 0 rgba(4, 35, 54, 0.94),
-    1px -1px 0 rgba(4, 35, 54, 0.94),
-    -1px 1px 0 rgba(4, 35, 54, 0.94),
-    1px 1px 0 rgba(4, 35, 54, 0.94),
-    0 2px 7px rgba(1, 19, 31, 0.82),
-    0 0 7px rgba(108, 210, 255, 0.72);
 }
 
 .viewer-signboard-guidance__copy {

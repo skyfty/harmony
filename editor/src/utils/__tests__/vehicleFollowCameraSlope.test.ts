@@ -315,6 +315,26 @@ describe('vehicle follow camera slope alignment', () => {
     expect(fixture.vehicleObject.position.distanceTo(reverseStart)).toBeGreaterThan(0)
   })
 
+  it('keeps a scene-entry vehicle parked until input is requested', () => {
+    const fixture = createVehicleCameraFixture()
+    fixture.bindings.input.throttle = 0
+    fixture.bindings.input.steering = 0
+    fixture.bindings.input.brake = 0
+
+    expect(fixture.controller.parkAtCurrentPose()).toBe(true)
+    const parkedPosition = fixture.vehicleObject.position.clone()
+
+    for (let frame = 0; frame < 120; frame += 1) {
+      fixture.controller.applyForces(1 / 60)
+    }
+    expect(fixture.vehicleObject.position.distanceTo(parkedPosition)).toBe(0)
+
+    fixture.bindings.input.throttle = 0.25
+    fixture.bindings.inputFlags.forward = true
+    fixture.controller.applyForces(1 / 60)
+    expect(fixture.vehicleObject.position.distanceTo(parkedPosition)).toBeGreaterThan(0)
+  })
+
   it('keeps vehicle cardinal axes isolated after a world-space transform', () => {
     const worldForward = resolveVehicleAxisVector(0)
       .applyQuaternion(new THREE.Quaternion().setFromAxisAngle(

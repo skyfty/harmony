@@ -6,8 +6,6 @@ import {
   SIGNBOARD_CARD_FAR_SCALE,
   SIGNBOARD_GUIDANCE_MIN_OPACITY,
   SIGNBOARD_GUIDANCE_MIN_SCALE,
-  SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO,
-  SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO,
   SIGNBOARD_MAX_DISTANCE,
   SIGNBOARD_NEAR_FADE_END_DISTANCE,
   SIGNBOARD_NEAR_HIDE_DISTANCE,
@@ -47,17 +45,13 @@ function candidate(
   }
 }
 
-function resolve(
-  candidates: SignboardGuidanceCandidate[],
-  previousVisibleNodeIds?: ReadonlySet<string>,
-) {
+function resolve(candidates: SignboardGuidanceCandidate[]) {
   return computeSignboardGuidanceEntries({
     candidates,
     camera: createCamera(),
     viewportWidth: VIEWPORT.width,
     viewportHeight: VIEWPORT.height,
     safeArea: VIEWPORT.safeArea,
-    previousVisibleNodeIds,
   })
 }
 
@@ -127,7 +121,6 @@ describe('Signboard guidance overlay', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({
       nodeId: 'guidance-boundary',
-      placementMode: 'anchored',
     })
     expect(entries[0]?.anchorXPercent).toBeCloseTo(50, 4)
     expect(entries[0]?.anchorYPercent).toBeCloseTo(50, 4)
@@ -150,9 +143,9 @@ describe('Signboard guidance overlay', () => {
     const offscreen = byId.get('offscreen')
     const rear = byId.get('rear')
 
-    expect(forward).toMatchObject({ nodeId: 'forward', placementMode: 'anchored' })
-    expect(left).toMatchObject({ nodeId: 'left', placementMode: 'anchored' })
-    expect(right).toMatchObject({ nodeId: 'right', placementMode: 'anchored' })
+    expect(forward).toMatchObject({ nodeId: 'forward' })
+    expect(left).toMatchObject({ nodeId: 'left' })
+    expect(right).toMatchObject({ nodeId: 'right' })
     expect(forward?.anchorXPercent).toBeCloseTo(50, 4)
     expect(left?.anchorXPercent).toBeLessThan(50)
     expect(right?.anchorXPercent).toBeGreaterThan(50)
@@ -173,23 +166,14 @@ describe('Signboard guidance overlay', () => {
     })
 
     expect(entries).toHaveLength(1)
-    expect(entries[0]?.placementMode).toBe('anchored')
     expect(entries[0]?.anchorXPercent).toBeCloseTo((projected.x * 0.5 + 0.5) * 100, 6)
     expect(entries[0]?.anchorYPercent).toBeCloseTo((1 - (projected.y * 0.5 + 0.5)) * 100, 6)
   })
 
-  it('uses an edge pointer only when the projected target is outside the viewport', () => {
+  it('does not render any guidance when the projected target is outside the viewport', () => {
     const entries = resolve([candidateAtNdcX('edge', 1.18)])
 
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({
-      nodeId: 'edge',
-      placementMode: 'edge',
-      edge: 'right',
-    })
-    expect(entries[0]?.anchorXPercent).toBeGreaterThan(100)
-    expect(entries[0]?.xPercent).toBeLessThan(100)
-    expect(entries[0]?.arrowAngleDeg).toBeCloseTo(90, 0)
+    expect(entries).toEqual([])
   })
 
   it('keeps labels exactly on the target anchor without collision avoidance', () => {
@@ -199,8 +183,6 @@ describe('Signboard guidance overlay', () => {
     ])
 
     expect(entries).toHaveLength(2)
-    expect(entries[0]?.placementMode).toBe('anchored')
-    expect(entries[1]?.placementMode).toBe('anchored')
     expect(entries[0]?.anchorXPercent).toBeCloseTo(entries[1]?.anchorXPercent ?? 0, 6)
     expect(entries[0]?.anchorYPercent).toBeCloseTo(entries[1]?.anchorYPercent ?? 0, 6)
     expect(entries[0]?.xPercent).toBeCloseTo(entries[0]?.anchorXPercent ?? 0, 6)
@@ -221,30 +203,6 @@ describe('Signboard guidance overlay', () => {
     expect(resolve([candidate('offscreen-far', 100, 2, -10, 200)])).toEqual([])
   })
 
-  it('uses a wider exit margin for already-visible guidance', () => {
-    expect(SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO).toBe(0.12)
-    expect(SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO).toBe(0.2)
-    const enterNdc = 1 + (SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO - 0.02) * 2
-    const beyondEnterNdc = 1 + (SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO + 0.03) * 2
-    const insideExitNdc = 1 + (SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO - 0.01) * 2
-    const beyondExitNdc = 1 + (SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO + 0.01) * 2
-
-    expect(resolve([candidateAtNdcX('enter', enterNdc)])).toHaveLength(1)
-    expect(resolve([candidateAtNdcX('new-outside', beyondEnterNdc)])).toEqual([])
-    expect(resolve(
-      [candidateAtNdcX('sticky', beyondEnterNdc)],
-      new Set(['sticky']),
-    )).toHaveLength(1)
-    expect(resolve(
-      [candidateAtNdcX('sticky', insideExitNdc)],
-      new Set(['sticky']),
-    )).toHaveLength(1)
-    expect(resolve(
-      [candidateAtNdcX('sticky', beyondExitNdc)],
-      new Set(['sticky']),
-    )).toEqual([])
-  })
-
   it('limits results to the four nearest targets with deterministic ties', () => {
     const entries = resolve([
       candidate('node-e', 60, 2, -200, 400),
@@ -257,7 +215,7 @@ describe('Signboard guidance overlay', () => {
     expect(entries.map((entry) => entry.nodeId)).toEqual(['node-a', 'node-b', 'node-c', 'node-d'])
   })
 
-  it('keeps markers inside the configured safe area', () => {
+  it('keeps visible markers at their projected screen positions', () => {
     const entries = resolve([
       candidate('forward', 0, 2, -500, 500),
       candidate('right', 100, 2, -500, 500, 'A very long signboard display name'),

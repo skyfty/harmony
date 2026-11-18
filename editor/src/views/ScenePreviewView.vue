@@ -2978,9 +2978,6 @@ const behaviorProximityRuntime = createBehaviorProximityRuntime({
 })
 const signboardNodeIds = new Set<string>()
 const signboardGuidanceEntries = ref<SignboardGuidanceEntry[]>([])
-const visibleSignboardGuidanceNodeIds = computed(
-	() => new Set(signboardGuidanceEntries.value.map((entry) => entry.nodeId)),
-)
 const SCENE_PREVIEW_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
 	backgroundTopColor: 'rgba(14, 25, 42, 0.7)',
 	backgroundMiddleColor: 'rgba(18, 33, 53, 0.4)',
@@ -3592,13 +3589,10 @@ function areSignboardGuidanceEntriesEqual(
 			a.nodeId !== b.nodeId
 			|| a.label !== b.label
 			|| a.distanceLabel !== b.distanceLabel
-			|| a.edge !== b.edge
-			|| a.placementMode !== b.placementMode
 			|| Math.abs(a.xPercent - b.xPercent) > 1e-4
 			|| Math.abs(a.yPercent - b.yPercent) > 1e-4
 			|| Math.abs(a.anchorXPercent - b.anchorXPercent) > 1e-4
 			|| Math.abs(a.anchorYPercent - b.anchorYPercent) > 1e-4
-			|| Math.abs(a.arrowAngleDeg - b.arrowAngleDeg) > 1e-3
 			|| Math.abs(a.scale - b.scale) > 1e-4
 			|| Math.abs(a.opacity - b.opacity) > 1e-4
 		) {
@@ -3625,7 +3619,6 @@ function syncSceneSignboards(activeScene: THREE.Scene | null, activeCamera: THRE
 			bottom: 88,
 			left: 16,
 		},
-		previousGuidanceNodeIds: visibleSignboardGuidanceNodeIds.value,
 	})
 	if (!areSignboardGuidanceEntriesEqual(nextGuidanceEntries, signboardGuidanceEntries.value)) {
 		signboardGuidanceEntries.value = nextGuidanceEntries
@@ -11658,6 +11651,9 @@ function activatePendingDefaultSteerDriveIfNeeded(): void {
 			appendWarningMessage(result.message ?? 'Failed to start default steer drive.')
 			return
 		}
+		// Entering preview seats the player but must not let gravity roll the
+		// vehicle away from its authored spawn. Player input releases the hold.
+		vehicleDriveController.parkAtCurrentPose()
 		pendingDefaultSteerDriveEvent.value = null
 		handleShowVehicleCockpitEvent()
 	} finally {
@@ -12433,6 +12429,7 @@ function handleVehicleDriveResetClick(): void {
 		appendWarningMessage('Failed to reset vehicle. Please try again later.')
 		return
 	}
+	vehicleDriveController.parkAtCurrentPose()
 	updateVehicleDriveCamera(0, { immediate: true })
 }
 
@@ -18355,23 +18352,18 @@ watch(watchExclusiveUiActive, (active) => {
 				v-for="entry in signboardGuidanceEntries"
 				:key="entry.nodeId"
 				class="scene-preview__signboard-guidance"
-				:class="[
-					`scene-preview__signboard-guidance--${entry.edge}`,
-					`scene-preview__signboard-guidance--${entry.placementMode}`,
-				]"
 				role="listitem"
 				:aria-label="`${entry.label}，${entry.distanceLabel}`"
 				:style="{
 					left: `${entry.xPercent}%`,
 					top: `${entry.yPercent}%`,
-					width: entry.placementMode === 'anchored' ? `${entry.estimatedWidthPx}px` : '42px',
+					width: `${entry.estimatedWidthPx}px`,
 					opacity: String(entry.opacity),
 					transform: `translate(-50%, -50%) scale(${entry.scale})`,
 				}"
 			>
 				<div class="scene-preview__signboard-guidance-float">
 					<span
-						v-if="entry.placementMode === 'anchored'"
 						class="scene-preview__signboard-guidance-anchor"
 						:style="{
 							'--guidance-anchor-offset-x': `${((entry.anchorXPercent - entry.xPercent) / 100) * lanternViewportSize.width / entry.scale}px`,
@@ -18379,16 +18371,7 @@ watch(watchExclusiveUiActive, (active) => {
 						}"
 						aria-hidden="true"
 					></span>
-					<span
-						v-if="entry.placementMode === 'edge'"
-						class="scene-preview__signboard-guidance-arrow"
-						:style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
-						aria-hidden="true"
-					>↑</span>
-					<div
-						v-if="entry.placementMode === 'anchored'"
-						class="scene-preview__signboard-guidance-copy"
-					>
+					<div class="scene-preview__signboard-guidance-copy">
 						<span class="scene-preview__signboard-guidance-label">{{ entry.label }}</span>
 						<span class="scene-preview__signboard-guidance-distance">{{ entry.distanceLabel }}</span>
 					</div>
@@ -19845,31 +19828,6 @@ watch(watchExclusiveUiActive, (active) => {
 		calc(-50% + var(--guidance-anchor-offset-y, 0px))
 	);
 	pointer-events: none;
-}
-
-.scene-preview__signboard-guidance-arrow {
-	position: relative;
-	z-index: 1;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 29px;
-	height: 29px;
-	flex: 0 0 29px;
-	color: #c9f1ff;
-	line-height: 1;
-	transform-origin: 50% 50%;
-	transition: transform 160ms cubic-bezier(0.2, 0.9, 0.25, 1);
-	filter: drop-shadow(0 0 7px rgba(69, 180, 234, 0.6));
-	font-size: 21px;
-	font-weight: 800;
-	text-shadow:
-		-1px -1px 0 rgba(0, 11, 20, 0.96),
-		1px -1px 0 rgba(0, 11, 20, 0.96),
-		-1px 1px 0 rgba(0, 11, 20, 0.96),
-		1px 1px 0 rgba(0, 11, 20, 0.96),
-		0 2px 7px rgba(0, 0, 0, 0.88),
-		0 0 7px rgba(102, 210, 255, 0.7);
 }
 
 .scene-preview__signboard-guidance-copy {

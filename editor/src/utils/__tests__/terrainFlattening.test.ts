@@ -400,6 +400,12 @@ describe('terrain flattening targets', () => {
       42 - TERRAIN_FLATTENING_FLOOR_CLEARANCE,
       5,
     )
+    const wideTarget = createDemTerrainFlatteningTarget({
+      ...withRigidbody,
+      edgeBlendWidth: 100,
+    })
+    expect(wideTarget.contains(30, 0)).toBe(false)
+    expect(sampleDemTerrainCollisionHeightAt(grid, roadbed, 30, 0, [wideTarget])).toBe(99)
     expect(sampleDemTerrainCollisionHeightAt(grid, roadbed, 30, 0, [target])).toBe(99)
 
     const rigidbody = (floor.components as any).rigidbody

@@ -464,7 +464,6 @@ export function syncSignboardBillboards(params: {
   viewportWidth?: number
   viewportHeight?: number
   safeArea?: Partial<SignboardGuidanceInsets>
-  previousGuidanceNodeIds?: ReadonlySet<string>
 }): SignboardGuidanceEntry[] {
   const {
     scene,
@@ -537,7 +536,6 @@ export function syncSignboardBillboards(params: {
     viewportWidth: viewportWidth!,
     viewportHeight: viewportHeight!,
     safeArea: params.safeArea,
-    previousVisibleNodeIds: params.previousGuidanceNodeIds,
   })
 }
 

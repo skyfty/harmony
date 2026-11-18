@@ -24,12 +24,8 @@ export const SIGNBOARD_CARD_FAR_SCALE = 0.86
 export const SIGNBOARD_GUIDANCE_MIN_OPACITY = 0.72
 export const SIGNBOARD_GUIDANCE_MIN_SCALE = 0.82
 export const SIGNBOARD_GUIDANCE_VISUAL_SATURATION_DISTANCE = 2000
-export const SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO = 0.12
-export const SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO = 0.2
 
 export type SignboardReferenceKind = 'camera' | 'vehicle'
-export type SignboardGuidanceEdge = 'top' | 'right' | 'bottom' | 'left'
-export type SignboardGuidancePlacementMode = 'anchored' | 'edge'
 
 export interface SignboardOverlayPlacement {
   xPercent: number
@@ -95,9 +91,6 @@ export interface SignboardGuidanceEntry {
   yPercent: number
   anchorXPercent: number
   anchorYPercent: number
-  arrowAngleDeg: number
-  edge: SignboardGuidanceEdge
-  placementMode: SignboardGuidancePlacementMode
   scale: number
   opacity: number
   estimatedWidthPx: number
@@ -729,7 +722,6 @@ export function computeSignboardGuidanceEntries(params: {
   safeArea?: Partial<SignboardGuidanceInsets>
   maxDistance?: number
   maxEntries?: number
-  previousVisibleNodeIds?: ReadonlySet<string>
 }): SignboardGuidanceEntry[] {
   const viewportWidth = Math.max(1, params.viewportWidth)
   const viewportHeight = Math.max(1, params.viewportHeight)
@@ -752,9 +744,6 @@ export function computeSignboardGuidanceEntries(params: {
   if (maxEntries === 0) {
     return []
   }
-  const enterViewportLimit = 1 + SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO * 2
-  const exitViewportLimit = 1 + SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO * 2
-
   params.camera.updateWorldMatrix(true, false)
   const sortedCandidates = params.candidates
     .filter((candidate) => (
@@ -793,79 +782,30 @@ export function computeSignboardGuidanceEntries(params: {
       continue
     }
 
-    const viewportLimit = params.previousVisibleNodeIds?.has(candidate.nodeId)
-      ? exitViewportLimit
-      : enterViewportLimit
-    const inView = (
-      Number.isFinite(guidanceProjected.x)
-      && Number.isFinite(guidanceProjected.y)
-      && Number.isFinite(guidanceProjected.z)
-      && guidanceProjected.x >= -viewportLimit
-      && guidanceProjected.x <= viewportLimit
-      && guidanceProjected.y >= -viewportLimit
-      && guidanceProjected.y <= viewportLimit
-      && guidanceProjected.z >= -1
-      && guidanceProjected.z <= 1
-    )
-    if (!inView || candidate.distanceMeters <= maxDistance) {
+    if (
+      guidanceProjected.x < -1
+      || guidanceProjected.x > 1
+      || guidanceProjected.y < -1
+      || guidanceProjected.y > 1
+      || candidate.distanceMeters <= maxDistance
+    ) {
       continue
     }
     seenNodeIds.add(candidate.nodeId)
 
     const { width, height } = resolveGuidanceMarkerDimensions(candidate, viewportWidth, insets)
-    const availableWidth = Math.max(1, viewportWidth - insets.left - insets.right)
-    const availableHeight = Math.max(1, viewportHeight - insets.top - insets.bottom)
-    const halfWidth = Math.min(width, availableWidth) / 2
-    const halfHeight = Math.min(height, availableHeight) / 2
-    let minX = insets.left + halfWidth
-    let maxX = viewportWidth - insets.right - halfWidth
-    let minY = insets.top + halfHeight
-    let maxY = viewportHeight - insets.bottom - halfHeight
-    if (minX > maxX) {
-      minX = viewportWidth / 2
-      maxX = minX
-    }
-    if (minY > maxY) {
-      minY = viewportHeight / 2
-      maxY = minY
-    }
-
     const rawX = (guidanceProjected.x * 0.5 + 0.5) * viewportWidth
     const rawY = (1 - (guidanceProjected.y * 0.5 + 0.5)) * viewportHeight
-    const anchorInsideViewport = (
-      guidanceProjected.x >= -1
-      && guidanceProjected.x <= 1
-      && guidanceProjected.y >= -1
-      && guidanceProjected.y <= 1
-    )
-    const placementMode: SignboardGuidancePlacementMode = anchorInsideViewport
-      ? 'anchored'
-      : 'edge'
-    const resolvedX = placementMode === 'anchored'
-      ? rawX
-      : Math.min(maxX, Math.max(minX, rawX))
-    const resolvedY = placementMode === 'anchored'
-      ? rawY
-      : Math.min(maxY, Math.max(minY, rawY))
-
-    const directionX = rawX - resolvedX
-    const directionY = rawY - resolvedY
-    const edge: SignboardGuidanceEdge = Math.abs(directionX) > Math.abs(directionY)
-      ? (directionX < 0 ? 'left' : 'right')
-      : (directionY < 0 ? 'top' : 'bottom')
 
     entries.push({
       nodeId: candidate.nodeId,
       label: candidate.label,
       distanceMeters: candidate.distanceMeters,
       distanceLabel: formatSignboardDistance(candidate.distanceMeters),
-      xPercent: resolvedX / viewportWidth * 100,
-      yPercent: resolvedY / viewportHeight * 100,
+      xPercent: rawX / viewportWidth * 100,
+      yPercent: rawY / viewportHeight * 100,
       anchorXPercent: rawX / viewportWidth * 100,
       anchorYPercent: rawY / viewportHeight * 100,
-      arrowAngleDeg: Math.atan2(directionX, -directionY) * 180 / Math.PI,
-      edge,
-      placementMode,
       scale: presentation.scale,
       opacity: presentation.opacity,
       estimatedWidthPx: width,

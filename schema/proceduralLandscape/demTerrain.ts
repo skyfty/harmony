@@ -75,7 +75,11 @@ export function sampleDemTerrainCollisionHeightAt(
   }
   const rawHeight = grid?.sampleHeight(worldX, worldZ) ?? null
   const flattenTarget = selectDemTerrainFlatteningTargetAt(flattenTargets, worldX, worldZ)
-  if (flattenTarget?.snapshot.collisionAuthority === 'rigidbody') {
+  const insideFlattenCore = flattenTarget?.contains(worldX, worldZ) === true
+  if (
+    flattenTarget?.snapshot.collisionAuthority === 'rigidbody'
+    && insideFlattenCore
+  ) {
     return flattenTarget.collisionHeightAt(
       worldX,
       worldZ,
